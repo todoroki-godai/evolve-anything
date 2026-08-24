@@ -9,6 +9,7 @@ Test Plan C-2 の追加変異（#5〜#9）を実際に適用して赤くなる�
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 import unicodedata
 from datetime import date
@@ -16,6 +17,12 @@ from pathlib import Path
 from typing import List, Tuple
 
 import pytest
+
+# #536 round6 I3/I6: pytester fixture（pytest 内蔵プラグイン）を使い、skipif
+# decorator の配線そのものを統合テストする。testpaths 側 pytest.ini には
+# `-p pytester` を追加せず（全体テストに影響する変更を避ける）、このモジュール
+# だけで有効化する。
+pytest_plugins = ["pytester"]
 
 _SCRIPTS_DIR = Path(__file__).resolve().parent.parent
 if str(_SCRIPTS_DIR) not in sys.path:
@@ -62,18 +69,52 @@ def _real_codex_sessions_available(
     return len(p.iter_date_dir_files(sessions_root, base_date, days)) > 0
 
 
+def _real_home_skip_reason(
+    sessions_root: Path, base_date: date, days: int
+) -> str:
+    """skip 理由文字列の単一ソース（#536 round6 I8）。
+
+    real_home テスト自身が窓（sessions_root/base_date/days）を再度直書きすると、
+    guard 側の窓だけを更新したときに両者が乖離する（Should I8）。理由文字列も
+    含め _real_home_skip_marker を単一の呼び出し口とし、real_home テスト側は
+    個別の窓を書かず _REAL_CODEX_SESSIONS_ROOT / _REAL_HOME_TEST_BASE_DATE /
+    _REAL_HOME_TEST_DAYS のみを参照する。
+    """
+    return (
+        f"{sessions_root} の {base_date} 起点 "
+        f"{days}日窓に対象 JSONL がありません。real_home テストは実 "
+        "Codex セッションが存在する環境でのみ意味を持つ検査のため skip します（#536）。"
+    )
+
+
+def _real_home_skip_marker(
+    sessions_root: Path = _REAL_CODEX_SESSIONS_ROOT,
+    base_date: date = _REAL_HOME_TEST_BASE_DATE,
+    days: int = _REAL_HOME_TEST_DAYS,
+):
+    """skipif マーカーの構築を関数として切り出す（#536 round6 I3/I6）。
+
+    旧版は `_skip_if_no_real_codex_sessions = pytest.mark.skipif(not
+    _real_codex_sessions_available(), ...)` を import 時に固定評価しており、
+    「`_real_codex_sessions_available()` の**呼び出し配線**そのもの
+    （decorator 式が実際にこの関数の結果を使っているか）」を検査する手段が
+    無かった（round5 codex Must I3/I6: `not _real_codex_sessions_available()`
+    を `True` に固定する変異は、helper 単体テストや `-ra` 静的テストでは
+    検出できない）。関数化することで、
+    `test_real_home_skip_wiring_available_vs_unavailable`（pytester 経由）が
+    available=True/False それぞれで実際に pytest 収集させ、非skip/理由付きskip
+    になることを統合テストできる。
+    """
+    available = _real_codex_sessions_available(sessions_root, base_date, days)
+    reason = _real_home_skip_reason(sessions_root, base_date, days)
+    return pytest.mark.skipif(not available, reason=reason)
+
+
 # skip 理由は必ず出す（silence != evaluated）。黙って skip して緑に見せない。
 # pytest.ini の addopts に `-ra` を追加し、通常実行でも skip 理由サマリが
 # 必ず表示されるようにする（round5 codex Must I3。設定が消えたら
 # test_pytest_ini_reports_skip_reasons が検出する）。
-_skip_if_no_real_codex_sessions = pytest.mark.skipif(
-    not _real_codex_sessions_available(),
-    reason=(
-        f"{_REAL_CODEX_SESSIONS_ROOT} の {_REAL_HOME_TEST_BASE_DATE} 起点 "
-        f"{_REAL_HOME_TEST_DAYS}日窓に対象 JSONL がありません。real_home テストは実 "
-        "Codex セッションが存在する環境でのみ意味を持つ検査のため skip します（#536）。"
-    ),
-)
+_skip_if_no_real_codex_sessions = _real_home_skip_marker()
 
 
 def test_real_codex_sessions_available_false_for_empty_window(tmp_path):
@@ -127,6 +168,146 @@ def test_pytest_ini_reports_skip_reasons():
     tokens = addopts_line.split()
     assert "-ra" in tokens or "-rs" in tokens, (
         f"pytest.ini の addopts に -ra/-rs がありません: {addopts_line!r}"
+    )
+
+
+def test_real_home_skip_wiring_available_vs_unavailable(pytester, tmp_path):
+    """壊す不変条件: I3/I6（skipif の配線そのもの。`_real_codex_sessions_available()`
+    を直接呼ぶ helper テストや `-ra` 静的テストとは独立に、
+    `not _real_codex_sessions_available()` を `True` に固定する変異（＝
+    real_home 4件が常に skip される）を検出する）
+    ／通したい検査経路: `_real_home_skip_marker` を使って構築した decorator を
+    実際に pytest 収集にかけ、対象データがある窓では非skip・無い窓では
+    理由付き skip になることを、pytester（pytest 内蔵の統合テスト用 fixture）
+    経由で実測する。real_home マーカー自体は使わず（HOME 隔離と無関係な検査
+    のため）、`_real_home_skip_marker` が返す decorator の実際の効果だけを見る。
+    """
+    available_root = tmp_path / "available_sessions" / "2026" / "08" / "20"
+    available_root.mkdir(parents=True)
+    (available_root / "f.jsonl").write_text("{}\n", encoding="utf-8")
+    available_root_top = tmp_path / "available_sessions"
+
+    unavailable_root = tmp_path / "unavailable_sessions"
+    unavailable_root.mkdir()
+
+    tests_dir = str(_SCRIPTS_DIR / "tests")
+
+    pytester.makepyfile(
+        test_wiring_probe=f'''
+import sys
+sys.path.insert(0, {tests_dir!r})
+from datetime import date
+from pathlib import Path
+import test_phase1_codex_probe as t
+
+_marker_available = t._real_home_skip_marker(
+    Path({str(available_root_top)!r}), date(2026, 8, 20), 1
+)
+_marker_unavailable = t._real_home_skip_marker(
+    Path({str(unavailable_root)!r}), date(2026, 8, 20), 1
+)
+
+
+@_marker_available
+def test_when_available():
+    assert True
+
+
+@_marker_unavailable
+def test_when_unavailable():
+    assert True
+'''
+    )
+    result = pytester.runpytest("-v", "-ra")
+    result.assert_outcomes(passed=1, skipped=1)
+    result.stdout.fnmatch_lines(["*test_when_available PASSED*"])
+    result.stdout.fnmatch_lines(["*test_when_unavailable SKIPPED*"])
+    # 理由文字列も配線されていること（I3 の「理由が必ず出る」契約と同型の検査）。
+    result.stdout.fnmatch_lines([f"*{unavailable_root}*"])
+
+
+# ─────────────────────────────────────────────────────────────────
+# #536 round6 codex Should: PR #537 との複製の乖離検出
+#
+# #536 は #537（fix/vuln-scan-scope）の Cf/Mn/Me 除去＋NFKC 正規化と同一設計を、
+# 未マージ branch への cross-PR import を避けるため独立に複製した（round6 team-lead
+# 判断: 「複製する」判断は支持されたが乖離は既に発生していた＝#537 は NFKC を
+# 先に追加済みで #536 は追いついていなかった）。乖離を今後も見逃さないよう、
+# #537 のファイルを git show で read-only 参照し、共有入力ベクトルを両実装へ
+# 通して結果を突合する。branch が既にマージ・削除された後は skip する
+# （恒久的な cross-branch 依存にしない。マージ後は #537 のコードが main に
+# 入るはずなので、その時点で本テストの当否を再検討すること）。
+# ─────────────────────────────────────────────────────────────────
+_CROSS_PR_REF = "fix/vuln-scan-scope"
+_CROSS_PR_PATH = "scripts/lib/skill_vuln_scan.py"
+
+
+def _load_module_from_git_ref(ref: str, path: str, module_name: str):
+    """指定した git ref のファイル内容を exec してモジュール名前空間を返す。
+
+    read-only（``git show`` のみ。checkout/stash/reset は一切行わない。worktree
+    の作業ツリー・index・HEAD には触れない）。ref が存在しない・path が無い場合は
+    None を返す（呼び出し側で skip する）。
+
+    ``sys.modules`` へ実体のある ``types.ModuleType`` を一時登録してから exec する
+    （dataclass 等、`cls.__module__` を `sys.modules` 経由で解決するデコレータが
+    プレーン dict の ``exec(..., ns)`` では ``AttributeError`` になるため。実測で
+    判明した罠）。exec 完了後（成否問わず）に登録を解除する。
+    """
+    import sys as _sys
+    import types as _types
+
+    result = subprocess.run(
+        ["git", "-C", str(_SCRIPTS_DIR.parent), "show", f"{ref}:{path}"],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        return None
+    mod = _types.ModuleType(module_name)
+    mod.__file__ = f"<git:{ref}:{path}>"
+    _sys.modules[module_name] = mod
+    try:
+        exec(compile(result.stdout, f"<git:{ref}:{path}>", "exec"), mod.__dict__)
+    except Exception:
+        return None
+    finally:
+        _sys.modules.pop(module_name, None)
+    return mod.__dict__
+
+
+def test_cross_pr_normalization_contract_matches_537_when_available():
+    """壊す不変条件: Should（#536/#537 独立複製の乖離。#537 が正規化ロジックを
+    変更しても #536 が追いつかず気づけない）
+    ／通したい検査経路: 共有入力ベクトルを #536 側 (`p._normalize_for_matching`)
+    と #537 側（git show で read-only 参照して exec した
+    `_normalize_for_matching`）の両方へ通し、結果が一致することを実測する。
+    """
+    ns = _load_module_from_git_ref(_CROSS_PR_REF, _CROSS_PR_PATH, "skill_vuln_scan_537")
+    if ns is None:
+        pytest.skip(
+            f"{_CROSS_PR_REF}:{_CROSS_PR_PATH} を読めません"
+            "（branch が既にマージ・削除された、または未取得の可能性）。"
+        )
+    their_normalize = ns.get("_normalize_for_matching")
+    if their_normalize is None:
+        pytest.skip(f"{_CROSS_PR_REF} 側に _normalize_for_matching が見つかりません（設計変更の可能性）。")
+
+    shared_vectors = [
+        "<skill>x</skill>",
+        "​<skill>x</skill>",
+        "<sḱill>x</skill>",
+        "<ＳＫＩＬＬ>x</skill>",
+        " <skill>x</skill>",
+        "普通の発話です。",
+        '<not_a_marker attr="x">本文</not_a_marker>',
+    ]
+    mismatches = [
+        (text, p._normalize_for_matching(text), their_normalize(text))
+        for text in shared_vectors
+        if p._normalize_for_matching(text) != their_normalize(text)
+    ]
+    assert not mismatches, (
+        f"#536/#537 の正規化結果が乖離しています（共通化を検討する Issue を起票すること）: {mismatches!r}"
     )
 
 
@@ -234,6 +415,53 @@ def test_machinery_marker_set_matches_independent_literal():
     assert p._ORACLE_MACHINERY_MARKERS == _INDEPENDENT_LITERAL_MACHINERY_MARKERS
 
 
+# #536 round6 codex Must I2: fixture に**文字列リテラルとして書かれた**大小文字
+# ゆれ（例: "SKILL"/"Skill"/"TaSk-NoTiFiCaTiOn"）は、何件追加しても「fixture に
+# 書かれた表記だけを正規化する辞書」への narrow 化変異を防げない（変異する側が
+# ソース中の全リテラルを列挙してハードコードできてしまうため）。ソースコード上に
+# 存在しない casing をテスト**実行時に**プログラム的に生成することで、辞書型の
+# narrow 化がこれを予測・列挙できないようにする。
+def _alternating_case(s: str) -> str:
+    """偶数インデックスを大文字・奇数インデックスを小文字にする決定論変換。"""
+    return "".join(ch.upper() if i % 2 == 0 else ch.lower() for i, ch in enumerate(s))
+
+
+def _alternating_case_offset(s: str) -> str:
+    """`_alternating_case` と位相を1つずらした版（もう1パターン生成する）。"""
+    return "".join(ch.lower() if i % 2 == 0 else ch.upper() for i, ch in enumerate(s))
+
+
+def test_case_fold_handles_generated_casing_not_hardcodable_literals():
+    """壊す不変条件: I2（casing 正規化を『fixture に書かれた特定表記だけを
+    正規化する辞書』へ実装・オラクル双方を同時に narrow 化する変異。fixture が
+    何表記固定しても、辞書がそれらを丸ごと列挙すれば通ってしまうため、
+    ソースに存在しない casing をテスト実行時に生成して当てる）
+    ／通したい検査経路: is_machinery_text と _oracle_is_machinery_text の両方。
+    9種マーカー全体 × 2種類の生成パターンを総当たりする。
+    """
+    for marker in sorted(p.MACHINERY_MARKERS):
+        for variant in (_alternating_case(marker), _alternating_case_offset(marker)):
+            text = f"<{variant}>x</{variant}>"
+            assert p.is_machinery_text(text) is True, text
+            assert p._oracle_is_machinery_text(text) is True, text
+
+
+def test_alternating_case_generates_casing_absent_from_source_literals():
+    """陽性対照 + fixture 健全性: 生成された casing 文字列が、このテストファイル
+    自身のソースコード中にリテラルとして存在しないことを確認する。存在すれば
+    「ハードコード辞書でも予測できてしまう」ため、この検査の前提が崩れる。
+    """
+    own_source = Path(__file__).read_text(encoding="utf-8")
+    for marker in sorted(p.MACHINERY_MARKERS):
+        for variant in (_alternating_case(marker), _alternating_case_offset(marker)):
+            if variant == marker or variant == marker.lower() or variant == marker.upper():
+                continue  # casing 変換が無効な語（記号のみ等）は対象外
+            assert variant not in own_source, (
+                f"生成した casing {variant!r} が既にソース中にリテラルとして存在します"
+                "（ハードコード辞書で予測可能になってしまう）"
+            )
+
+
 # 入力テキスト → 期待生存可否 の fixture。ラベルは is_machinery_text /
 # _oracle_is_machinery_text のどちらも呼ばずに、人手でテキストを読んで判定した
 # 期待値（#536 round3 codex Must1「入力→期待生存発話の fixture を実装定数・
@@ -254,9 +482,12 @@ _INDEPENDENT_SURVIVAL_FIXTURE: List[Tuple[str, bool]] = [
     ("﻿  \n<skill>evolve</skill>", False),  # BOM・空白混入後の機構タグ
     ("", True),  # 空文字は機構でない
     ("<recommended_plugins", True),  # 閉じ `>` が無く head_tag 相当は不成立
-    # #536 round4 codex Must: 全角空白（U+3000）は strip_leading_noise の対象文字集合
-    # （"﻿ \t\n\r　"）に含まれる表現差クラス。ASCII 空白・BOM・改行だけの fixture
-    # では、全角空白 strip 対応を削る変異（変異1）を検出できない。
+    # #536 round4 codex Must: 全角空白（U+3000）は Unicode カテゴリ Zs（空白）に
+    # 属し、strip_leading_noise の `.lstrip()`（round5 以降: Cf/Mn/Me 除去＋NFKC
+    # 正規化の後に適用。round6 で NFKC 追加。Nit: このコメントは round4 時点の
+    # 個別文字列挙設計を説明していたが現行実装と食い違っていたため #536 round6 で
+    # 現行仕様に合わせて訂正した）が対象とする表現差クラス。ASCII 空白・BOM・改行
+    # だけの fixture では、全角空白 strip 対応を削る変異（変異1）を検出できない。
     ("　<skill>evolve</skill>", False),  # 全角空白のみ先頭に混入した機構タグ
     ("　\n<recommended_plugins>\n一覧です", False),  # 全角空白+改行の複合
     # #536 round4 codex Must: head_tag は `<tag ...>` の inner を空白分割し先頭語を
@@ -310,23 +541,42 @@ _INDEPENDENT_SURVIVAL_FIXTURE: List[Tuple[str, bool]] = [
 # 複数位置の組合せを固定する。値は verify-checks-by-breaking.md の「境界値と
 # 表現差」節に従い ZWSP（Cf）・BOM（Cf）・結合文字（Mn）・異体字セレクタ（Mn）を
 # それぞれ異なる位置（先頭・タグ開始直後・タグ名内部・タグ名末尾）に配置する。
-_INVISIBLE_CHAR_SURVIVAL_FIXTURE: List[Tuple[str, bool]] = [
-    ("​<skill>x</skill>", False),  # 先頭に ZWSP（Cf）
-    ("<​skill>x</skill>", False),  # `<` 直後に ZWSP（タグ名内部の直前）
-    ("<skill​>x</skill>", False),  # タグ名末尾に ZWSP（`>` 直前）
-    ("<sk​ill>x</skill>", False),  # タグ名の途中に ZWSP
-    ("<﻿skill>x</skill>", False),  # `<` 直後に BOM（Cf）
+# #536 round5 codex Must I1: 不可視文字（Cf/Mn/Me、位置不問）が「テキスト先頭」
+# にも「タグ名の内側」にも入れられる。個別の1文字だけを fixture に足す方式では
+# 次の1文字で破れる（列挙で直さない・design-before-fanout）ため、複数カテゴリ・
+# 複数位置の組合せを固定する。値は verify-checks-by-breaking.md の「境界値と
+# 表現差」節に従い ZWSP（Cf）・BOM（Cf）・結合文字（Mn）・異体字セレクタ（Mn）を
+# それぞれ異なる位置（先頭・タグ開始直後・タグ名内部・タグ名末尾）に配置する。
+#
+# #536 round6 codex Must I7: 「Cf/Mn/Me のいずれかを含む」という**カテゴリ**だけの
+# 健全性検査では、意図した特定の文字が別の Cf/Mn/Me 文字にすり替わっても検出
+# できない（保存経路の消失で別文字に化けても気づけない）。各エントリへ**期待する
+# 厳密な codepoint 集合**を第3要素として持たせ、健全性検査はカテゴリでなく
+# 「この codepoint が実際に含まれるか」を assert する。
+#
+# #536 round6 codex Must I5: `Me`（Enclosing_Mark）は実装・オラクル双方の
+# カテゴリ集合定数に含まれてはいたが、fixture に**実際の Me 文字**が1件も無く、
+# `Me` をカテゴリ集合から削る変異が全テスト緑のまま生存した。実 Me 文字
+# （U+20DD COMBINING ENCLOSING CIRCLE）を追加する。
+_INVISIBLE_CHAR_SURVIVAL_FIXTURE: List[Tuple[str, bool, "frozenset[int]"]] = [
+    ("\u200b<skill>x</skill>", False, frozenset({0x200B})),  # 先頭に ZWSP（Cf）
+    ("<\u200bskill>x</skill>", False, frozenset({0x200B})),  # `<` 直後に ZWSP
+    ("<skill\u200b>x</skill>", False, frozenset({0x200B})),  # タグ名末尾に ZWSP（`>` 直前）
+    ("<sk\u200bill>x</skill>", False, frozenset({0x200B})),  # タグ名の途中に ZWSP
+    ("<\ufeffskill>x</skill>", False, frozenset({0xFEFF})),  # `<` 直後に BOM（Cf）
     # \uXXXX エスケープで明示する（実測: 結合文字・異体字セレクタをリテラル文字
     # で直書きすると、ファイル保存経路の Unicode 正規化で静かに消え、Mn 経路を
     # 検査していないのに緑になる偽陽性 fixture を作った。#536 round5 自己発見）。
-    ("<sk\u0301ill>x</skill>", False),  # タグ名内部に結合文字（Mn・U+0301 acute accent）
-    ("<skill\ufe0f>x</skill>", False),  # タグ名末尾に異体字セレクタ（Mn・VS16）
-    ("<image​/>", False),  # 自己閉じタグのスラッシュ直前に ZWSP
+    ("<sk\u0301ill>x</skill>", False, frozenset({0x0301})),  # 結合文字（Mn・acute accent）
+    ("<skill\ufe0f>x</skill>", False, frozenset({0xFE0F})),  # 異体字セレクタ（Mn・VS16）
+    ("<image\u200b/>", False, frozenset({0x200B})),  # 自己閉じタグのスラッシュ直前に ZWSP
     # #536 round5 team-lead 追加確認・自己構成の回避手段3・4・6:
     # ad-hoc 確認済みだったが恒久化していなかった入力クラスを固定する。
-    ("<sk\u200fill>x</skill>", False),  # タグ名内部に RTL mark（Cf・U+200F）
-    ("\u2060<skill>x</skill>", False),  # 先頭に word joiner（Cf・U+2060）
-    ("普通の発話です​。", True),  # ZWSP を含むが機構マーカーでない通常発話（陽性対照）
+    ("<sk\u200fill>x</skill>", False, frozenset({0x200F})),  # RTL mark（Cf）
+    ("\u2060<skill>x</skill>", False, frozenset({0x2060})),  # word joiner（Cf）
+    # #536 round6 codex Must I5: 実 Me 文字（COMBINING ENCLOSING CIRCLE）。
+    ("<sk\u20ddill>x</skill>", False, frozenset({0x20DD})),  # タグ名内部に Me 文字
+    ("普通の発話です\u200b。", True, frozenset({0x200B})),  # ZWSP を含むが機構マーカーでない通常発話（陽性対照）
 ]
 
 
@@ -334,16 +584,22 @@ def test_invisible_char_fixture_entries_actually_contain_invisible_chars():
     """壊す不変条件: 不可視文字リテラルがファイル保存経路で静かに消失し、検査して
     いないのに緑になる偽陽性を作る罠（#536 round5 自己発見。結合文字・異体字セレクタを
     リテラル直書きした際に実際に踏んだ）。fixture 定義自体が健全（意図した
-    Cf/Mn/Me 文字を実際に含む）であることを検査する。
+    **厳密な codepoint** を実際に含む）であることを検査する（#536 round6 I7:
+    カテゴリ一致だけでは「別の Cf/Mn/Me 文字へのすり替え」を見逃すため厳密化）。
     ／通したい検査経路: _INVISIBLE_CHAR_SURVIVAL_FIXTURE の各エントリに対する
-    unicodedata.category() 走査。
+    codepoint 集合の包含チェック。
     """
-    for text, _expected in _INVISIBLE_CHAR_SURVIVAL_FIXTURE:
-        categories = {unicodedata.category(ch) for ch in text}
-        assert categories & {"Cf", "Mn", "Me"}, (
-            f"fixture entry に不可視/結合文字（Cf/Mn/Me）が含まれていません"
-            f"（保存経路での消失の疑い）: {text!r}"
+    for text, _expected, expected_codepoints in _INVISIBLE_CHAR_SURVIVAL_FIXTURE:
+        actual_codepoints = {ord(ch) for ch in text}
+        missing = expected_codepoints - actual_codepoints
+        assert not missing, (
+            f"fixture entry に期待した codepoint が含まれていません"
+            f"（保存経路での消失/すり替えの疑い）: {text!r} missing={sorted(hex(c) for c in missing)}"
         )
+        for cp in expected_codepoints:
+            assert unicodedata.category(chr(cp)) in {"Cf", "Mn", "Me"}, (
+                f"期待 codepoint {hex(cp)} が Cf/Mn/Me カテゴリではありません（fixture定義ミス）"
+            )
 
 
 
@@ -394,6 +650,65 @@ def test_filter_machinery_matches_tag_internal_whitespace_fixture():
     assert actual_survivors == expected_survivors
 
 
+# #536 round6 codex Must I1/I4: NBSP（U+00A0）は Cf/Mn/Me ではなく Zs（空白）
+# カテゴリのため、上の _INVISIBLE_CHAR_SURVIVAL_FIXTURE の位置不問除去とは別の
+# 仕組み（NFKC 互換分解で半角スペースへ変換 → `.lstrip()`）で処理される。
+# 全角英数字（``ＳＫＩＬＬ``）も同じ NFKC 経路（互換等価変換）で正規化される。
+# I4: これらは単体だけでなく、不可視文字・大小文字・属性・自己閉じと**組み合わせて**
+# 現れても除外から漏れないことを固定する（reviewer 提供の組合せ例とは別に、
+# 自分で構成した組合せを2件以上含める）。
+_NFKC_NORMALIZED_SURVIVAL_FIXTURE: List[Tuple[str, bool]] = [
+    (" <skill>x</skill>", False),  # NBSP 単体（先頭）
+    ("<ＳＫＩＬＬ>x</skill>", False),  # 全角英字（ＳＫＩＬＬ）単体
+    # 自己構成の組合せ1: ZWSP（Cf・位置不問除去）+ 全角英字 + 属性(二重引用符) + 自己閉じ
+    ('​<ＳＫＩＬＬ data-x="1"/>', False),
+    # 自己構成の組合せ2: NBSP（NFKC経路）+ 結合文字（Mn・位置不問除去）+ 属性(単引用符)
+    (" <sḱill name='x'>x</skill>", False),
+    ("普通の発話 です。", True),  # NBSP を含むが機構マーカーでない通常発話（陽性対照）
+    ('<not_a_marker  data-x="1"/>', True),  # NBSP+属性+自己閉じだが機構マーカーでない（陽性対照）
+]
+
+
+def test_nfkc_normalized_fixture_entries_actually_require_nfkc_normalization():
+    """壊す不変条件: 上と同じ「保存経路での消失」の罠を、NFKC 依存の表現差
+    （NBSP・全角英数字）についても fixture 定義自体の健全性検査で防ぐ。
+    ／通したい検査経路: 各エントリが実際に NFKC 正規化で変化する文字列である
+    こと（`unicodedata.normalize("NFKC", text) != text`）。この条件が成り立たない
+    エントリは「NFKC 経路を検査していない」ことを意味する。
+    """
+    for text, _expected in _NFKC_NORMALIZED_SURVIVAL_FIXTURE:
+        normalized = unicodedata.normalize("NFKC", text)
+        assert normalized != text, (
+            f"fixture entry が NFKC で変化しません（NBSP/全角文字が消失した疑い）: {text!r}"
+        )
+
+
+def test_filter_machinery_matches_nfkc_normalized_fixture():
+    """壊す不変条件: I1/I4（NBSP・全角英数字が単体・組合せのいずれでも機構判定を
+    回避できない）
+    ／通したい検査経路: filter_machinery（is_machinery_text 経由。
+    strip_leading_noise 内の NFKC 正規化ステップに依存）。
+    """
+    candidates = [
+        p.RawCandidate(
+            file="f.jsonl", channel="response_item", line_no=i, timestamp="2026-08-20T00:00:00.000Z",
+            ts_ms=0.0, text=text, cwd=None, session_id="s1", prev_action=None,
+        )
+        for i, (text, _expected) in enumerate(_NFKC_NORMALIZED_SURVIVAL_FIXTURE)
+    ]
+    expected_survivors = [text for text, expected in _NFKC_NORMALIZED_SURVIVAL_FIXTURE if expected]
+    actual_survivors = [c.text for c in p.filter_machinery(candidates)]
+    assert actual_survivors == expected_survivors
+
+
+def test_oracle_is_machinery_text_matches_nfkc_normalized_fixture():
+    """壊す不変条件: I1/I4（独立オラクル側も同じ NFKC 経路で判定が揺らがない）
+    ／通したい検査経路: _oracle_is_machinery_text（is_machinery_text から独立）。
+    """
+    for text, expected_survives in _NFKC_NORMALIZED_SURVIVAL_FIXTURE:
+        assert p._oracle_is_machinery_text(text) is (not expected_survives), text
+
+
 def test_filter_machinery_matches_independently_labeled_fixture():
     """壊す不変条件: item5（マーカー文字列の改変・swap・判定弱体化を、実装からの
     独立算出でなく人手ラベル済み fixture との突合で検出）
@@ -423,9 +738,9 @@ def test_filter_machinery_matches_invisible_char_fixture():
             file="f.jsonl", channel="response_item", line_no=i, timestamp="2026-08-20T00:00:00.000Z",
             ts_ms=0.0, text=text, cwd=None, session_id="s1", prev_action=None,
         )
-        for i, (text, _expected) in enumerate(_INVISIBLE_CHAR_SURVIVAL_FIXTURE)
+        for i, (text, _expected, _cp) in enumerate(_INVISIBLE_CHAR_SURVIVAL_FIXTURE)
     ]
-    expected_survivors = [text for text, expected in _INVISIBLE_CHAR_SURVIVAL_FIXTURE if expected]
+    expected_survivors = [text for text, expected, _cp in _INVISIBLE_CHAR_SURVIVAL_FIXTURE if expected]
     actual_survivors = [c.text for c in p.filter_machinery(candidates)]
     assert actual_survivors == expected_survivors
 
@@ -435,7 +750,7 @@ def test_oracle_is_machinery_text_matches_invisible_char_fixture():
     レビュー指摘は実装・オラクル『双方』が False になったケース）
     ／通したい検査経路: _oracle_is_machinery_text（is_machinery_text から独立）。
     """
-    for text, expected_survives in _INVISIBLE_CHAR_SURVIVAL_FIXTURE:
+    for text, expected_survives, _cp in _INVISIBLE_CHAR_SURVIVAL_FIXTURE:
         assert p._oracle_is_machinery_text(text) is (not expected_survives), text
 
 
@@ -546,9 +861,9 @@ def test_child_reference_scope_phase1_vs_full_agreement():
     ／通したい検査経路: run_probe の child_ref_scope_agreement フラグ。
     """
     result = p.run_probe(
-        sessions_root=Path.home() / ".codex" / "sessions",
-        base_date=date(2026, 8, 23),
-        days=14,
+        sessions_root=_REAL_CODEX_SESSIONS_ROOT,
+        base_date=_REAL_HOME_TEST_BASE_DATE,
+        days=_REAL_HOME_TEST_DAYS,
     )
     assert result.child_ref_scope_agreement is True
 
@@ -662,6 +977,26 @@ def test_no_cli_version_based_filtering_in_source():
     """
     src = Path(p.__file__).read_text(encoding="utf-8")
     assert "cli_version" not in src
+
+
+def test_real_home_tests_do_not_hardcode_window_literals():
+    """壊す不変条件: I8（skip 判定窓と実行窓は同一ソースでなければならない。
+    real_home テストが `base_date=date(2026, 8, 23)` を再度直書きすると、guard
+    側だけ窓を更新したときに両者が乖離する。旧窓だけにデータがある場合は
+    実行して target_files=0 で失敗し、新窓だけにある場合は全 skip になる）
+    ／通したい検査経路: このテストファイル自身のソースを静的に検査し、
+    `run_probe(` 呼び出しが `base_date=date(2026, 8, 23)` を直書きしていない
+    （＝共有定数 `_REAL_HOME_TEST_BASE_DATE` を参照している）ことを確認する。
+    """
+    own_source = Path(__file__).read_text(encoding="utf-8")
+    import re as _re
+
+    # 実コード上の kwarg 直書き（末尾カンマ付き）だけを対象にし、このテスト自身の
+    # docstring 中の説明文（バッククォート区切り・カンマなし）を誤検出しない。
+    hardcoded = _re.findall(r"base_date=date\(2026,\s*8,\s*23\),", own_source)
+    assert not hardcoded, (
+        f"real_home テストが窓を再度直書きしています（_REAL_HOME_TEST_BASE_DATE を参照すべき）: {hardcoded}"
+    )
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -830,9 +1165,9 @@ def test_run_probe_against_real_codex_sessions_matches_expected_order_of_magnitu
     + assert_machinery_exclusion_matches_oracle（item5・実データでの独立オラクル突合）。
     """
     result = p.run_probe(
-        sessions_root=Path.home() / ".codex" / "sessions",
-        base_date=date(2026, 8, 23),
-        days=14,
+        sessions_root=_REAL_CODEX_SESSIONS_ROOT,
+        base_date=_REAL_HOME_TEST_BASE_DATE,
+        days=_REAL_HOME_TEST_DAYS,
     )
     c = result.counts
     _assert_stage_counts_plausible(c)
@@ -849,9 +1184,9 @@ def test_run_probe_does_not_touch_production_stores():
     paths = p.production_store_paths()
     before = p.snapshot_production_hashes(paths)
     p.run_probe(
-        sessions_root=Path.home() / ".codex" / "sessions",
-        base_date=date(2026, 8, 23),
-        days=14,
+        sessions_root=_REAL_CODEX_SESSIONS_ROOT,
+        base_date=_REAL_HOME_TEST_BASE_DATE,
+        days=_REAL_HOME_TEST_DAYS,
     )
     after = p.snapshot_production_hashes(paths)
     ok, violations = p.verify_production_unchanged(before, after)
@@ -930,9 +1265,9 @@ def test_prev_action_populated_end_to_end_against_real_data():
     （全件 None のまま構造的に歪んでいないこと・Must1 反映確認）。
     """
     result = p.run_probe(
-        sessions_root=Path.home() / ".codex" / "sessions",
-        base_date=date(2026, 8, 23),
-        days=14,
+        sessions_root=_REAL_CODEX_SESSIONS_ROOT,
+        base_date=_REAL_HOME_TEST_BASE_DATE,
+        days=_REAL_HOME_TEST_DAYS,
     )
     non_none = sum(1 for u in result.utterances if u["prev_action"] is not None)
     assert non_none > 0

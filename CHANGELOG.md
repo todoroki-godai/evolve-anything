@@ -11,6 +11,24 @@
   評価セットがない環境では数字を推測せず「未測定」と明示する。
 
 ### Fixed
+- **fix(probe): 機構マーカー除外に NFKC 正規化を追加し、casing/skip配線/Me/codepoint検査を
+  強化（#536 round6）** — 外部レビュー[Must]6件+[Should]1件+[Nit]1件を反映。①NBSP・全角英数字
+  （`ＳＫＩＬＬ`等）を検出できていなかった（I1/I4）ため、`_strip_invisible_chars` の後に
+  `unicodedata.normalize("NFKC", ...)` を実装・独立オラクル双方へ追加した（PR #537
+  `fix/vuln-scan-scope` と同一設計・同一順序）②大小文字ゆれの正規化を「fixture に書かれた
+  特定表記だけを正規化する辞書」へ差し替える変異が生存していた（I2）ため、テスト実行時に
+  ソースへ存在しない casing をプログラム的に生成して検証するテストを追加した③skip 条件の
+  `pytest.mark.skipif` **decorator 配線そのもの**（`not _real_codex_sessions_available()` を
+  `True` に固定する変異）が未検査だった（I3/I6）ため、`pytester` fixture 経由の統合テストを
+  追加した④`Me`（Enclosing_Mark）カテゴリの実文字が fixture に1件も無く、カテゴリ集合から
+  `Me` を削る変異が生存していた（I5）ため実 Me 文字（U+20DD）を追加した⑤fixture の健全性検査を
+  「カテゴリ一致」から「厳密な codepoint 一致」へ強化した（I7。カテゴリ一致だけでは同カテゴリ
+  内での文字すり替えを見逃す）⑥skip 判定窓と実行窓が別々に直書きされ乖離しうる構造だった
+  （Should I8）ため、real_home 4テストと skip guard を同一の共有定数へ統一し、静的検査で
+  再直書きを検出できるようにした⑦PR #537 との**独立複製の乖離**を検出する手段が無かった
+  （Should）ため、`git show` で #537 のファイルを read-only 参照し共有入力ベクトルを両実装へ
+  通して結果を突合するテストを追加した（branch 未解決時は skip）⑧fixture コメントの stale な
+  記述を現行仕様（NFKC 追加後）に合わせて訂正した（Nit）。
 - **test(probe): round5 の自己構成回避手段（RTL mark・word joiner・単引用符属性・タグ内改行/
   タブ）を ad-hoc 確認から恒久 fixture 化（#536）** — round5 完了報告で「緑を確認したが恒久化
   していない」と申告した4件を `_INVISIBLE_CHAR_SURVIVAL_FIXTURE` / 新設
