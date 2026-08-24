@@ -105,7 +105,7 @@ bin/evolve-revert --list   # 柱4（採用のうち戻せる件数）
 - subagents/errors 測定バグ修正: subagents.jsonl の agent_type ノイズを writer/reader 二重防御（`is_noise_agent_type` 単一ソース）で遮断 + errors.jsonl の error_type unknown を決定論分類
 - `memory_capability`: memory dir 解決は `resolve_cc_memory_dir` が単一ソース
 - `skill_vuln_scan`: remote_exec/secret_exfil 等を combo 必須で検出
-- `memory_guard`: auto-memory 書込境界の runtime 記憶汚染検出。prompt_injection/secret_exfil を reject（検査失敗は fail-open）。同名エントリの上書きは決定論遷移検証でゲート
+- `memory_guard`: auto-memory 書込境界の runtime 記憶汚染検出。secret_exfil のみ reject、prompt_injection は advisory（reject せず書込は継続・検出結果は可視化）（検査失敗は fail-open）。同名エントリの上書きは決定論遷移検証でゲート
 - `daily`: 毎朝の evolve queue 自動実行。適用は対話で人間承認
 - `icebox_notice`: fail-open で既存ファイル非破壊、閾値未満は無音
 - `memory_hygiene`: 重複残骸は手順提案のみで auto-apply しない

