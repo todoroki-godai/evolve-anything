@@ -24,7 +24,7 @@ import phase1_codex_probe as p  # noqa: E402
 
 
 # ─────────────────────────────────────────────────────────────────
-# real_home テスト用 skip ガード（#536 team-lead 追加確認）
+# real_home テスト用 skip ガード（#536 team-lead 追加確認・round5 で強化）
 #
 # real_home マーカーは root conftest の HOME 隔離を opt-out するだけで、対象
 # ディレクトリ（実 ~/.codex/sessions）の実在は保証しない。実在チェックを
@@ -35,15 +35,98 @@ import phase1_codex_probe as p  # noqa: E402
 # 差し替えて実行）で target_files=0 → 2/4 の real_home テストが実際に FAILED
 # することを確認済み。
 #
-# skip 理由は必ず出す（silence != evaluated）。黙って skip して緑に見せない。
+# round5 codex Must I3: 旧版は「ディレクトリが存在するか」だけを見ていたため、
+# 空ディレクトリ（存在するが対象14日窓に JSONL が無い）では skip されず実行を
+# 選び、target_files=0 のまま下限チェックで落ちる（Should 指摘）。ディレクトリ
+# 存在ではなく、real_home テストが実際に使う固定14日窓（2026-08-23 起点・
+# run_probe の呼び出し引数と同一値）に対象 JSONL が実在するかで判定する。
 _REAL_CODEX_SESSIONS_ROOT = Path.home() / ".codex" / "sessions"
+_REAL_HOME_TEST_BASE_DATE = date(2026, 8, 23)
+_REAL_HOME_TEST_DAYS = 14
+
+
+def _real_codex_sessions_available(
+    sessions_root: Path = _REAL_CODEX_SESSIONS_ROOT,
+    base_date: date = _REAL_HOME_TEST_BASE_DATE,
+    days: int = _REAL_HOME_TEST_DAYS,
+) -> bool:
+    """real_home テストの skip 条件（#536 round5 Should）。
+
+    ディレクトリの存在だけでなく、固定14日窓に対象 JSONL が実在するかで判定
+    する。skip 条件を評価する関数として切り出すのは、real_home マーカーの
+    外（通常テスト実行）から直接検査できるようにするため（round5 codex Must
+    I3: 「条件自体を real_home でないテストから検証していないため『常に
+    skip』変異を検出できない」への対応）。
+    """
+    return len(p.iter_date_dir_files(sessions_root, base_date, days)) > 0
+
+
+# skip 理由は必ず出す（silence != evaluated）。黙って skip して緑に見せない。
+# pytest.ini の addopts に `-ra` を追加し、通常実行でも skip 理由サマリが
+# 必ず表示されるようにする（round5 codex Must I3。設定が消えたら
+# test_pytest_ini_reports_skip_reasons が検出する）。
 _skip_if_no_real_codex_sessions = pytest.mark.skipif(
-    not _REAL_CODEX_SESSIONS_ROOT.exists(),
+    not _real_codex_sessions_available(),
     reason=(
-        f"{_REAL_CODEX_SESSIONS_ROOT} が存在しません。real_home テストは実 Codex "
-        "セッションが存在する環境でのみ意味を持つ検査のため skip します（#536）。"
+        f"{_REAL_CODEX_SESSIONS_ROOT} の {_REAL_HOME_TEST_BASE_DATE} 起点 "
+        f"{_REAL_HOME_TEST_DAYS}日窓に対象 JSONL がありません。real_home テストは実 "
+        "Codex セッションが存在する環境でのみ意味を持つ検査のため skip します（#536）。"
     ),
 )
+
+
+def test_real_codex_sessions_available_false_for_empty_window(tmp_path):
+    """壊す不変条件: I3 Should（skip 条件が『ディレクトリ存在』でなく『対象14日窓に
+    実在 JSONL があるか』で判定される）
+    ／通したい検査経路: _real_codex_sessions_available（real_home マーカーの外・
+    通常テストから直接検査）。
+    ディレクトリは存在するが対象日付ディレクトリが無いケースで False になる
+    ことを確認する。旧実装（`sessions_root.exists()` のみ）はこのケースで
+    True を返し本テストが落ちる。
+    """
+    root = tmp_path / "sessions"
+    root.mkdir()
+    assert _real_codex_sessions_available(root, date(2026, 8, 23), 14) is False
+
+
+def test_real_codex_sessions_available_true_when_window_has_files(tmp_path):
+    """陽性対照: 対象14日窓に JSONL が実在すれば True になる。"""
+    root = tmp_path / "sessions"
+    date_dir = root / "2026" / "08" / "20"
+    date_dir.mkdir(parents=True)
+    (date_dir / "f.jsonl").write_text("{}\n", encoding="utf-8")
+    assert _real_codex_sessions_available(root, date(2026, 8, 23), 14) is True
+
+
+def test_real_codex_sessions_available_ignores_files_outside_window(tmp_path):
+    """陰性試験: 窓外の日付ディレクトリに JSONL があっても対象窓が空なら False。
+    （分散・入替変異相当: ファイルは実在するが対象期間の外という状態を固定する）
+    """
+    root = tmp_path / "sessions"
+    out_of_window_dir = root / "2026" / "07" / "01"  # 基準日8/23から14日窓の外
+    out_of_window_dir.mkdir(parents=True)
+    (out_of_window_dir / "f.jsonl").write_text("{}\n", encoding="utf-8")
+    assert _real_codex_sessions_available(root, date(2026, 8, 23), 14) is False
+
+
+def test_pytest_ini_reports_skip_reasons():
+    """壊す不変条件: I3（skip 時の理由が通常実行で必ず表示される設定が外れて
+    いないこと。理由は reason= に保持されるだけでは表示されず、pytest.ini の
+    addopts に -ra/-rs が必要）
+    ／通したい検査経路: pytest.ini の addopts 行に -ra または -rs が含まれること。
+    この設定自体が将来消えても検出できるよう、静的にファイル内容を検査する
+    （実行結果の標準出力パースは pytest-xdist 経由の並列実行では取得しづらい
+    ため、設定の存在を直接検査する形にする）。
+    """
+    ini_path = _SCRIPTS_DIR.parent / "pytest.ini"
+    content = ini_path.read_text(encoding="utf-8")
+    addopts_line = next(
+        line for line in content.splitlines() if line.strip().startswith("addopts")
+    )
+    tokens = addopts_line.split()
+    assert "-ra" in tokens or "-rs" in tokens, (
+        f"pytest.ini の addopts に -ra/-rs がありません: {addopts_line!r}"
+    )
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -196,6 +279,44 @@ _INDEPENDENT_SURVIVAL_FIXTURE: List[Tuple[str, bool]] = [
     ("<Skill>evolve</Skill>", False),  # 先頭大文字
     ("<COMMAND-NAME>ls</COMMAND-NAME>", False),  # 全大文字・両チャネル共通マーカー
     ("<Not_A_Marker>本文</Not_A_Marker>", True),  # 大文字だが機構マーカーでない（陽性対照）
+    # #536 round5 codex Must I2: 大小文字ゆれの正規化を「fixture にある特定の
+    # 語だけを小文字化する辞書」へ差し替える変異（実装・オラクル双方を同時に
+    # 変異）を適用すると、上の3語（SKILL/Skill/COMMAND-NAME）だけの fixture では
+    # 全テストが通ってしまった（実測: <Image/> と <Recommended_Plugins> は双方
+    # False で漏れた）。9種の機構マーカー**全体**に対して大小文字ゆれを固定し、
+    # 「特定語の辞書」への変異では通らないようにする。
+    ("<Image/>", False),  # 自己閉じ・先頭大文字
+    ("<IMAGE/>", False),  # 自己閉じ・全大文字
+    ("<Recommended_Plugins>\n一覧です", False),  # 先頭大文字・アンダースコア区切り
+    ("<RECOMMENDED_PLUGINS>\n一覧です", False),  # 全大文字
+    ("<Task-Notification>\n通知", False),  # 先頭大文字・ハイフン区切り
+    ("<TASK-NOTIFICATION>\n通知", False),  # 全大文字
+    ("<Local-Command-Stdout>...</Local-Command-Stdout>", False),  # 先頭大文字
+    ("<Command-Message>...</Command-Message>", False),  # 先頭大文字
+    ("<Environment_Context>...</Environment_Context>", False),  # 先頭大文字
+    ("<User_Action>click</User_Action>", False),  # 先頭大文字
+    ("<Not_Recommended_Plugins>本文", True),  # 似た大文字語だが機構マーカーでない（陽性対照）
+]
+
+# #536 round5 codex Must I1: 不可視文字（Cf/Mn/Me、位置不問）が「テキスト先頭」
+# にも「タグ名の内側」にも入れられる。個別の1文字だけを fixture に足す方式では
+# 次の1文字で破れる（列挙で直さない・design-before-fanout）ため、複数カテゴリ・
+# 複数位置の組合せを固定する。値は verify-checks-by-breaking.md の「境界値と
+# 表現差」節に従い ZWSP（Cf）・BOM（Cf）・結合文字（Mn）・異体字セレクタ（Mn）を
+# それぞれ異なる位置（先頭・タグ開始直後・タグ名内部・タグ名末尾）に配置する。
+_INVISIBLE_CHAR_SURVIVAL_FIXTURE: List[Tuple[str, bool]] = [
+    ("​<skill>x</skill>", False),  # 先頭に ZWSP（Cf）
+    ("<​skill>x</skill>", False),  # `<` 直後に ZWSP（タグ名内部の直前）
+    ("<skill​>x</skill>", False),  # タグ名末尾に ZWSP（`>` 直前）
+    ("<sk​ill>x</skill>", False),  # タグ名の途中に ZWSP
+    ("<﻿skill>x</skill>", False),  # `<` 直後に BOM（Cf）
+    # \uXXXX エスケープで明示する（実測: 結合文字・異体字セレクタをリテラル文字
+    # で直書きすると、ファイル保存経路の Unicode 正規化で静かに消え、Mn 経路を
+    # 検査していないのに緑になる偽陽性 fixture を作った。#536 round5 自己発見）。
+    ("<sk\u0301ill>x</skill>", False),  # タグ名内部に結合文字（Mn・U+0301 acute accent）
+    ("<skill\ufe0f>x</skill>", False),  # タグ名末尾に異体字セレクタ（Mn・VS16）
+    ("<image​/>", False),  # 自己閉じタグのスラッシュ直前に ZWSP
+    ("普通の発話です​。", True),  # ZWSP を含むが機構マーカーでない通常発話（陽性対照）
 ]
 
 
@@ -214,6 +335,34 @@ def test_filter_machinery_matches_independently_labeled_fixture():
     expected_survivors = [text for text, expected in _INDEPENDENT_SURVIVAL_FIXTURE if expected]
     actual_survivors = [c.text for c in p.filter_machinery(candidates)]
     assert actual_survivors == expected_survivors
+
+
+def test_filter_machinery_matches_invisible_char_fixture():
+    """壊す不変条件: I1（不可視文字が先頭・タグ開始直後・タグ名内部・タグ名末尾の
+    いずれに入っても機構判定が揺らがない）
+    ／通したい検査経路: filter_machinery（is_machinery_text 経由）。
+    ZWSP/BOM（Cf）・結合文字/異体字セレクタ（Mn）を複数位置に配置した fixture。
+    列挙修正（特定の1文字だけ追加）ではこの fixture の一部しか通らない。
+    """
+    candidates = [
+        p.RawCandidate(
+            file="f.jsonl", channel="response_item", line_no=i, timestamp="2026-08-20T00:00:00.000Z",
+            ts_ms=0.0, text=text, cwd=None, session_id="s1", prev_action=None,
+        )
+        for i, (text, _expected) in enumerate(_INVISIBLE_CHAR_SURVIVAL_FIXTURE)
+    ]
+    expected_survivors = [text for text, expected in _INVISIBLE_CHAR_SURVIVAL_FIXTURE if expected]
+    actual_survivors = [c.text for c in p.filter_machinery(candidates)]
+    assert actual_survivors == expected_survivors
+
+
+def test_oracle_is_machinery_text_matches_invisible_char_fixture():
+    """壊す不変条件: I1（独立オラクル側も同じ不可視文字クラスで判定が揺らがない。
+    レビュー指摘は実装・オラクル『双方』が False になったケース）
+    ／通したい検査経路: _oracle_is_machinery_text（is_machinery_text から独立）。
+    """
+    for text, expected_survives in _INVISIBLE_CHAR_SURVIVAL_FIXTURE:
+        assert p._oracle_is_machinery_text(text) is (not expected_survives), text
 
 
 def test_developer_role_excluded_by_reducer():

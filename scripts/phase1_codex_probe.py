@@ -27,6 +27,7 @@ import json
 import os
 import sys
 import tempfile
+import unicodedata
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
@@ -112,9 +113,39 @@ UTTERANCE_COLUMNS = [
 # ─────────────────────────────────────────────────────────────────
 # 先頭タグ判定（D3）
 # ─────────────────────────────────────────────────────────────────
+# #536 round5 codex Must I1: 個別の不可視文字（BOM・ZWSP 等）を列挙する方式では
+# 網羅できない（次の1文字で破れる）。列挙をやめ、Unicode カテゴリ Cf（Format：
+# 表示上見えない制御・書式文字）/ Mn（Nonspacing_Mark：結合文字・異体字セレクタ）/
+# Me（Enclosing_Mark）でクラス判定する。この設計は scripts/lib/skill_vuln_scan.py
+# の _strip_invisible_chars（PR #537 fix/vuln-scan-scope, round4-5）と同一だが、
+# その branch は 2026-08-24 時点で main 未マージ・レビュー継続中のため import せず
+# 独立に複製する（未マージ branch への cross-PR import は、どちらかが先に変わると
+# もう片方が壊れる結合を作る。design-before-fanout の「共通部品へ寄せる」原則には
+# 反するが、両ブランチが独立に完結できることを優先した。#537 マージ後に
+# 共通モジュール化を検討する余地あり＝報告に明記）。
+#
+# NBSP（U+00A0）等の通常空白は Cf/Mn/Me に含まれず Zs（空白）カテゴリのため、
+# 個別に対応しない（Python 組込み `str.lstrip()` が Unicode 空白を category
+# ベースで判定するので、Cf/Mn/Me 除去後に `.lstrip()` するだけで両方に対応できる。
+# 半角スペースだけを特別扱いした変異は、全角空白等が引き続き通ることで検出される）。
+_INVISIBLE_MATCH_CATEGORIES = frozenset({"Cf", "Mn", "Me"})
+
+
+def _strip_invisible_chars(s: str) -> str:
+    """s から Unicode format/combining 文字（category "Cf"/"Mn"/"Me"）を
+    位置に関わらず除去した文字列を返す。判定専用の正規化（元テキストの保持には
+    使わない）。"""
+    if not s:
+        return s
+    if not any(unicodedata.category(ch) in _INVISIBLE_MATCH_CATEGORIES for ch in s):
+        return s
+    return "".join(ch for ch in s if unicodedata.category(ch) not in _INVISIBLE_MATCH_CATEGORIES)
+
+
 def strip_leading_noise(text: str) -> str:
-    """先頭の BOM・空白・改行を除去する（D3 表現差変異対策・codex v3 反映）。"""
-    return (text or "").lstrip("﻿ \t\n\r　")
+    """不可視文字（Cf/Mn/Me、位置不問）を除去した上で先頭の空白・改行を除去する
+    （D3 表現差変異対策・#536 round5 反映）。"""
+    return _strip_invisible_chars(text or "").lstrip()
 
 
 def head_tag(text: str) -> Optional[str]:
@@ -497,16 +528,36 @@ _ORACLE_MACHINERY_MARKERS = frozenset(
 )
 
 
+_ORACLE_INVISIBLE_MATCH_CATEGORIES = frozenset({"Cf", "Mn", "Me"})
+
+
+def _oracle_strip_invisible_chars(s: str) -> str:
+    """独立実装の不可視文字除去（_strip_invisible_chars 非依存・#536 round5）。
+
+    実装側と同じ Cf/Mn/Me カテゴリ判定を採用するが、コードは独立に書き下す
+    （import も呼び出しもしない）。カテゴリという「判定基準」自体が実装・
+    オラクル双方で崩れる変異（例: カテゴリ集合から Mn を削る）は、テスト側の
+    独立 fixture（結合文字・異体字セレクタを使う陰性試験）で別途検出する。
+    """
+    out_chars = []
+    for ch in s:
+        if unicodedata.category(ch) in _ORACLE_INVISIBLE_MATCH_CATEGORIES:
+            continue
+        out_chars.append(ch)
+    return "".join(out_chars)
+
+
 def _oracle_is_machinery_text(text: str) -> bool:
     """独立実装の機構判定（head_tag/strip_leading_noise/is_machinery_text 非依存）。
 
     #536 round4: is_machinery_text 側と同じ理由で自己閉じ形・大小文字ゆれを
     正規化する。実装側と表現は変えるが（rstrip("/").lower() を tag 変数へ
     inline で適用）、判定内容は独立に同じ結論へ至るよう記述する。
+    #536 round5: 不可視文字（Cf/Mn/Me、位置不問）除去を独立実装で追加する。
     """
     if not text:
         return False
-    stripped = text.lstrip("﻿ \t\n\r　")
+    stripped = _oracle_strip_invisible_chars(text).lstrip()
     if not stripped.startswith("<"):
         return False
     close = stripped.find(">")
