@@ -11,6 +11,7 @@ from .classification import classify_artifact_origin
 from .memory import build_memory_health_section
 from .quality import build_quality_trends_section
 from .scope import build_scope_advisory_section
+from .live_checkout_health import build_live_checkout_health_section
 from .sections import _build_test_guard_section, build_corrections_insights_section, build_lsp_suggestion_section, build_token_consumption_section
 from .sections_summary import (
     build_clean_fold_line,
@@ -123,6 +124,12 @@ def generate_report(
         lsp_section = build_lsp_suggestion_section(project_dir)
         if lsp_section:
             lines.extend(lsp_section)
+
+    # #548: plugin_self（evolve-anything 本体の checkout）の生存確認。project_dir（audit
+    # 対象のユーザー PJ）とは独立に常に評価する。
+    live_checkout_section = build_live_checkout_health_section()
+    if live_checkout_section:
+        lines.extend(live_checkout_section)
 
     # Observability セクション（glossary_drift / unmanaged_pitfalls …）は
     # observability.py の collect_observability を単一ソースとして消費する（ADR-028）。
