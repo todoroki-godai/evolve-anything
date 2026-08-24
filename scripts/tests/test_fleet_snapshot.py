@@ -108,24 +108,45 @@ def _collect_api_surface() -> str:
     for modname, name, obj in sorted(submodule_members, key=lambda t: (t[0], t[1])):
         lines.append(f"{modname}.{name}{_normalize_sig(obj)}")
 
-    # #538 round6 [Must]Should2: 公開クラスの public method/property（``__init__`` は上の
+    # #538 round6-7 [Must]Should2: 公開クラスの public method/property（``__init__`` は上の
     # コンストラクタシグネチャで既に捕捉済みなので除く）を走査する。``CorrectionsSnapshot``
-    # の ``records``/``health`` property や、tuple 互換 ``__iter__`` の有無を検知する。
+    # の ``records``/``health`` field や、tuple 互換 ``__iter__`` の有無を検知する。
+    #
+    # round7 レビュー実測: ``vars(cls)`` ベースの列挙は2つの穴があった。
+    #   ①``records``/``health`` は ``NamedTuple`` 生成の ``_tuplegetter`` descriptor で
+    #     ``isinstance(attr, property)`` に一致せず・``callable(attr)`` も False のため、
+    #     ``vars(cls)`` に実在するのに判定条件から漏れて未捕捉だった。
+    #   ②``__iter__`` は ``tuple`` から継承されており ``vars(cls)``（cls 自身の
+    #     ``__dict__``）には現れない。継承メンバーは ``dir(cls)`` でなければ拾えない。
+    # ``records`` を削除する変異を適用すると、①のみを直しても ``vars(cls)`` からその名前
+    # ごと消えるため fixture は変化するが、②のクラスで継承メンバーが漏れたままだと
+    # 「public な tuple-compat 契約が消えたのに fixture が無反応」という別の穴が残る。
+    # ``dir(cls)`` ベースに切り替え、名前解決は ``getattr(cls, name)`` で行う（descriptor は
+    # class 経由アクセスで descriptor オブジェクト自身が返る＝instance 生成不要）。
+    # tuple/object 由来の大量の builtin dunder（``__add__``/``count``/``index`` 等）で
+    # fixture が埋もれないよう、対象は「public 名」+「明示的に追跡する少数の inherited
+    # dunder」（tuple-compat の要である ``__iter__``）に限定する。
+    _TRACKED_INHERITED_DUNDERS = ("__iter__",)
     lines.append("")
     lines.append("# fleet public class method / property signatures")
     method_lines = []
     for cls_name in sorted(classes):
         cls = classes[cls_name]
-        for attr_name in sorted(vars(cls)):
-            if attr_name.startswith("_") and attr_name not in ("__iter__",):
-                continue
+        candidate_names = {
+            n for n in dir(cls) if not n.startswith("_")
+        } | {d for d in _TRACKED_INHERITED_DUNDERS if hasattr(cls, d)}
+        for attr_name in sorted(candidate_names):
             if attr_name == "__init__":
                 continue
-            attr = vars(cls)[attr_name]
-            if isinstance(attr, property):
-                method_lines.append(f"{cls_name}.{attr_name} (property)")
-            elif callable(attr):
+            attr = getattr(cls, attr_name)
+            if callable(attr):
                 method_lines.append(f"{cls_name}.{attr_name}{_normalize_sig(attr)}")
+            elif hasattr(attr, "__get__"):
+                # property / NamedTuple の _tuplegetter 等の data descriptor。
+                # 型名を明示して drift（descriptor 種別の変化）も検知できるようにする。
+                method_lines.append(f"{cls_name}.{attr_name} ({type(attr).__name__})")
+            else:
+                method_lines.append(f"{cls_name}.{attr_name} = {attr!r}")
     for line in sorted(method_lines):
         lines.append(line)
 

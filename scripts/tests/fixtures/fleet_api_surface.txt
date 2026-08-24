@@ -30,7 +30,7 @@ branch_name(executor: 'str', task_id: 'str') -> 'str'
 build_batch_report(batch: 'List[Dict[str, Any]]', *, generated_at: 'str', cost: 'Dict[str, Any]') -> 'Dict[str, Any]'
 build_pr_body(entry: 'Dict[str, Any]', *, report: 'Dict[str, Any]', diff_stat_text: 'str') -> 'str'
 build_pr_title(pj_slug: 'str', date_str: 'str') -> 'str'
-build_queue_result(*, pj_slugs: 'List[str]', threshold: 'int', weak_signals_path: 'Optional[Path]', corrections_path: 'Path', last_evolve_map: 'Dict[str, str]', activity_map: 'Dict[str, Dict[str, int]]', generated_at: 'str', pj_paths: 'Optional[Dict[str, str]]' = None, material_slugs: 'Optional[List[str]]' = None, untracked_dir_map: 'Optional[Dict[str, str]]' = None, corrections_reader: 'Callable[[Path], CorrectionsSnapshot]' = <function read_corrections_records_with_health at 0x...>) -> 'Dict[str, Any]'
+build_queue_result(*, pj_slugs: 'List[str]', threshold: 'int', weak_signals_path: 'Optional[Path]', corrections_path: 'Path', last_evolve_map: 'Dict[str, str]', activity_map: 'Dict[str, Dict[str, int]]', generated_at: 'str', pj_paths: 'Optional[Dict[str, str]]' = None, material_slugs: 'Optional[List[str]]' = None, untracked_dir_map: 'Optional[Dict[str, str]]' = None) -> 'Dict[str, Any]'
 classify_project(pj_path: 'Path', settings_path: 'Path | None' = None, auto_memory_root: 'Path | None' = None, stale_days: 'int' = 30, now: 'datetime | None' = None) -> 'str'
 collect_codex_usage(db_path: 'Path | None' = None, *, window_days: 'int' = 30, now: 'datetime | None' = None) -> 'CodexUsageResult'
 collect_fleet_status(root: 'Path | None' = None, settings_path: 'Path | None' = None, auto_memory_root: 'Path | None' = None, data_dir: 'Path | None' = None, timeout: 'float' = 30.0, max_workers: 'int' = 2, projects: 'list[Path] | None' = None) -> 'list[FleetRow]'
@@ -159,7 +159,7 @@ fleet.propose.run_propose_batch(targets: 'List[Dict[str, Any]]', *, run_evolve_f
 fleet.propose.select_targets(queue_data: 'Optional[Dict[str, Any]]', *, max_pj: 'int') -> 'List[Dict[str, Any]]'
 fleet.propose.summarize_pj_result(result: 'Dict[str, Any]', *, suppressed_rejected_count: 'int' = 0) -> 'Dict[str, Any]'
 fleet.propose.write_reports(report: 'Dict[str, Any]', *, data_dir: 'Path', date_str: 'Optional[str]' = None) -> "'tuple[Path, Path]'"
-fleet.queue.build_queue_result(*, pj_slugs: 'List[str]', threshold: 'int', weak_signals_path: 'Optional[Path]', corrections_path: 'Path', last_evolve_map: 'Dict[str, str]', activity_map: 'Dict[str, Dict[str, int]]', generated_at: 'str', pj_paths: 'Optional[Dict[str, str]]' = None, material_slugs: 'Optional[List[str]]' = None, untracked_dir_map: 'Optional[Dict[str, str]]' = None, corrections_reader: 'Callable[[Path], CorrectionsSnapshot]' = <function read_corrections_records_with_health at 0x...>) -> 'Dict[str, Any]'
+fleet.queue.build_queue_result(*, pj_slugs: 'List[str]', threshold: 'int', weak_signals_path: 'Optional[Path]', corrections_path: 'Path', last_evolve_map: 'Dict[str, str]', activity_map: 'Dict[str, Dict[str, int]]', generated_at: 'str', pj_paths: 'Optional[Dict[str, str]]' = None, material_slugs: 'Optional[List[str]]' = None, untracked_dir_map: 'Optional[Dict[str, str]]' = None) -> 'Dict[str, Any]'
 fleet.queue.fold_activity_counts(slug: 'str', subagent_counts: 'Dict[str, int]', session_counts: 'Dict[str, int]') -> 'Dict[str, int]'
 fleet.queue.select_evolve_queue(pj_materials: 'List[Dict[str, Any]]', threshold: 'int') -> 'List[Dict[str, Any]]'
 fleet.queue_materials.CorrectionsSnapshot(records: List[Dict[str, Any]], health: Dict[str, Any])
@@ -191,4 +191,56 @@ fleet.recall.recall(query: 'str', *, limit: 'int' = 10, projects_root: 'Path | N
 fleet.recall.reinforce_recall_hits(hits: 'list[RecallHit]') -> 'None'
 
 # fleet public class method / property signatures
+AccountMismatchError.add_note(self, note, /)
+AccountMismatchError.args (getset_descriptor)
+AccountMismatchError.with_traceback(self, tb, /)
+AuditResult.env_score = None
+AuditResult.growth_level = None
+AuditResult.issues_summary = None
+AuditResult.latest_audit = None
+AuditResult.message = ''
+AuditResult.phase = None
+CodexUsageResult.error = None
+CodexUsageResult.status = 'ok'
+CorrectionsSnapshot.__iter__(self, /)
+CorrectionsSnapshot.count(self, value, /)
+CorrectionsSnapshot.health (_tuplegetter)
+CorrectionsSnapshot.index(self, value, start=0, stop=9223372036854775807, /)
+CorrectionsSnapshot.records (_tuplegetter)
+Fact.is_stale = False
+Fact.is_superseded = False
+Fact.malformed_frontmatter = False
+FleetRow.audit_status = 'OK'
+FleetRow.cache_hit_pct = None
+FleetRow.cache_reuse_factor = None
+FleetRow.env_score = None
+FleetRow.growth_level = None
+FleetRow.issues_summary = None
+FleetRow.latest_audit = None
+FleetRow.message = ''
+FleetRow.phase = None
+FleetRow.subagents_30d = 0
+FleetRow.tokens_30d = None
+GitCommandError.add_note(self, note, /)
+GitCommandError.args (getset_descriptor)
+GitCommandError.with_traceback(self, tb, /)
+IssuesSummary.corrections_unprocessed = 0
+IssuesSummary.hardcoded_values = 0
+IssuesSummary.line_violations = 0
+IssuesSummary.potential_duplicates = 0
+IssuesSummary.skill_quality_degraded_count = 0
 IssuesSummary.total(self) -> 'int'
+MemoryDir.__iter__(self, /)
+MemoryDir.count(self, value, /)
+MemoryDir.index(self, value, start=0, stop=9223372036854775807, /)
+MemoryDir.memory_dir (_tuplegetter)
+MemoryDir.pj_display (_tuplegetter)
+PluginFreshness.detail = ''
+PluginFreshness.disabled = False
+ProposalTargetError.add_note(self, note, /)
+ProposalTargetError.args (getset_descriptor)
+ProposalTargetError.with_traceback(self, tb, /)
+RecallHit.is_linked = False
+WorktreeError.add_note(self, note, /)
+WorktreeError.args (getset_descriptor)
+WorktreeError.with_traceback(self, tb, /)

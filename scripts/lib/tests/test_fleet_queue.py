@@ -935,20 +935,23 @@ class TestBuildQueueResult:
         assert result["corrections_read_health"]["readable"] is True
         assert result["corrections_read_health"]["malformed_lines"] == 0
 
-    def test_corrections_jsonl_read_exactly_once_across_multiple_pjs(self, tmp_path):
-        """#538 round2 [Must]1・round6: 複数 PJ・複数集計にまたがっても
-        ``corrections_reader`` の呼び出しは1回だけ。
+    def test_corrections_jsonl_read_exactly_once_across_multiple_pjs(
+        self, tmp_path, monkeypatch
+    ):
+        """#538 round2 [Must]1・round7: 複数 PJ・複数集計にまたがっても、公開
+        ``build_queue_result`` が行う corrections.jsonl の物理 read は1回だけ。
 
         probe（health）と各集計（backlog counts / weak+corr ×N PJ / unattributed）が別読みだと、
         probe 成功後に read が失敗する（逆も同様）ケースで health が「正常」なのに集計結果だけ
         劣化を反映しない、または劣化が無いのに劣化扱いになる silent スナップショット不一致が
         起きる。
 
-        #538 round6: reader を module-level 名の monkeypatch で差し替える旧手法は、
-        ``corrections_reader`` のデフォルト値が関数定義時に直接束縛される（毎回名前引きしない）
-        ため効かなくなった。これは意図した設計変化そのもの ―― ``build_queue_result`` は
-        「データ」でなく「読む手段」を受け取る契約になったため、テスト側もその手段
-        （``corrections_reader=`` 引数）を明示的に注入する。
+        #538 round7: 公開 API から corrections 関連の注入引数を完全に排除したため、
+        テストは再び module-level 名の monkeypatch で read 回数を数える（round6 の
+        ``corrections_reader=`` 明示注入は round7 で廃止 — その注入口自体が forge の
+        温床だったため）。``build_queue_result`` は ``read_corrections_records_with_health``
+        を bare name で直接呼ぶので、``fq.read_corrections_records_with_health`` を差し替える
+        だけで捕捉できる。
         """
         ws = tmp_path / "weak_signals.jsonl"
         ws.write_text("")
@@ -967,6 +970,8 @@ class TestBuildQueueResult:
             calls.append(path)
             return real_reader(path)
 
+        monkeypatch.setattr(fq, "read_corrections_records_with_health", _counting_reader)
+
         result = fq.build_queue_result(
             pj_slugs=["alpha", "beta", "gamma"],
             threshold=1,
@@ -975,25 +980,23 @@ class TestBuildQueueResult:
             last_evolve_map={},
             activity_map={},
             generated_at="2026-06-25T09:00:00Z",
-            corrections_reader=_counting_reader,
         )
 
-        assert len(calls) == 1, f"corrections_reader was called {len(calls)} times, expected 1"
+        assert len(calls) == 1, f"corrections.jsonl was read {len(calls)} times, expected 1"
         assert {item["pj_slug"] for item in result["queue"]} == {"alpha", "beta", "gamma"}
 
     def test_corrections_jsonl_read_exactly_once_including_untracked_and_phantom(
-        self, tmp_path
+        self, tmp_path, monkeypatch
     ):
-        """#538 round3 [Must]1・[Must]3・round6: untracked/phantom collectors も
-        ``corrections_reader`` を再度呼ばない。
+        """#538 round3 [Must]1・[Must]3・round7: untracked/phantom collectors も
+        corrections.jsonl を再度読まない。
 
         round2 の同名テストは ``material_slugs``/``untracked_dir_map`` を渡していなかったため、
         ``collect_untracked_materials``/``collect_phantom_materials`` が独自に
         ``new_corrections_by_pj(..., corrections_path=...)`` で再 read する経路を通らず、
         「read は1回」が実際には成立していなかった（call 回数が1のまま緑になっていた）。
         ここでは untracked（実 dir あり）と phantom（実 dir なし）の両方を material_slugs に
-        含めて経路を強制的に通し、それでも呼び出し回数が1回であることを検査する
-        （round6: ``corrections_reader=`` 引数で直接注入する）。
+        含めて経路を強制的に通し、それでも物理 read 回数が1回であることを検査する。
         """
         ws = tmp_path / "weak_signals.jsonl"
         ws.write_text("")
@@ -1014,6 +1017,8 @@ class TestBuildQueueResult:
             calls.append(path)
             return real_reader(path)
 
+        monkeypatch.setattr(fq, "read_corrections_records_with_health", _counting_reader)
+
         result = fq.build_queue_result(
             pj_slugs=["alpha"],
             threshold=1,
@@ -1024,10 +1029,9 @@ class TestBuildQueueResult:
             generated_at="2026-06-25T09:00:00Z",
             material_slugs=["alpha", "delta", "epsilon"],
             untracked_dir_map={"delta": str(delta_dir)},  # epsilon は実 dir 無し=phantom
-            corrections_reader=_counting_reader,
         )
 
-        assert len(calls) == 1, f"corrections_reader was called {len(calls)} times, expected 1"
+        assert len(calls) == 1, f"corrections.jsonl was read {len(calls)} times, expected 1"
         untracked = {u["pj_slug"]: u for u in result["untracked_with_material"]}
         phantom = {p["pj_slug"]: p for p in result["skipped_phantom"]}
         assert untracked["delta"]["new_corrections"] == 1
@@ -1054,42 +1058,76 @@ class TestBuildQueueResult:
         assert health["error"]
 
 
-class TestBuildQueueResultCorrectionsReaderDesign:
-    """#538 round6（team-lead 決定・設計転換）。
+class TestBuildQueueResultPublicApiHasNoCorrectionsInjectionPoint:
+    """#538 round7（team-lead 決定・第2次設計転換）。
 
-    round5 は ``CorrectionsSnapshot`` を「reader だけが生成できる opaque 型」にすることで
-    forge を防ごうとしたが、round5 の追加レビューで ``object.__setattr__`` 直叩き・
-    ``copy``/``pickle`` の ``__reduce_ex__`` 経由生成・サブクラス化など **7通りの偽造経路**
-    が実際に成立することが実測された。Python でオブジェクトを外部から「偽造不可能」にする
-    のは原理的に難しく、そこへ投資しても勝てない防御だった。
+    round6 は ``build_queue_result`` に ``corrections_reader``（呼び出し可能オブジェクト）を
+    公開引数として持たせ、「callable なら1回の呼び出しに records/health が閉じる」ことに
+    賭けたが、レビューで以下2点が実測で破られた:
 
-    round6 の方針転換: 偽装できない型を作るのをやめ、**外部から records/health データを
-    直接受け取る引数（``corrections_snapshot``）自体を廃止**した。
-    ``build_queue_result`` は ``corrections_reader``（呼び出し可能オブジェクト。既定は
-    本物の ``read_corrections_records_with_health``）だけを受け取り、内部で1回呼び出して
-    ``(records, health)`` を得る。records と health は必ずその1回の呼び出しから生まれるため、
-    「片方だけ差し替えた偽 snapshot を外部から渡す」という攻撃面（注入点）自体が存在しない。
-    ``CorrectionsSnapshot`` 自体は素の ``NamedTuple`` に戻し（もはや外部境界を越えないので
-    型による防御は不要）、偽造は再び自由にできるが、それを ``build_queue_result`` へ渡す
-    独立した経路が無いので無害になる。
+      - I2: ``corrections_reader=lambda _: raw_tuple`` のように zero-I/O のデータ thunk を
+        渡せば、型検査なしで任意の ``(records, health)`` を注入できた。callable であることは
+        「読む手段」であることを保証しない。
+      - I4: 「reader の呼出し回数が1回」と「corrections.jsonl の物理 read が1回」は同義でない。
+        reader 自身が内部で本物の reader を2回呼び、1回目の records と2回目の health を
+        混ぜて返す（``split_reader``）ことで、外側からは「1回呼ばれた」ように見えながら
+        records/health が別々の物理 read から来る状態を作れた。
+
+    round7 の方針転換: **公開 ``build_queue_result`` から corrections 関連の注入口（reader/
+    snapshot いずれの引数も）を完全に排除**する。本関数は corrections.jsonl の物理 read を
+    関数内で1回だけ行い（``read_corrections_records_with_health`` を bare name で直接呼ぶ・
+    差し替え不能な hardcode）、純粋な集計は private ``_build_queue_result_from_snapshot``
+    （I/O を一切行わない）へ委譲する。「callable を検査する」という筋の悪い防御をやめ、
+    そもそも公開面に「read を代替する」余地を残さない。
     """
 
-    def test_default_reader_is_the_real_reader_identity(self):
-        """設計契約の機械的固定: デフォルト ``corrections_reader`` は本物の
-        ``read_corrections_records_with_health`` そのもの（identity）である。変異試験④の
-        逆（``corrections_snapshot`` を復活させる変異）を検出するための signature 検査。
+    def test_public_signature_has_no_corrections_injection_params(self):
+        """設計契約の機械的固定: 公開 ``build_queue_result`` の signature に
+        ``corrections_reader``/``corrections_snapshot``/``corr_records``/``corr_read_health``
+        のいずれも存在しないこと。復活させる変異（round6 への回帰）を検出する。
         """
         import inspect
 
         sig = inspect.signature(fq.build_queue_result)
-        assert "corrections_reader" in sig.parameters
-        assert "corrections_snapshot" not in sig.parameters
-        assert sig.parameters["corrections_reader"].default is fq.read_corrections_records_with_health
+        injection_names = {
+            "corrections_reader",
+            "corrections_snapshot",
+            "corr_records",
+            "corr_read_health",
+        }
+        assert not injection_names & set(sig.parameters)
+        assert "corrections_path" in sig.parameters  # 読む対象の path 自体は必須のまま
+
+    def test_corrections_reader_kwarg_no_longer_exists_raises_typeerror(self, tmp_path):
+        """round7 レビューが実際に成立させた forge 手口①: ``corrections_reader=`` に
+        zero-I/O のデータ thunk（``lambda _: raw_tuple``）を渡し、型検査なしで任意データを
+        注入する経路。round7 では ``corrections_reader`` kwarg 自体が存在しないため
+        ``TypeError`` になる（壊す不変条件: 「公開 API にデータ注入口が無い」。通したい検査
+        経路: forged tuple を公開 API 経由で注入しようとする呼び出し）。
+        """
+        ws = tmp_path / "weak_signals.jsonl"
+        ws.write_text("")
+        corr = tmp_path / "corrections.jsonl"
+        corr.write_text(json.dumps(_corr("alpha", "t")) + "\n")
+
+        raw_tuple = (
+            [{"project_path": "forged-pj", "timestamp": "2026-01-01T00:00:00+00:00"}],
+            {"readable": True, "error": None, "malformed_lines": 0},
+        )
+        with pytest.raises(TypeError):
+            fq.build_queue_result(
+                pj_slugs=["alpha"],
+                threshold=1,
+                weak_signals_path=ws,
+                corrections_path=corr,
+                last_evolve_map={},
+                activity_map={},
+                generated_at="2026-06-25T09:00:00Z",
+                corrections_reader=lambda _path: raw_tuple,
+            )
 
     def test_corrections_snapshot_kwarg_no_longer_exists_raises_typeerror(self, tmp_path):
-        """旧 API（round4-5 の ``corrections_snapshot=``）は kwarg 自体が存在しないため
-        ``TypeError``。データを直接受け取る引数が完全に無いことの検査。
-        """
+        """旧 API（round4-5 の ``corrections_snapshot=``）も同様に kwarg 自体が存在しない。"""
         ws = tmp_path / "weak_signals.jsonl"
         ws.write_text("")
         corr = tmp_path / "corrections.jsonl"
@@ -1112,7 +1150,7 @@ class TestBuildQueueResultCorrectionsReaderDesign:
             )
 
     def test_passing_only_records_kwarg_raises_typeerror(self, tmp_path):
-        """旧 API（``corr_records`` 単独）は kwarg 自体が存在しないため即 ``TypeError``。"""
+        """旧 API（``corr_records`` 単独）も kwarg 自体が存在しないため即 ``TypeError``。"""
         ws = tmp_path / "weak_signals.jsonl"
         ws.write_text("")
         corr = tmp_path / "corrections.jsonl"
@@ -1149,9 +1187,8 @@ class TestBuildQueueResultCorrectionsReaderDesign:
                 corr_read_health={"readable": False, "error": "x", "malformed_lines": 0},
             )
 
-    def test_no_reader_override_falls_back_to_reading_corrections_path(self, tmp_path):
-        """陽性対照: ``corrections_reader`` 未指定は既定（本物の reader）で
-        ``corrections_path`` から自前 read する。"""
+    def test_public_api_always_reads_from_corrections_path(self, tmp_path):
+        """陽性対照: 公開 API は常に ``corrections_path`` から実 read する（唯一の経路）。"""
         ws = tmp_path / "weak_signals.jsonl"
         ws.write_text("")
         corr = tmp_path / "corrections.jsonl"
@@ -1169,62 +1206,35 @@ class TestBuildQueueResultCorrectionsReaderDesign:
         assert [item["pj_slug"] for item in result["queue"]] == ["alpha"]
         assert result["queue"][0]["new_corrections"] == 1
 
-    def test_custom_reader_overrides_default_and_used_exactly_once_consistently(self, tmp_path):
-        """テスト用の reader（本物のディスク read を一切行わないダミー）を注入すると、
-        その1回の呼び出しの戻り値だけが records/health 双方に一貫して使われる。
-        ``build_queue_result`` に渡す ``corrections_path`` 上の実ファイルは一切参照されない
-        （reader 注入が「データ」でなく「読む手段」の差し替えであることの検査）。
+    def test_split_reader_attack_is_structurally_impossible_at_public_layer(
+        self, tmp_path, monkeypatch
+    ):
+        """round7 レビューが実際に成立させた forge 手口②（I4）: round6 の reader 注入設計
+        では、reader が「呼出し1回」でも内部で本物の reader を2回叩き、1回目の records と
+        2回目の health を混ぜて返す ``split_reader`` により、records/health が別々の物理
+        read から来る状態を作れた。round7 では公開 API に reader を注入する引数が無いため、
+        この攻撃手口自体を構成する足場（"公開 API が受け取る callable" という前提）が
+        存在しない。ここでは公開 API が呼ぶ **唯一の物理 read** 関数
+        （``fq.read_corrections_records_with_health``）を監視し、``build_queue_result`` の
+        1回の呼び出しにつき物理 read も常に1回であることを確認する（壊す不変条件: 「公開
+        API 経由の物理 read が1回に固定される」。通したい検査経路: split_reader のような
+        「呼出し1回・物理2回」の乖離が発生しないこと）。
         """
         ws = tmp_path / "weak_signals.jsonl"
         ws.write_text("")
         corr = tmp_path / "corrections.jsonl"
-        corr.write_text(json.dumps(_corr("alpha", "t")) + "\n")  # 実ファイルは alpha のみ
+        corr.write_text(json.dumps(_corr("alpha", "2026-06-01T00:00:00+00:00")) + "\n")
 
-        calls = []
-        sentinel = fq.CorrectionsSnapshot(
-            records=[{"project_path": "sentinel-pj", "timestamp": "2026-06-01T00:00:00+00:00"}],
-            health={"readable": True, "error": None, "malformed_lines": 0},
-        )
+        real_reader = fq.read_corrections_records_with_health
+        physical_reads = []
 
-        def _reader(path):
-            calls.append(path)
-            return sentinel
+        def _spy(path):
+            physical_reads.append(path)
+            return real_reader(path)
 
-        result = fq.build_queue_result(
-            pj_slugs=["sentinel-pj"],
-            threshold=1,
-            weak_signals_path=ws,
-            corrections_path=corr,
-            last_evolve_map={},
-            activity_map={},
-            generated_at="2026-06-25T09:00:00Z",
-            corrections_reader=_reader,
-        )
-        assert len(calls) == 1
-        assert result["corrections_read_health"] == sentinel.health
-        assert [item["pj_slug"] for item in result["queue"]] == ["sentinel-pj"]
-        assert result["queue"][0]["new_corrections"] == 1  # sentinel のみ・alpha は不使用
+        monkeypatch.setattr(fq, "read_corrections_records_with_health", _spy)
 
-    def test_reader_returning_raw_tuple_is_accepted_by_design(self, tmp_path):
-        """設計上の仕様確認（回避策誘発の有無）: reader は ``CorrectionsSnapshot`` である
-        必要すら無く、``(records, health)`` の生タプルを返しても正しく動く。round5 では
-        「生タプルを渡せる」ことが I2 の欠陥（データ注入点の型未検査）として指摘されたが、
-        round6 設計ではデータを直接受け取る引数自体が無いため、reader の戻り値の型を問わず
-        安全（reader 呼び出しの外側に、別ソースの health を混入させる経路が無い）。これにより
-        正当な利用側（テスト）が opaque 型のボイラープレートを回避するために生タプルを
-        手組みする必要も無くなる。
-        """
-        ws = tmp_path / "weak_signals.jsonl"
-        ws.write_text("")
-        corr = tmp_path / "corrections.jsonl"
-        corr.write_text("")
-
-        raw_tuple = (
-            [{"project_path": "alpha", "timestamp": "2026-06-01T00:00:00+00:00"}],
-            {"readable": True, "error": None, "malformed_lines": 0},
-        )
-
-        result = fq.build_queue_result(
+        fq.build_queue_result(
             pj_slugs=["alpha"],
             threshold=1,
             weak_signals_path=ws,
@@ -1232,16 +1242,16 @@ class TestBuildQueueResultCorrectionsReaderDesign:
             last_evolve_map={},
             activity_map={},
             generated_at="2026-06-25T09:00:00Z",
-            corrections_reader=lambda _path: raw_tuple,
         )
-        assert result["corrections_read_health"] == raw_tuple[1]
-        assert result["queue"][0]["new_corrections"] == 1
+        assert len(physical_reads) == 1, (
+            f"公開 API 経由の物理 read が {len(physical_reads)} 回。"
+            "round6 の split_reader 攻撃（呼出し1回・物理2回）が再現していないか確認"
+        )
 
-    def test_reader_exception_propagates_not_silently_swallowed(self, tmp_path):
-        """自主構成の破綻経路①（team-lead 指摘とは種類の異なるもの）: ``corrections_reader``
-        が例外を投げた場合、``build_queue_result`` はそれを握りつぶさず伝播させる。#533 の
-        原問題（読取失敗が silent に在庫ゼロへ丸められる）を reader 注入の層で再導入しない
-        ことを確認する。
+    def test_reader_exception_propagates_not_silently_swallowed(self, tmp_path, monkeypatch):
+        """自主構成の破綻経路①（レビュー指摘とは種類の異なるもの）: 実 read が例外を
+        投げた場合、``build_queue_result`` はそれを握りつぶさず伝播させる。#533 の原問題
+        （読取失敗が silent に在庫ゼロへ丸められる）を再導入しないことを確認する。
         """
         ws = tmp_path / "weak_signals.jsonl"
         ws.write_text("")
@@ -1250,6 +1260,8 @@ class TestBuildQueueResultCorrectionsReaderDesign:
 
         def _boom(_path):
             raise RuntimeError("simulated reader failure")
+
+        monkeypatch.setattr(fq, "read_corrections_records_with_health", _boom)
 
         with pytest.raises(RuntimeError, match="simulated reader failure"):
             fq.build_queue_result(
@@ -1260,88 +1272,163 @@ class TestBuildQueueResultCorrectionsReaderDesign:
                 last_evolve_map={},
                 activity_map={},
                 generated_at="2026-06-25T09:00:00Z",
-                corrections_reader=_boom,
             )
 
-    def test_reader_returning_wrong_arity_raises_naturally(self, tmp_path):
-        """自主構成の破綻経路②（team-lead 指摘とは種類の異なるもの）: reader が
-        ``(records, health)`` の2要素以外（3要素タプル等）を返すと、unpack が自然に
-        ``ValueError`` になる。誤って3要素目（例: 追加の metadata）が無言で drop されて
-        health が壊れた値のまま処理が続く、という silent 劣化経路が無いことを確認する。
+    def test_corrections_snapshot_reexported_from_top_level_fleet_package(self):
+        """``CorrectionsSnapshot``（``read_corrections_records_with_health`` の戻り値型）は
+        同じ公開 namespace（``from fleet import X``）から import 可能であること。
+        """
+        import fleet
+
+        assert fleet.CorrectionsSnapshot is fq.CorrectionsSnapshot
+
+
+class TestBuildQueueResultFromSnapshotPrivateHelper:
+    """#538 round7 [Must]I2/I4: 純集計 private helper ``_build_queue_result_from_snapshot``
+    の直接検査。
+
+    team-lead 指示: 「テストは private helper に対して行う。公開 API に注入口を残さない。
+    テストが private を触るのは正当です（内部の整合性契約であってセキュリティ境界では
+    ないため）」。ここでは記録した ``corr_records``/``corr_read_health`` の組が一貫して
+    使われることと、private helper 自体は I/O を一切行わないことを検査する。
+    """
+
+    def test_private_helper_uses_passed_records_and_health_consistently(self, tmp_path):
+        """private helper に渡した ``corr_records``/``corr_read_health`` が一貫して
+        使われる（disk 上の ``corrections_path`` の実ファイルは一切参照されない）。
         """
         ws = tmp_path / "weak_signals.jsonl"
         ws.write_text("")
         corr = tmp_path / "corrections.jsonl"
-        corr.write_text("")
+        corr.write_text(json.dumps(_corr("alpha", "t")) + "\n")  # 実ファイルは alpha のみ
 
-        def _wrong_arity(_path):
-            return ([], {"readable": True, "error": None, "malformed_lines": 0}, "unexpected-extra")
-
-        with pytest.raises(ValueError):
-            fq.build_queue_result(
-                pj_slugs=["alpha"],
-                threshold=1,
-                weak_signals_path=ws,
-                corrections_path=corr,
-                last_evolve_map={},
-                activity_map={},
-                generated_at="2026-06-25T09:00:00Z",
-                corrections_reader=_wrong_arity,
-            )
-
-    def test_forged_snapshot_via_direct_construction_has_no_injection_path(self, tmp_path):
-        """team-lead 指摘の核心確認: round5 の7通りの偽造経路のうち代表（直接構築による
-        forge）を実際に構成し、それを ``build_queue_result`` に渡す **口が無い**ことを検査
-        する。``CorrectionsSnapshot`` は素の ``NamedTuple`` に戻ったため直接構築自体は
-        （round5 と異なり）成功するが、``build_queue_result`` にはそれを受け取るデータ引数が
-        無いため、``corrections_reader`` 経由（＝定義上1回の呼び出しに閉じる）以外に注入
-        できない。
-        """
-        forged = fq.CorrectionsSnapshot(
-            records=[{"project_path": "forged-pj", "timestamp": "2026-01-01T00:00:00+00:00"}],
-            health={"readable": False, "error": "forged: pretend disk is broken", "malformed_lines": 99},
-        )
-        # 直接構築は成功する（opaque guard は round6 で撤廃済み）。
-        assert forged.records[0]["project_path"] == "forged-pj"
-
-        ws = tmp_path / "weak_signals.jsonl"
-        ws.write_text("")
-        corr = tmp_path / "corrections.jsonl"
-        corr.write_text("")
-
-        # forged を build_queue_result に「データとして」渡す経路が存在しないことを確認
-        # （corrections_snapshot/corr_records/corr_read_health のいずれも kwarg 自体が無い）。
-        import inspect
-
-        sig = inspect.signature(fq.build_queue_result)
-        assert not {"corrections_snapshot", "corr_records", "corr_read_health"} & set(
-            sig.parameters
-        )
-
-        # 唯一の注入口は corrections_reader（呼び出し可能オブジェクト）。forged を渡す唯一の
-        # 方法は「forged を返す reader」を書くことだが、それは1回の呼び出しに閉じるため
-        # records/health が別々の source から混入することは構造的に起こらない。
-        result = fq.build_queue_result(
-            pj_slugs=["forged-pj"],
+        sentinel_health = {"readable": True, "error": None, "malformed_lines": 0}
+        result = fq._build_queue_result_from_snapshot(
+            pj_slugs=["sentinel-pj"],
             threshold=1,
             weak_signals_path=ws,
             corrections_path=corr,
             last_evolve_map={},
             activity_map={},
             generated_at="2026-06-25T09:00:00Z",
-            corrections_reader=lambda _path: forged,
+            corr_records=[
+                {"project_path": "sentinel-pj", "timestamp": "2026-06-01T00:00:00+00:00"}
+            ],
+            corr_read_health=sentinel_health,
         )
-        # health は forged.health のまま一貫している（records と分離した別 health が
-        # 混入する余地が無い）。
-        assert result["corrections_read_health"] == forged.health
+        assert result["corrections_read_health"] == sentinel_health
+        assert [item["pj_slug"] for item in result["queue"]] == ["sentinel-pj"]
+        assert result["queue"][0]["new_corrections"] == 1  # sentinel のみ・alpha は不使用
 
-    def test_corrections_snapshot_reexported_from_top_level_fleet_package(self):
-        """公開 signature（``Callable[[Path], CorrectionsSnapshot]`` の戻り値型）に現れる
-        型は同じ公開 namespace（``from fleet import X``）から import 可能であること。
+    def test_private_helper_performs_zero_io(self, tmp_path, monkeypatch):
+        """private helper は corrections.jsonl を一切 read しない（渡された値だけを使う）。
+        壊す不変条件: 「private helper は I/O を行わない純関数」。通したい検査経路:
+        ``corrections_path`` が実在しない・アクセス不能でも動くこと。
         """
-        import fleet
+        ws = tmp_path / "weak_signals.jsonl"
+        ws.write_text("")
 
-        assert fleet.CorrectionsSnapshot is fq.CorrectionsSnapshot
+        def _fail_if_called(path):
+            raise AssertionError("private helper は read_corrections_records_with_health を呼んではいけない")
+
+        monkeypatch.setattr(fq, "read_corrections_records_with_health", _fail_if_called)
+
+        nonexistent = tmp_path / "does-not-exist" / "corrections.jsonl"
+        result = fq._build_queue_result_from_snapshot(
+            pj_slugs=["alpha"],
+            threshold=1,
+            weak_signals_path=ws,
+            corrections_path=nonexistent,  # 存在しないパスでも動く＝read しない証拠
+            last_evolve_map={},
+            activity_map={},
+            generated_at="2026-06-25T09:00:00Z",
+            corr_records=[{"project_path": "alpha", "timestamp": "2026-06-01T00:00:00+00:00"}],
+            corr_read_health={"readable": True, "error": None, "malformed_lines": 0},
+        )
+        assert result["queue"][0]["new_corrections"] == 1
+
+    def test_private_helper_performs_zero_io_with_untracked_and_phantom_paths(
+        self, tmp_path, monkeypatch
+    ):
+        """自主構成の破綻経路①（team-lead 指摘とは種類の異なるもの）: private helper の
+        zero-I/O 保証は ``material_slugs``/``untracked_dir_map`` を渡し
+        ``collect_untracked_materials``/``collect_phantom_materials`` の経路を強制的に通しても
+        成立すること。#538 round3 の原バグ（untracked/phantom collector が独自に
+        corrections.jsonl を再 read していた）を、round7 のプライベート化後に再導入して
+        いないかを確認する（壊す不変条件: 「helper 経由の全下流 collector が I/O をしない」。
+        通したい検査経路: untracked（実 dir あり）+ phantom（実 dir なし）の両方が material
+        に乗る経路）。
+        """
+        ws = tmp_path / "weak_signals.jsonl"
+        ws.write_text("")
+
+        def _fail_if_called(path):
+            raise AssertionError("下流 collector が corrections.jsonl を再 read してはいけない")
+
+        monkeypatch.setattr(fq, "read_corrections_records_with_health", _fail_if_called)
+
+        delta_dir = tmp_path / "delta"
+        delta_dir.mkdir()
+        nonexistent = tmp_path / "does-not-exist" / "corrections.jsonl"
+
+        result = fq._build_queue_result_from_snapshot(
+            pj_slugs=["alpha"],
+            threshold=1,
+            weak_signals_path=ws,
+            corrections_path=nonexistent,
+            last_evolve_map={},
+            activity_map={},
+            generated_at="2026-06-25T09:00:00Z",
+            material_slugs=["alpha", "delta", "epsilon"],
+            untracked_dir_map={"delta": str(delta_dir)},  # epsilon は実 dir 無し=phantom
+            corr_records=[
+                _corr("alpha", "2026-06-01T00:00:00+00:00"),
+                _corr("delta", "2026-06-01T00:00:00+00:00"),
+                _corr("epsilon", "2026-06-01T00:00:00+00:00"),
+            ],
+            corr_read_health={"readable": True, "error": None, "malformed_lines": 0},
+        )
+        untracked = {u["pj_slug"]: u for u in result["untracked_with_material"]}
+        phantom = {p["pj_slug"]: p for p in result["skipped_phantom"]}
+        assert untracked["delta"]["new_corrections"] == 1
+        assert phantom["epsilon"]["new_corrections"] == 1
+
+    def test_private_helper_records_consumed_only_once_not_a_single_use_iterator(
+        self, tmp_path
+    ):
+        """自主構成の破綻経路②（team-lead 指摘とは種類の異なるもの）: ``corr_records`` に
+        list でなく一度しか iterate できない generator を渡すと、内部で ``corr_records`` を
+        複数回イテレートする下流集計（backlog counts / weak+corr ×N PJ / untracked・phantom
+        collectors）のうち2回目以降が「空」を返し、silent に集計が欠落する可能性がある。
+        壊す不変条件:「全下流が同じ corr_records を完全に見る」。通したい検査経路: material
+        母集団が2箇所以上（backlog counts と untracked collector）で同じ corr_records を
+        参照する経路。本テストは現状の実装が list を要求する契約（型ヒント通り）であることを
+        明示し、generator を渡すと2回目以降の集計が 0 に落ちる既知の限界を記録する
+        （production 呼び出し元は常に list を渡すため実害は無いが、契約を明示しておく）。
+        """
+        ws = tmp_path / "weak_signals.jsonl"
+        ws.write_text("")
+
+        def _records_gen():
+            yield _corr("alpha", "2026-06-01T00:00:00+00:00")
+
+        result = fq._build_queue_result_from_snapshot(
+            pj_slugs=["alpha"],
+            threshold=1,
+            weak_signals_path=ws,
+            corrections_path=tmp_path / "corrections.jsonl",
+            last_evolve_map={},
+            activity_map={},
+            generated_at="2026-06-25T09:00:00Z",
+            corr_records=_records_gen(),
+            corr_read_health={"readable": True, "error": None, "malformed_lines": 0},
+        )
+        # #533/#538 の原設計は「corr_records は list（複数回 iterate 前提）」。generator を
+        # 渡すと最初の呼び出し（backlog counts）で消費し尽くされ、後続の weak+corr 集計は
+        # 0 になる（silent な欠落）。これは production の呼び出し規約（常に list を渡す）を
+        # 守っている限り発生しないが、契約が list であることをここで固定する。
+        assert result["queue"] == []  # generator 消費済みで new_corrections=0 に落ちる
+        assert result["queue_status"] in ("EMPTY", "SETUP_REQUIRED")
 
 
 class TestGatherQueueResultSingleRead:

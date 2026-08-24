@@ -457,7 +457,7 @@ def _gather_queue_result(args: argparse.Namespace) -> dict:
         aggregate_subagents_by_project,
     )
     from .project_loader import enumerate_projects
-    from .queue import _correction_slug, build_queue_result, fold_activity_counts
+    from .queue import _build_queue_result_from_snapshot, _correction_slug, fold_activity_counts
     from .queue_state import read_last_evolve
 
     config = fleet_config.load_config()
@@ -497,12 +497,14 @@ def _gather_queue_result(args: argparse.Namespace) -> dict:
     # だが material 母集団の方が広く、material を持つ untracked PJ（例: amamo）が完全沈黙し
     # 真の evolve 候補を取りこぼす。weak は read_unpromoted（reader と同一ソース）、corr は
     # _correction_slug で per-PJ reader と同じ正規化に揃える（名前空間ズレ防止）。
-    # #538 round3 [Must]4・round6: material 母集団の集計（``_collect_material_slugs``）が
-    # ``build_queue_result`` より前に corrections.jsonl の内容を必要とするため、ここで実
-    # ディスク read を1回だけ行う。``build_queue_result`` は「reader を1回呼ぶ」契約のまま
-    # （#538 round6 — データでなく reader を受け取る設計）にするため、既に読んだ snapshot を
-    # そのまま返すだけのクロージャを ``corrections_reader`` として渡す。ディスク read は
-    # 依然この関数全体で1回のまま。
+    # #538 round3 [Must]4・round7: material 母集団の集計（``_collect_material_slugs``）が
+    # queue 本体の集計より前に corrections.jsonl の内容を必要とするため、ここで実ディスク
+    # read を1回だけ行う。round6 までは公開 ``build_queue_result`` へ「既読 snapshot を返す
+    # だけの reader」を注入する設計だったが、round7 レビューでその注入口（callable 引数）
+    # 自体が forged データの受け口になりうることが実測されたため、公開 API 経由をやめ、
+    # private ``_build_queue_result_from_snapshot`` へ直接 ``corr_records``/``corr_read_health``
+    # を渡す（公開面に corrections 関連の引数は存在しない）。ディスク read はこの関数全体で
+    # 1回のまま。
     from .queue_materials import read_corrections_records_with_health
 
     corrections_snapshot = read_corrections_records_with_health(corr_path)
@@ -520,10 +522,7 @@ def _gather_queue_result(args: argparse.Namespace) -> dict:
     for vp in fleet_config.filter_valid_projects(fleet_config.discover_cc_projects()):
         untracked_dir_map.setdefault(project_name_from_dir(str(vp)), str(vp))
 
-    def _reuse_already_read_snapshot(_corrections_path):
-        return corrections_snapshot
-
-    return build_queue_result(
+    return _build_queue_result_from_snapshot(
         pj_slugs=pj_slugs,
         threshold=args.threshold,
         weak_signals_path=weak_path if weak_path.exists() else None,
@@ -534,7 +533,8 @@ def _gather_queue_result(args: argparse.Namespace) -> dict:
         pj_paths=pj_paths,
         material_slugs=material_slugs,
         untracked_dir_map=untracked_dir_map,
-        corrections_reader=_reuse_already_read_snapshot,
+        corr_records=corrections_snapshot.records,
+        corr_read_health=corrections_snapshot.health,
     )
 
 
