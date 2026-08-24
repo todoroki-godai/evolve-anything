@@ -11,6 +11,12 @@
   評価セットがない環境では数字を推測せず「未測定」と明示する。
 
 ### Fixed
+- **fix(evolve): 反映済み weak_signal の再提示に「既に反映済み」選択肢を追加（#541）** —
+  日次の反映先つき4択に「既に反映済み」（`record_reviewed(decision="already_reflected")`
+  のみ・`--promote-weak` を呼ばない）を追加し、旧①共通ルール／②PJルールは「ルールに書く」
+  1つへ統合（AskUserQuestion の `maxItems=4` 制約下で5択目を作れないため）。反映先は選択後に
+  Claude が提案しユーザーが一言で直せる。bootstrap の初回一括確認にも既読ゲート
+  （`filter_actionable`）を通し、日次4択で既読化済みの signal_key が再噴出しないようにした。
 - **fix(implement): テレメトリ書込みを write barrier へ統一** — `usage.jsonl` の直接追記を廃止し、
   実装と実行手順の双方を `store_write` 経由に揃えた。
 - **fix(capture): 日本語の明示的な欠陥指摘を決定論で捕捉（#527）** — 固定評価セットの

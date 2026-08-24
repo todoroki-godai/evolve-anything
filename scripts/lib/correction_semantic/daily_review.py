@@ -58,19 +58,24 @@ SEEN_STORE_NAME = "correction_review_seen.jsonl"
 # 既読ストア（correction_review_seen.jsonl・物理キー集合）
 # ─────────────────────────────────────────────────────────────────
 def default_seen_path(base: Optional[Path] = None) -> Path:
-    """correction_review_seen.jsonl の正準パスを ADR-042 resolver 経由で解決する。
+    """correction_review_seen.jsonl の正準パスを解決する。
 
-    base を渡せばそれを優先（テスト isolation 用）。未指定なら resolve_data_dir。
+    base を渡せばそれを優先（テスト isolation 用）。
+
+    #541 codex M3: 未指定時は ``rl_common.DATA_DIR``（call-time 属性参照）を単一ソースに
+    する。record_reviewed の write 側（``rl_common.store_write`` 経由）も同じ
+    ``rl_common.DATA_DIR`` を参照するため、read/write が構造的に同一 data_dir を指す。
+    旧実装は ``os.environ.get("CLAUDE_PLUGIN_DATA")`` を都度 ``resolve_data_dir()`` に
+    独自で通しており、``rl_common`` import 後に env だけが変わると（同一プロセス内で
+    env が変化しうる文脈・pitfall_module_level_datadir_import_copy と同型）write 側
+    （import 時に確定した ``rl_common.DATA_DIR``）と read 側が分裂し、既読にしたはずの
+    signal_key が翌朝また提示される事故になっていた。
     """
     if base is not None:
         return Path(base) / SEEN_STORE_NAME
-    import os
+    import rl_common  # 遅延 import（hook/tool 文脈の patch 追従・call-time 属性参照）
 
-    import rl_common  # 遅延 import（hook/tool 文脈の patch 追従）
-
-    env = os.environ.get("CLAUDE_PLUGIN_DATA", "")
-    data_dir = rl_common.resolve_data_dir(env)
-    return Path(data_dir) / SEEN_STORE_NAME
+    return rl_common.DATA_DIR / SEEN_STORE_NAME
 
 
 def _read_seen_one(store: Path) -> Set[str]:
@@ -125,10 +130,17 @@ def record_reviewed(
     """確認済み signal_key を既読集合に追記する（dedup + dry-run ゲート貫通）。
 
     decision は自由文字列（本関数は値を検証しない）。想定値: "promoted"（共通/PJルールに
-    反映）/ "rejected"（いいえ）/ "deferred"（#475 §5.1: いまは反映しない・記録は残す）。
+    反映）/ "rejected"（いいえ）/ "deferred"（#475 §5.1: いまは反映しない・記録は残す）/
+    "already_reflected"（#541 D-2: 既に反映済み・correction は作らず既読化のみ）。
     「Skip」は呼ばない（再提示）。
     追記は apply 時のみ。dry_run=True なら **一切ファイルに触れない**（最下層 write ゲート）。
     重複追記は read 側 set 化で無害だが、ここでも既存キーは skip して肥大化を抑える。
+
+    #541 codex M6: 本関数はロック外で既存集合を read するため、並行実行では同一 key に
+    対して複数回 append が起き得る（read 側の set 化で機能上は無害）。**「decision の
+    行数」を実頻度の指標として使わない** — 数えるなら一意 signal_key の集合として数える
+    こと（例: `{r["key"] for r in records if r["decision"]=="already_reflected"}` の
+    要素数。行数をそのまま数えると水増しになる）。
 
     Returns: {"written": int, "dry_run": bool}
     """
