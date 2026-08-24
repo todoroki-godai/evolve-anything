@@ -11,6 +11,13 @@
   評価セットがない環境では数字を推測せず「未測定」と明示する。
 
 ### Fixed
+- **test(probe): round5 の自己構成回避手段（RTL mark・word joiner・単引用符属性・タグ内改行/
+  タブ）を ad-hoc 確認から恒久 fixture 化（#536）** — round5 完了報告で「緑を確認したが恒久化
+  していない」と申告した4件を `_INVISIBLE_CHAR_SURVIVAL_FIXTURE` / 新設
+  `_TAG_INTERNAL_WHITESPACE_SURVIVAL_FIXTURE` へ追加。加えて「fixture に書いた不可視文字が
+  ファイル保存経路で静かに消失し、検査していないのに緑になる」罠自体を検出するテストを
+  2本追加した（fixture 各エントリが意図した Cf/Mn/Me または改行/タブを実際に含むかを
+  assert する。人工的に消失状態を再現し、このテストが赤くなることを実測済み）。
 - **fix(probe): 本番ストア保護ガードの残存欠陥5件を修正（#534）** — `scripts/phase1_codex_probe.py`
   に対する外部レビュー指摘を反映。①`--out-dir` 禁止ルートに実行時解決した DATA_DIR を追加
   （`CLAUDE_PLUGIN_DATA` で `~/.claude` 配下以外を指す custom 構成での取りこぼしを解消）

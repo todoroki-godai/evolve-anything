@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import sys
+import unicodedata
 from datetime import date
 from pathlib import Path
 from typing import List, Tuple
@@ -264,6 +265,11 @@ _INDEPENDENT_SURVIVAL_FIXTURE: List[Tuple[str, bool]] = [
     ('<skill name="evolve">x</skill>', False),  # 属性付き機構タグ（9種のうち1つを代表）
     ('<command-name value="ls">x</command-name>', False),  # 属性付き・両チャネル共通マーカー
     ('<not_a_marker attr="x">本文</not_a_marker>', True),  # 属性付きだが機構マーカーでない（陽性対照）
+    # #536 round5 team-lead 追加確認・自己構成の回避手段5: 属性を単引用符にした場合
+    # （二重引用符の fixture しか無いと、二重引用符専用の判定へ narrow 化する変異を
+    # 検出できない）。head_tag は引用符種別を一切見ない（inner.split()[0] で先頭
+    # トークンを取るだけ）契約なので、単引用符でも機構判定は揺らがない。
+    ("<skill name='evolve'>x</skill>", False),  # 属性が単引用符の機構タグ
     # #536 チームリード追加確認: 自己閉じ形（スラッシュの前に空白が無い）は
     # `inner.split()[0]` が "image/" のようにスラッシュ込みで返るため、
     # 正規化を怠ると不一致になる表現差クラス（実データ ~/.codex/sessions 726
@@ -316,8 +322,76 @@ _INVISIBLE_CHAR_SURVIVAL_FIXTURE: List[Tuple[str, bool]] = [
     ("<sk\u0301ill>x</skill>", False),  # タグ名内部に結合文字（Mn・U+0301 acute accent）
     ("<skill\ufe0f>x</skill>", False),  # タグ名末尾に異体字セレクタ（Mn・VS16）
     ("<image​/>", False),  # 自己閉じタグのスラッシュ直前に ZWSP
+    # #536 round5 team-lead 追加確認・自己構成の回避手段3・4・6:
+    # ad-hoc 確認済みだったが恒久化していなかった入力クラスを固定する。
+    ("<sk\u200fill>x</skill>", False),  # タグ名内部に RTL mark（Cf・U+200F）
+    ("\u2060<skill>x</skill>", False),  # 先頭に word joiner（Cf・U+2060）
     ("普通の発話です​。", True),  # ZWSP を含むが機構マーカーでない通常発話（陽性対照）
 ]
+
+
+def test_invisible_char_fixture_entries_actually_contain_invisible_chars():
+    """壊す不変条件: 不可視文字リテラルがファイル保存経路で静かに消失し、検査して
+    いないのに緑になる偽陽性を作る罠（#536 round5 自己発見。結合文字・異体字セレクタを
+    リテラル直書きした際に実際に踏んだ）。fixture 定義自体が健全（意図した
+    Cf/Mn/Me 文字を実際に含む）であることを検査する。
+    ／通したい検査経路: _INVISIBLE_CHAR_SURVIVAL_FIXTURE の各エントリに対する
+    unicodedata.category() 走査。
+    """
+    for text, _expected in _INVISIBLE_CHAR_SURVIVAL_FIXTURE:
+        categories = {unicodedata.category(ch) for ch in text}
+        assert categories & {"Cf", "Mn", "Me"}, (
+            f"fixture entry に不可視/結合文字（Cf/Mn/Me）が含まれていません"
+            f"（保存経路での消失の疑い）: {text!r}"
+        )
+
+
+
+# #536 round5 team-lead 追加確認・自己構成の回避手段6: タグ名と `>` の間に改行/タブ
+# （\t・\n は Unicode カテゴリ Cc（Control）であり Cf/Mn/Me ではないため、
+# 上の _INVISIBLE_CHAR_SURVIVAL_FIXTURE とは別カテゴリの表現差として区別する。
+# head_tag の `inner.split()[0]`（デフォルト引数の split は全空白種別対応）が
+# 対象。ad-hoc 確認済みだったが恒久化していなかったもの）。
+_TAG_INTERNAL_WHITESPACE_SURVIVAL_FIXTURE: List[Tuple[str, bool]] = [
+    ("<skill\n>x</skill>", False),  # タグ名と `>` の間に改行
+    ("<skill\t>x</skill>", False),  # タグ名と `>` の間にタブ
+    ("<not_a_marker\n>本文", True),  # 同じ表現差だが機構マーカーでない（陽性対照）
+]
+
+
+def test_tag_internal_whitespace_fixture_entries_actually_contain_control_chars():
+    """壊す不変条件: 上と同じ「保存経路での消失」の罠を、改行/タブ（Cc）についても
+    fixture 定義自体の健全性検査で防ぐ。
+    ／通したい検査経路: _TAG_INTERNAL_WHITESPACE_SURVIVAL_FIXTURE の各エントリに
+    タグ名と `>` の間の制御文字（\\n・\\t）が実在すること。
+    """
+    for text, _expected in _TAG_INTERNAL_WHITESPACE_SURVIVAL_FIXTURE:
+        assert ("\n" in text) or ("\t" in text), (
+            f"fixture entry に改行/タブが含まれていません（保存経路での消失の疑い）: {text!r}"
+        )
+
+
+def test_filter_machinery_matches_tag_internal_whitespace_fixture():
+    """壊す不変条件: I3/#536 round5 自己構成6（タグ名と `>` の間の改行/タブで
+    機構判定が回避できない）
+    ／通したい検査経路: filter_machinery（head_tag の `inner = t[1:end].strip()` と
+    `inner.split()[0]` が両方ともデフォルト＝全空白種別対応であることに依存。実測:
+    `.strip()` だけ・`.split()` だけを個別に ASCII 空白限定へ narrow 化しても、
+    もう片方が拾うため単独では壊れない＝多重防御になっている。両方を同時に
+    narrow 化する変異で初めて赤くなることを確認済み）。
+    """
+    candidates = [
+        p.RawCandidate(
+            file="f.jsonl", channel="response_item", line_no=i, timestamp="2026-08-20T00:00:00.000Z",
+            ts_ms=0.0, text=text, cwd=None, session_id="s1", prev_action=None,
+        )
+        for i, (text, _expected) in enumerate(_TAG_INTERNAL_WHITESPACE_SURVIVAL_FIXTURE)
+    ]
+    expected_survivors = [
+        text for text, expected in _TAG_INTERNAL_WHITESPACE_SURVIVAL_FIXTURE if expected
+    ]
+    actual_survivors = [c.text for c in p.filter_machinery(candidates)]
+    assert actual_survivors == expected_survivors
 
 
 def test_filter_machinery_matches_independently_labeled_fixture():
