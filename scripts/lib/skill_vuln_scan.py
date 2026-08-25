@@ -38,6 +38,7 @@ from skill_vuln_flow import (
     mask_placeholder_tokens as _mask_placeholder_tokens,
 )
 from skill_vuln_shell import (
+    build_remote_exec_patterns as _build_remote_exec_patterns,
     compute_heredoc_zones as _compute_heredoc_zones,
     compute_shell_scope_lines as _compute_shell_scope_lines_impl,
     effective_shell_text as _effective_shell_text,
@@ -134,38 +135,11 @@ _SNIPPET_MAX = 120
 # 同一行に対し regex.search でマッチ判定する（行単位スキャン）。
 
 _PATTERNS: List[Tuple[str, str, str, Pattern[str]]] = [
-    # remote_exec / HIGH — リモート取得を shell にパイプ／ダウンロードして即実行。
-    (
-        "remote_exec.curl_pipe_sh",
-        "remote_exec",
-        "HIGH",
-        re.compile(
-            r"(?i)\b(curl|wget|fetch)\b[^\n|]*\|\s*(sudo\s+)?"
-            r"(?:ba|z|k|d|da|a)?sh\b"
-        ),
-    ),
-    (
-        # base64 -d 単体は非検出。shell へパイプする combo のみ。
-        "remote_exec.base64_pipe_sh",
-        "remote_exec",
-        "HIGH",
-        re.compile(r"(?i)\bbase64\s+(--decode|-d|-D)\b[^\n|]*\|\s*(ba)?sh\b"),
-    ),
-    (
-        "remote_exec.download_and_run",
-        "remote_exec",
-        "HIGH",
-        re.compile(r"(?i)\b(curl|wget)\b[^\n]*\b-o\b[^\n]*&&[^\n]*\b(ba)?sh\b"),
-    ),
-    (
-        "remote_exec.shell_c_command_substitution",
-        "remote_exec",
-        "HIGH",
-        re.compile(
-            r"(?i)\b(?:ba|z|k|d|a)?sh\b[^\n]*?\s-c\b[^\n]*?"
-            r"\$\([^)]*\b(?:curl|wget|fetch)\b"
-        ),
-    ),
+    # remote_exec / HIGH — shell 実行主体は skill_vuln_shell の単一ソースから構築。
+    *[
+        (pattern_id, "remote_exec", "HIGH", regex)
+        for pattern_id, regex in _build_remote_exec_patterns()
+    ],
     # destructive / MEDIUM
     (
         "destructive.rm_rf_root",
