@@ -94,7 +94,7 @@ def _full_claude_md_text() -> str:
         "| idiom | #379 Step1 で凍結中、autopromote() は no-op |",
         "| runtime | Codex hook 配線は保留 |",
         "| revert | conflict は上書きせず中止、CLI は既定 dry-run・のみ実書込 |",
-        "| memory_guard | prompt_injection/secret_exfil を reject。"
+        "| memory_guard | secret_exfil のみ reject。"
         "同名エントリの上書きは決定論遷移検証でゲート |",
         "| fleet_pr | path allowlist・push account guard で強制、マージは人間 |",
         "| cleanup | 候補提示→個別承認→実行。のみに安全側限定 |",

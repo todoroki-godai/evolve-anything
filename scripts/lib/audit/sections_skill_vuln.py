@@ -8,7 +8,9 @@ sections_testpaths.py と同型の「環境グローバル系 builder」（obser
 surface 規則（observability contract / sections_summary.classify_section に整合）:
 - skill_vuln_scan モジュール未解決 → None（沈黙）
 - root/skills/ が無い PJ（非該当）→ None（沈黙）
-- findings なし → 「評価したが該当なし ✓」（silence != evaluated）
+- report.evaluated=False（走査対象0件 or 読取失敗あり）→ ⚠ で常に surface（silence !=
+  evaluated・#415/#537 round2。判定は builder でなく `SkillVulnReport.evaluated` が単一ソース）
+- findings なし（かつ evaluated） → 「評価したが該当なし ✓」
 - findings あり → ⚠ で件数 + severity 別内訳 + 各 finding の evidence 行
 """
 from pathlib import Path
@@ -34,8 +36,38 @@ def build_skill_vuln_section(project_dir: Path) -> Optional[List[str]]:
         static_findings = report.findings
         # flow_findings は #123 で追加。古い report との後方互換のため getattr。
         flow_findings = getattr(report, "flow_findings", [])
+        # scan_errors/evaluated は #537 round2 で追加。古い report との後方互換。
+        scan_errors = getattr(report, "scan_errors", [])
+        evaluated = getattr(report, "evaluated", report.scanned_files > 0)
         static_n = len(static_findings)
         flow_n = len(flow_findings)
+
+        if not evaluated:
+            # silence != evaluated（#415 / #537 round2）: applicable=True なのに
+            # 0 ファイル、または読取失敗ありは「評価したが該当なし ✓」と区別できない
+            # と、除外設定のバグ・破損ファイル等で実質未評価のまま緑扱いされる事故を
+            # 検出できない。⚠ で常に surface する。走査自体は一部進んでいて findings
+            # が既にあるなら、それも続けて表示する（未評価＝findings が無意味ではない）。
+            lines: List[str] = []
+            if report.scanned_files == 0:
+                lines.append(
+                    "⚠ skills/ 配下に走査対象ファイル（.md/.sh/.bash）が0件（未評価）。"
+                    "拡張子フィルタや除外ディレクトリ設定で意図せず全除外されていないか"
+                    "確認すること（#415）。",
+                )
+            if scan_errors:
+                lines.append(
+                    f"⚠ 読取に失敗したファイルが {len(scan_errors)} 件あり、"
+                    "その内容は評価されていない（無言 skip ではなく明示的に警告する）。",
+                )
+                for err in scan_errors:
+                    lines.append(f"  ・{err}")
+            if static_n or flow_n:
+                lines.append(
+                    f"⚠ ただし走査できた範囲では危険パターンを検出（静的 {static_n} 件 / "
+                    f"系列 {flow_n} 件）。取り込み前に確認すること（#13 #123）。",
+                )
+            return lines
 
         if static_n == 0 and flow_n == 0:
             return [
