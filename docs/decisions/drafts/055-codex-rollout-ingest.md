@@ -1,6 +1,62 @@
 # ADR-055: Codex rollout ログの観測取り込み（第3版）
 
-- Status: **Draft（設計レビュー待ち。[Must] 残存中は実装着手しない）**
+- Status: **Draft・保留（2026-08-25 縮小。実装着手しない）**
+  - **以降の本文は保留前（第3版）の記述であり、正典ではない**。Phase 1〜3 の手順・
+    「分母 259 件」「期限 2026-09-30」を含め、**本文にある実行指示はすべて凍結する**。
+    再開する場合は本文をそのまま使わず、下記の再測結果を起点に設計から見直す。
+  - 保留理由: Codex 移行後（2026-08-23〜25）の rollout ログを実測したところ、
+    **165 セッション中 158 件が `codex exec` の非対話実行**で、**人間の発話が2回以上あるのは
+    7 件のみ**だった。会話が成立していないため、本 ADR が抽出対象とする「ユーザーが AI を
+    訂正した箇所」が構造的に存在しない。裁定B の「2〜3週間貯めてから再測」は、待っても分母が
+    埋まらないことが先に判明したため取り下げる。
+  - **実測条件（再現用）**: 計測時刻 `2026-08-25T02:44:23Z` / 対象 `~/.codex/sessions/**/rollout-*.jsonl`
+    のうちファイル名の日付が `2026-08-23`〜`2026-08-25` のもの / 1ファイル=1セッション。
+    **セッション数は計測時刻に依存して増える**（同日の午前中に測った際は 126 / 122 だった）。
+    数値を引用するときは必ず計測時刻ごと引用すること。再現スクリプトは下記。
+
+    ```python
+    #!/usr/bin/env python3
+    """ADR-055 保留理由の再現スクリプト。
+    使い方: python3 measure_rollout.py 2026-08-23 2026-08-25
+    出力: セッション数 / codex exec 起動の件数 / 実ユーザー発話が2回以上の件数
+    定義: 1ファイル=1セッション。originator は先頭行 payload.originator。
+          ユーザー発話 = type=="response_item" かつ payload.role=="user" かつ
+          本文が <user_instructions> / <environment_context> / <recommended_plugins> で
+          始まらないもの（これらは Codex 側のシステム注入で、人間の発話ではない）。
+    """
+    import json, sys, glob, os, datetime
+    start, end = sys.argv[1], sys.argv[2]
+    files = sorted(glob.glob(os.path.expanduser("~/.codex/sessions/**/rollout-*.jsonl"), recursive=True))
+    sel = [f for f in files if start <= os.path.basename(f)[8:18] <= end]
+    n_exec = 0; n_multi = 0; rows = []
+    for f in sel:
+        orig = None; users = 0
+        with open(f, errors="replace") as fh:
+            for line in fh:
+                try: d = json.loads(line)
+                except Exception: continue
+                p = d.get("payload") or {}
+                if orig is None and "originator" in p: orig = p.get("originator")
+                if d.get("type") == "response_item" and p.get("role") == "user":
+                    txt = ""
+                    for c in (p.get("content") or []):
+                        if isinstance(c, dict): txt += c.get("text") or ""
+                    t = txt.lstrip()
+                    if t.startswith(("<user_instructions>", "<environment_context>", "<recommended_plugins>")): continue
+                    users += 1
+        if orig == "codex_exec": n_exec += 1
+        if users >= 2: n_multi += 1
+        rows.append((os.path.basename(f), orig, users))
+    print("cutoff_utc:", datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"))
+    print("range:", start, "..", end)
+    print("sessions:", len(sel))
+    print("originator==codex_exec:", n_exec)
+    print("user_messages>=2:", n_multi)
+    ```
+
+  - 設計レビューは記録上5巡（codex 3 / tacchi 2）を消化済みで `review-round-cap.md` の停止点に
+    達しているため、**追加のレビュー巡は発注しない**。再測条件が満たされた時点で設計から見直す。
+  - 再測条件・実行契約は #534 のコメント（2026-08-25）が正典。
 - Date: 2026-08-23
 - Related: ADR-052（Claude primary / Codex opt-in lanes）, #245（codex_usage）, #379（新設凍結）, #28（transcript store 規模破綻）
 - 想定 issue: 未起票
