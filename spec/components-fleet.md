@@ -4,6 +4,19 @@ CLAUDE.md のコンポーネント表の詳細版（SoT）の一部。全体索�
 新コンポーネント追加・既存変更時は、該当ドメインのこのファイルに詳細を書き、
 CLAUDE.md のサマリ表には 1 行（名前 + 一言 + 参照）だけ追記する。
 
+## skill_vuln_scan の shell scope 契約（#555 / #556 / #557）
+
+配布物作者が任意に選べる Markdown fence の info string は信頼境界にしない。
+backtick/tilde fence（未閉じなら CommonMark 同様 EOF まで）は info string を問わず、4スペース字下げ code block と
+`.sh`/`.bash` 全体も shell 候補として扱う。Markdown 表は `|` で始まり `|` で終わる
+行形状を継続判定側で除外する。物理改行は末尾 `|` / `\\` に加え、未閉じ `$(`、
+backtick、single/double quote を中央の論理行結合で正規化する。heredoc は
+`<<WORD` / `<<-WORD` / quoted WORD の開始・終端を認識し、sh/bash/zsh/ksh/dash が
+実行する本文だけを検査対象に残す。`cat` 等の本文と終端は data zone とし、comment
+除去・論理行結合・物理行 pattern/flow 検査を適用しない。完全な shell parser、shell
+以外の言語意味解析、ファイル横断 producer/consumer、検出後の reject/advisory 判断は
+引き続き対象外。
+
 | コンポーネント | 説明 |
 |----------------|------|
 | recall `[[link]]` 1-hop | `bin/evolve-fleet recall` の芋づる想起（#11）。memory fact 本文中の `[[name]]` リンクを `Fact.links` として抽出し、キーワードヒットした fact の **1-hop 先**（同一 PJ 内）も結果へ追加する（dangling リンク無視・直接ヒットとの重複排除・スコア対象外で末尾 `↳ linked:` 表示・JSON は `linked` フィールド）。既存のキーワード検索挙動は不変で 1-hop 分は加算のみ。ADR-025（決定論キーワード検索・vector/embedding 非採用）と整合。決定論・LLM 非依存（`scripts/lib/fleet/recall.py`、#11） |

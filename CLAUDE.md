@@ -104,7 +104,7 @@ bin/evolve-revert --list   # 柱4（採用のうち戻せる件数）
 - recall validity-aware ranking: stale/superseded memory を validity metadata で降格（ハード除外はしない）
 - subagents/errors 測定バグ修正: subagents.jsonl の agent_type ノイズを writer/reader 二重防御（`is_noise_agent_type` 単一ソース）で遮断 + errors.jsonl の error_type unknown を決定論分類
 - `memory_capability`: memory dir 解決は `resolve_cc_memory_dir` が単一ソース
-- `skill_vuln_scan`: remote_exec/secret_exfil 等を combo 必須で検出
+- `skill_vuln_scan`: remote_exec/secret_exfil 等を combo 必須で検出。配布 Markdown の全 code block（info string 非依存・4-space indent 含む）と `.sh`/`.bash` を shell 候補化し、複数行 `$()`/quote/backtick を論理行結合。heredoc は shell 実行本文のみ検査し data 本文は除外（#555）
 - `memory_guard`: auto-memory 書込境界の runtime 記憶汚染検出。secret_exfil のみ reject、prompt_injection は advisory（reject せず書込は継続・検出結果は可視化）（検査失敗は fail-open）。同名エントリの上書きは決定論遷移検証でゲート
 - `daily`: 毎朝の evolve queue 自動実行。適用は対話で人間承認
 - `icebox_notice`: fail-open で既存ファイル非破壊、閾値未満は無音
