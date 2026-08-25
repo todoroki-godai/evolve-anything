@@ -413,6 +413,7 @@ def build_review(
         ],
         "remaining": int,                 # max_groups を超えて未提示の group 数
         "reviewed_keys_count": int,       # 既読集合（correction_review_seen）の現在サイズ
+        "rephrase_similarity_dedup_count": int, # #543: 既読と同一として再提示を除外した件数
         "excluded_machinery_total": int,       # #443 PR2-a: machinery で除外した件数
         "excluded_machinery_by_channel": dict, #   （silence != evaluated・黙って減らさない）
         "correction_backlog": [           # #514: promoted 積み残しを古い順に最大3件
@@ -452,9 +453,18 @@ def build_review(
     # machinery_exclusion_stats に同じスナップショットを渡す（読みの間に store が
     # 更新されると surface した除外件数と実候補数が食い違う race を防ぐ）。
     scoped = _scoped_review_candidates(pj_slug, weak_signals_path)
-    new_records = _read_new(
+    from weak_signals.rephrase_dedup import expand_seen_keys_for_rephrase_dupes
+
+    expanded_seen_keys = expand_seen_keys_for_rephrase_dupes(scoped, seen_keys)
+    baseline_new = _read_new(
         pj_slug,
         seen_keys=seen_keys,
+        marker_base=marker_base,
+        scoped=scoped,
+    )
+    new_records = _read_new(
+        pj_slug,
+        seen_keys=expanded_seen_keys,
         marker_base=marker_base,
         scoped=scoped,
     )
@@ -466,9 +476,16 @@ def build_review(
     )
     # #476-3: bootstrap-pending の signal_key を daily から除外し二重提示を防ぐ。
     if exclude_signal_keys:
+        baseline_new = [
+            r for r in baseline_new if r.get("signal_key") not in exclude_signal_keys
+        ]
         new_records = [
             r for r in new_records if r.get("signal_key") not in exclude_signal_keys
         ]
+    rephrase_similarity_dedup_count = len(
+        {r["signal_key"] for r in baseline_new}
+        - {r["signal_key"] for r in new_records}
+    )
     idioms = read_idioms(idioms_path)
     phys_to_idiom = _idiom_by_phys(idioms, pj_slug)
 
@@ -503,6 +520,7 @@ def build_review(
         "groups": top,
         "remaining": remaining,
         "reviewed_keys_count": len(seen_keys),
+        "rephrase_similarity_dedup_count": rephrase_similarity_dedup_count,
         "excluded_machinery_total": machinery_stats["total"],
         "excluded_machinery_by_channel": machinery_stats["by_channel"],
         "correction_backlog": correction_backlog,
