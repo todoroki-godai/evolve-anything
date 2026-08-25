@@ -155,6 +155,49 @@ def test_ingest_records_correction_to_weak_signals_and_dictionary(scratch_dir: P
     assert today_count["est_tokens"] == 0
 
 
+def test_ingest_signal_key_is_deterministic_across_reingest(scratch_dir: Path, tmp_path_factory) -> None:
+    """#541 S3: judge の dedup（signal_key）が provenance 決定論であることを確認する。
+
+    compaction / 再 ingest で同一発話が再度 ingest されたとき（同じ source_path/line_no/
+    session_id/text/verdict/model/prompt_fingerprint）、signal_key が毎回同じでなければ
+    既読集合（correction_review_seen.jsonl）が signal_key で突合できず既読をすり抜ける。
+    独立した2つの scratch dir へ同一入力で ingest し、生成される signal_key が一致する
+    ことを確認する（detected_at のような非決定的フィールドが provenance に紛れ込んで
+    いないことの間接証明）。
+    """
+    judged1 = scratch_dir / "judged.jsonl"
+    emitted1 = cs_batch.emit_judgement_requests(
+        "evolve-anything", utterances=_utts(), batch_size=30, judged_path=judged1,
+    )
+    rid1 = emitted1["requests"][0]["id"]
+    verdict = {"is_correction": True, "idiom": "色が違うから赤にして", "reason": "ソフト指摘"}
+    responses1 = _responses_for(emitted1, {(rid1, 2): verdict})
+    ws1 = scratch_dir / "weak_signals.jsonl"
+    idioms1 = scratch_dir / "idioms.jsonl"
+    cs_batch.ingest_judgement_results(
+        emitted1, responses1, weak_signals_path=ws1, idioms_path=idioms1, judged_path=judged1,
+    )
+    key1 = json.loads(ws1.read_text(encoding="utf-8").splitlines()[0])["signal_key"]
+
+    # 独立した2本目の scratch dir（別 judged.jsonl・完全に別プロセス相当）へ同一入力を
+    # 再 ingest する（compaction 後の再 emit を模す）。
+    scratch2 = tmp_path_factory.mktemp("scratch2")
+    judged2 = scratch2 / "judged.jsonl"
+    emitted2 = cs_batch.emit_judgement_requests(
+        "evolve-anything", utterances=_utts(), batch_size=30, judged_path=judged2,
+    )
+    rid2 = emitted2["requests"][0]["id"]
+    responses2 = _responses_for(emitted2, {(rid2, 2): verdict})
+    ws2 = scratch2 / "weak_signals.jsonl"
+    idioms2 = scratch2 / "idioms.jsonl"
+    cs_batch.ingest_judgement_results(
+        emitted2, responses2, weak_signals_path=ws2, idioms_path=idioms2, judged_path=judged2,
+    )
+    key2 = json.loads(ws2.read_text(encoding="utf-8").splitlines()[0])["signal_key"]
+
+    assert key1 == key2
+
+
 # ── #410 round4 [Must]1+2: バッチ固定費の記録は ingest から呼び出し前の予約へ移動 ─────
 # round2/round3 は record_judged への per-key 按分でバッチ固定費（_PROMPT_OVERHEAD_TOKENS）
 # を記録していたが、判定結果次第で計上漏れが生じる構造的な穴があった（codex round4 指摘）。

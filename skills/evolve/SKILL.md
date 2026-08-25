@@ -252,7 +252,7 @@ reflect は独立フェーズではなく discover に統合済み。discover �
 → 3択の副作用詳細・multiSelect/per-group フロー・`mark_done` コードは **[references/correction-review.md](references/correction-review.md)**。
 
 ### Step 6.2: 今日の修正確認（daily_review・#446・#475・#514）
-`result.correction_review.daily.eligible == True` のとき、前回以降の新規 weak_signal（最大5件のうち `correction_backlog` の件数分だけ枠を削った残り）を反映先つき4択で確認する（MUST — #475。最大5問を1バッチで）。「共通ルール」「このPJのルール」→ `--promote-weak` で昇格 → agent が Edit/Write → `evolve-reflect --apply` で実在確認してから `record_reviewed(decision="promoted")`。「いまは反映しない」→ 昇格のみ行い `record_reviewed(decision="deferred")`（記録は残り reflect で再浮上）。「いいえ」→ 昇格せず `record_reviewed(decision="rejected")`。Step 6.1 の bootstrap 対象は自動的に除外されるため二重提示しない（#476-3）。
+`result.correction_review.daily.eligible == True` のとき、前回以降の新規 weak_signal（最大5件のうち `correction_backlog` の件数分だけ枠を削った残り）を反映先つき4択で確認する（MUST — #475/#541。最大5問を1バッチで）。4択は「①ルールに書く ②いまは反映しない ③既に反映済み ④いいえ」（#541 D: 旧①共通ルール/②PJルールは①に統合し、反映先は①選択後に Claude が提案・ユーザーが一言で訂正可）。「①ルールに書く」→ `--promote-weak` で昇格 → agent が Edit/Write → `evolve-reflect --apply` で実在確認してから `record_reviewed(decision="promoted")`。「②いまは反映しない」→ 昇格のみ行い `record_reviewed(decision="deferred")`（記録は残り reflect で再浮上）。「③既に反映済み」→ `--promote-weak` は呼ばず `--already-reflected-weak` で `record_reviewed(decision="already_reflected")` のみ（promote すると #514 在庫レーンに再提示バグが引っ越すため・#541 D-2）。「④いいえ」→ 昇格せず `record_reviewed(decision="rejected")`。Step 6.1 の bootstrap 対象は自動的に除外されるため二重提示しない（#476-3）。
 **`daily.correction_backlog` が非空のとき（#514）**: 反映先未定のまま昇格済みだった修正在庫を古い順に最大3件、同じ5問枠の中で3択（共通ルールに書く／このPJのルールに書く／もう出さない）で確認する（MUST）。手順・`--skip` の使い方は下記参照。`daily.correction_backlog_remaining > 0` なら「ほか {N} 件は在庫に残っています」を1行表示する。
 → 判定条件・4択/3択のテンプレ・コードは **[references/correction-review.md](references/correction-review.md)**。
 

@@ -302,6 +302,77 @@ def test_build_excludes_ttl_expired_signal_without_flag(tmp_path: Path):
 
 
 # ─────────────────────────────────────────────────────────────────
+# 既読ゲート（#541 C）: bootstrap 経路にも既読集合（correction_review_seen.jsonl）を通す
+# ─────────────────────────────────────────────────────────────────
+def test_read_backlog_excludes_already_reviewed_signal(tmp_path: Path):
+    """#541 C: `_scope_backlog_candidates` は promoted/TTL/channel しか見ておらず既読を
+    見ないため、日次の4択で既に「既に反映済み」「いいえ」等として既読化した signal_key が
+    bootstrap の一括確認にまた出てきてしまう（filter_actionable の既読軸を通す）。
+    """
+    ws = tmp_path / "weak_signals.jsonl"
+    kept = _sig("残る", 1)
+    reviewed = _sig("既読済み", 2)
+    append_signals([kept, reviewed], path=ws)
+
+    seen_path = tmp_path / "correction_review_seen.jsonl"
+    from correction_semantic.daily_review import record_reviewed
+    record_reviewed(
+        [reviewed.signal_key], "evolve-anything",
+        decision="already_reflected", path=seen_path,
+    )
+
+    from correction_semantic.bootstrap_backlog import _read_backlog
+
+    backlog = _read_backlog("evolve-anything", ws, seen_path=seen_path)
+    keys = {r.get("signal_key") for r in backlog}
+    assert keys == {kept.signal_key}
+
+
+def test_build_excludes_already_reviewed_from_pj_total(tmp_path: Path, tmp_path_factory):
+    """seen_path は production 既定の data_dir とは別の sibling dir に置く
+    （`build()` が ``seen_path`` を ``_read_backlog`` へ配線し損ねていても、
+    tmp_path が偶然 production 既定 data_dir と一致して見かけ上パスすることを防ぐ）。
+    """
+    ws = tmp_path / "weak_signals.jsonl"
+    kept = _sig("残る", 1)
+    reviewed = _sig("既読済み", 2)
+    append_signals([kept, reviewed], path=ws)
+
+    seen_dir = tmp_path_factory.mktemp("seen-store")
+    seen_path = seen_dir / "correction_review_seen.jsonl"
+    from correction_semantic.daily_review import record_reviewed
+    record_reviewed(
+        [reviewed.signal_key], "evolve-anything",
+        decision="rejected", path=seen_path,
+    )
+
+    res = bb.build(
+        "evolve-anything", weak_signals_path=ws, marker_path=_marker(tmp_path),
+        seen_path=seen_path,
+    )
+    assert res["pj_total"] == 1
+    all_keys = {k for g in res["groups"] for k in g["signal_keys"]}
+    assert reviewed.signal_key not in all_keys
+    assert kept.signal_key in all_keys
+
+
+def test_build_does_not_exclude_unreviewed_signal(tmp_path: Path, tmp_path_factory):
+    """陽性対照: 既読集合が空なら従来どおり両方候補に残る（誤検出しない）。"""
+    ws = tmp_path / "weak_signals.jsonl"
+    a = _sig("A", 1)
+    b = _sig("B", 2)
+    append_signals([a, b], path=ws)
+    seen_dir = tmp_path_factory.mktemp("seen-store-empty")
+    seen_path = seen_dir / "correction_review_seen.jsonl"  # 存在しない = 空集合
+
+    res = bb.build(
+        "evolve-anything", weak_signals_path=ws, marker_path=_marker(tmp_path),
+        seen_path=seen_path,
+    )
+    assert res["pj_total"] == 2
+
+
+# ─────────────────────────────────────────────────────────────────
 # machinery（委譲メッセージ等の harness 注入）read 時除外（#443 PR2-a）
 # ─────────────────────────────────────────────────────────────────
 def test_read_backlog_excludes_machinery(tmp_path: Path):

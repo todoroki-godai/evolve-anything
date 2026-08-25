@@ -225,7 +225,7 @@ REQUIRED_INVARIANTS: Tuple[Invariant, ...] = (
     Invariant("revert_conflict_no_overwrite", all_of=("上書きせず中止", "のみ実書込")),
     Invariant(
         "memory_guard_transition_gate",
-        all_of=("prompt_injection/secret_exfil を reject", "同名エントリの上書きは決定論遷移検証でゲート"),
+        all_of=("secret_exfil のみ reject", "同名エントリの上書きは決定論遷移検証でゲート"),
     ),
     Invariant(
         "fleet_pr_human_merge_gate",

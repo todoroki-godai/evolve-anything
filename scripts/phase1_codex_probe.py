@@ -27,6 +27,7 @@ import json
 import os
 import sys
 import tempfile
+import unicodedata
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
@@ -112,9 +113,39 @@ UTTERANCE_COLUMNS = [
 # ─────────────────────────────────────────────────────────────────
 # 先頭タグ判定（D3）
 # ─────────────────────────────────────────────────────────────────
+# #536 round5 codex Must I1: 個別の不可視文字（BOM・ZWSP 等）を列挙する方式では
+# 網羅できない（次の1文字で破れる）。列挙をやめ、Unicode カテゴリ Cf（Format：
+# 表示上見えない制御・書式文字）/ Mn（Nonspacing_Mark：結合文字・異体字セレクタ）/
+# Me（Enclosing_Mark）でクラス判定する。この設計は scripts/lib/skill_vuln_scan.py
+# の _strip_invisible_chars（PR #537 fix/vuln-scan-scope, round4-5）と同一だが、
+# その branch は 2026-08-24 時点で main 未マージ・レビュー継続中のため import せず
+# 独立に複製する（未マージ branch への cross-PR import は、どちらかが先に変わると
+# もう片方が壊れる結合を作る。design-before-fanout の「共通部品へ寄せる」原則には
+# 反するが、両ブランチが独立に完結できることを優先した。#537 マージ後に
+# 共通モジュール化を検討する余地あり＝報告に明記）。
+#
+# NBSP（U+00A0）等の通常空白は Cf/Mn/Me に含まれず Zs（空白）カテゴリのため、
+# 個別に対応しない（Python 組込み `str.lstrip()` が Unicode 空白を category
+# ベースで判定するので、Cf/Mn/Me 除去後に `.lstrip()` するだけで両方に対応できる。
+# 半角スペースだけを特別扱いした変異は、全角空白等が引き続き通ることで検出される）。
+_INVISIBLE_MATCH_CATEGORIES = frozenset({"Cf", "Mn", "Me"})
+
+
+def _strip_invisible_chars(s: str) -> str:
+    """s から Unicode format/combining 文字（category "Cf"/"Mn"/"Me"）を
+    位置に関わらず除去した文字列を返す。判定専用の正規化（元テキストの保持には
+    使わない）。"""
+    if not s:
+        return s
+    if not any(unicodedata.category(ch) in _INVISIBLE_MATCH_CATEGORIES for ch in s):
+        return s
+    return "".join(ch for ch in s if unicodedata.category(ch) not in _INVISIBLE_MATCH_CATEGORIES)
+
+
 def strip_leading_noise(text: str) -> str:
-    """先頭の BOM・空白・改行を除去する（D3 表現差変異対策・codex v3 反映）。"""
-    return (text or "").lstrip("﻿ \t\n\r　")
+    """不可視文字（Cf/Mn/Me、位置不問）を除去した上で先頭の空白・改行を除去する
+    （D3 表現差変異対策・#536 round5 反映）。"""
+    return _strip_invisible_chars(text or "").lstrip()
 
 
 def head_tag(text: str) -> Optional[str]:
@@ -132,8 +163,28 @@ def head_tag(text: str) -> Optional[str]:
 
 
 def is_machinery_text(text: str) -> bool:
-    """機構マーカー（D3・9種）で先頭タグ判定する。"""
-    return head_tag(text) in MACHINERY_MARKERS
+    """機構マーカー（D3・9種）で先頭タグ判定する。
+
+    #536 round4 追加対応: 自己閉じ形（``<image/>`` のようにスラッシュの前に
+    空白が無いもの。``inner.split()[0]`` がスラッシュを含んだまま返すため
+    正規化しないと不一致になる）とタグ名の大小文字ゆれ（``<SKILL>`` 等）は
+    表現差の範疇であり、判定に影響させない。ADR に自己閉じ・大小文字ゆれの
+    明記は無いが、迷ったら除外せず検査対象（＝機構扱い）に倒す方針を取る。
+    """
+    tag = head_tag(text)
+    if tag is None:
+        return False
+    normalized = tag.rstrip("/").lower()
+    return normalized in MACHINERY_MARKERS
+
+
+def filter_machinery(candidates: Sequence["RawCandidate"]) -> List["RawCandidate"]:
+    """D3 機構マーカー除外を候補列へ適用する（run_probe から呼ばれる唯一の適用点）。
+
+    独立の関数として切り出すのは、パイプライン側の「適用し忘れ／配線切れ」を
+    テストで再現・検出可能にするため（#536 review item5）。
+    """
+    return [c for c in candidates if not is_machinery_text(c.text)]
 
 
 def text_hash(text: str) -> str:
@@ -444,6 +495,117 @@ class ProbeResult:
     unknown_type_pairs: Dict[str, int]
     child_ref_scope_agreement: bool
     child_ref_scope_detail: Dict[str, int]
+    after_machinery_exclusion_texts: List[str] = field(default_factory=list)
+
+
+# ─────────────────────────────────────────────────────────────────
+# 独立オラクル（#536 round3・codex Must1 反映）
+#
+# 上の MACHINERY_MARKERS / is_machinery_text は実装の判定ロジックそのもの。
+# expected_machinery_survivors がこれらを再利用すると「実装が自分自身と
+# 突合する」トートロジーになり、MACHINERY_MARKERS からマーカーを1件削る・
+# 判定関数を弱体化する変異を検出できない（実装と期待値が同じ経路で誤り、
+# 完全一致検査が緑のまま通ってしまう）。
+#
+# そのため以下は MACHINERY_MARKERS / is_machinery_text / head_tag /
+# strip_leading_noise を一切参照しない別実装（意図的な重複）にする。
+# マーカー集合はこのモジュール内でリテラルとして再度書き下し、判定も
+# 独立に書く。実装側の定数・関数がどう変わっても、ここが変わらない限り
+# 独立に機構発話を判定し続ける。
+# ─────────────────────────────────────────────────────────────────
+_ORACLE_MACHINERY_MARKERS = frozenset(
+    {
+        "recommended_plugins",
+        "task-notification",
+        "command-name",
+        "local-command-stdout",
+        "command-message",
+        "skill",
+        "environment_context",
+        "user_action",
+        "image",
+    }
+)
+
+
+_ORACLE_INVISIBLE_MATCH_CATEGORIES = frozenset({"Cf", "Mn", "Me"})
+
+
+def _oracle_strip_invisible_chars(s: str) -> str:
+    """独立実装の不可視文字除去（_strip_invisible_chars 非依存・#536 round5）。
+
+    実装側と同じ Cf/Mn/Me カテゴリ判定を採用するが、コードは独立に書き下す
+    （import も呼び出しもしない）。カテゴリという「判定基準」自体が実装・
+    オラクル双方で崩れる変異（例: カテゴリ集合から Mn を削る）は、テスト側の
+    独立 fixture（結合文字・異体字セレクタを使う陰性試験）で別途検出する。
+    """
+    out_chars = []
+    for ch in s:
+        if unicodedata.category(ch) in _ORACLE_INVISIBLE_MATCH_CATEGORIES:
+            continue
+        out_chars.append(ch)
+    return "".join(out_chars)
+
+
+def _oracle_is_machinery_text(text: str) -> bool:
+    """独立実装の機構判定（head_tag/strip_leading_noise/is_machinery_text 非依存）。
+
+    #536 round4: is_machinery_text 側と同じ理由で自己閉じ形・大小文字ゆれを
+    正規化する。実装側と表現は変えるが（rstrip("/").lower() を tag 変数へ
+    inline で適用）、判定内容は独立に同じ結論へ至るよう記述する。
+    #536 round5: 不可視文字（Cf/Mn/Me、位置不問）除去を独立実装で追加する。
+    """
+    if not text:
+        return False
+    stripped = _oracle_strip_invisible_chars(text).lstrip()
+    if not stripped.startswith("<"):
+        return False
+    close = stripped.find(">")
+    if close == -1:
+        return False
+    inner = stripped[1:close].strip()
+    if not inner:
+        return False
+    tag = inner.split()[0]
+    normalized_tag = tag.rstrip("/").lower()
+    return normalized_tag in _ORACLE_MACHINERY_MARKERS
+
+
+def expected_machinery_survivors(normalized_events: Sequence[Dict[str, Any]]) -> List[str]:
+    """D3 除外の独立オラクル（#536 review item5）: 機構除外を通過すべき発話一覧。
+
+    ``normalized_events`` は子除外後・機構除外前の中間表現（run_probe が生成する
+    副産物で、機構除外ステージの成否に関係なく常に生成される）。ここから
+    実装の判定関数ではなく ``_oracle_is_machinery_text``（独立実装）を適用して
+    期待される生存集合を求める。
+    """
+    return [e.get("text", "") for e in normalized_events if not _oracle_is_machinery_text(e.get("text", ""))]
+
+
+def independent_machinery_exclusion_count(normalized_events: Sequence[Dict[str, Any]]) -> int:
+    return len(expected_machinery_survivors(normalized_events))
+
+
+def assert_machinery_exclusion_matches_oracle(result: "ProbeResult") -> None:
+    """独立オラクルと実際のパイプライン出力を突合する。不一致なら AssertionError。
+
+    件数一致（後方互換の弱い検査）だけでなく、生存した発話テキストの多重集合
+    （Counter）まで一致させる。段階間の非増加関係や絶対値レンジ、件数だけの
+    突合では「除外件数は正しいが中身が入れ替わっている」変異（機構発話が残り、
+    代わりに無関係な発話が誤って落ちる等）を検出できないため。
+    """
+    expected_texts = expected_machinery_survivors(result.normalized_events)
+    actual_texts = result.after_machinery_exclusion_texts
+    expected_counter = Counter(expected_texts)
+    actual_counter = Counter(actual_texts)
+    if expected_counter != actual_counter:
+        expected_only = expected_counter - actual_counter
+        actual_only = actual_counter - expected_counter
+        raise AssertionError(
+            "machinery除外オラクル不一致（パイプラインの除外ステージが配線切れ・"
+            f"弱体化・入替している可能性）: expected_only={dict(expected_only)!r} "
+            f"actual_only={dict(actual_only)!r}"
+        )
 
 
 def _pj_slug_from_cwd(cwd: Optional[str], pj_filter: str) -> str:
@@ -496,11 +658,8 @@ def run_probe(
     counts.after_child_exclusion = sum(len(pf.candidates) for pf in parents)
 
     # D3: 機構マーカー除外
-    kept_candidates: List[RawCandidate] = []
-    for pf in parents:
-        for c in pf.candidates:
-            if not is_machinery_text(c.text):
-                kept_candidates.append(c)
+    parent_candidates: List[RawCandidate] = [c for pf in parents for c in pf.candidates]
+    kept_candidates = filter_machinery(parent_candidates)
     counts.after_machinery_exclusion = len(kept_candidates)
 
     # X1: チャネル制約付き dedup
@@ -559,6 +718,7 @@ def run_probe(
         unknown_type_pairs={f"{k[0]}|{k[1]}": v for k, v in unknown_type_pairs.items()},
         child_ref_scope_agreement=agreement,
         child_ref_scope_detail={"phase1_scope": len(children_b), "full_scope": len(children_a)},
+        after_machinery_exclusion_texts=[c.text for c in kept_candidates],
     )
 
 
@@ -614,37 +774,48 @@ def resolve_evolve_anything_data_dir() -> Path:
     return Path(rl_common.resolve_data_dir(env))
 
 
-def snapshot_data_dir_listing(data_dir: Path) -> Dict[str, int]:
-    """DATA_DIR 配下の全ファイルの {相対パス: サイズ} を返す（不在なら空 dict）。
+def snapshot_data_dir_listing(data_dir: Path) -> Dict[str, str]:
+    """DATA_DIR 配下の全ファイルの {相対パス: sha256 hash} を返す（不在なら空 dict）。
 
     個別ファイル名を列挙する方式（4ファイルの hash だけ）だと、新種のファイルが
     増えたときに素通りする（Must2 レビュー指摘）。ディレクトリ全体の一覧比較で
     「ファイルが増えていないこと」まで検査する。
+
+    item4（#536 review）: 当初はサイズだけを比較していたが、同じ byte 数のまま
+    内容だけ書き換えられた場合（例: 4byte→別の4byte）を検出できなかった。
+    ``~/.claude/evolve-anything`` 実データ（484MB・694ファイル）で実測したところ
+    全件 sha256 化しても 0.27 秒程度で、実行1回あたり実行前後2回でも1秒未満
+    （2026-08-23 実測）。ファイル数が今後増えて非実用的になったら、更新時刻や
+    サンプリング hash 等の代替案を別途検討すること。
     """
     if not data_dir.exists():
         return {}
-    out: Dict[str, int] = {}
+    out: Dict[str, str] = {}
     for f in sorted(data_dir.rglob("*")):
         if f.is_file():
-            out[str(f.relative_to(data_dir))] = f.stat().st_size
+            out[str(f.relative_to(data_dir))] = _hash_file_or_none(f) or ""
     return out
 
 
 def verify_data_dir_unchanged(
-    before: Dict[str, int], after: Dict[str, int]
+    before: Dict[str, str], after: Dict[str, str]
 ) -> Tuple[bool, List[str]]:
-    """DATA_DIR 一覧の実行前後比較。新規ファイル・サイズ変化を違反として列挙する。"""
+    """DATA_DIR 一覧の実行前後比較。新規ファイル・hash 変化を違反として列挙する。"""
     violations: List[str] = []
     for name in sorted(set(before) | set(after)):
         b, a = before.get(name), after.get(name)
         if b != a:
-            violations.append(f"{name}: before_size={b!r} after_size={a!r}")
+            violations.append(f"{name}: before_hash={b!r} after_hash={a!r}")
     return (not violations), violations
 
 
 # ─────────────────────────────────────────────────────────────────
 # --out-dir 拒否ガード（Must2: 本番配下への書込を起動時に拒否する）
 # ─────────────────────────────────────────────────────────────────
+class ProductionPathWriteError(RuntimeError):
+    """書込み先の実体パス（symlink 解決後）が禁止ルート配下だった場合に送出する。"""
+
+
 def _is_within(path: Path, root: Path) -> bool:
     try:
         path.resolve().relative_to(root.resolve())
@@ -654,13 +825,22 @@ def _is_within(path: Path, root: Path) -> bool:
 
 
 def forbidden_out_dir_roots() -> List[Path]:
-    """--out-dir が指してはいけないルート（Must2）。
+    """--out-dir が指してはいけないルート（Must2 / #536 review item1）。
 
     ``~/.claude/``（``~/.claude/evolve-anything/`` を含む）/ ``~/.codex/`` /
-    本スクリプトのリポジトリ作業ディレクトリ配下。
+    本スクリプトのリポジトリ作業ディレクトリ配下 / **実行時に解決した DATA_DIR**。
+
+    DATA_DIR は ``CLAUDE_PLUGIN_DATA`` env で ``~/.claude`` 配下以外の任意の場所を
+    指しうる（``rl_common.resolve_data_dir`` が明示的に許可）。本番4ストア
+    （utterances.db 等）は常に ``DATA_DIR/<name>`` で解決されるため、ハードコード
+    3ルートだけでは custom DATA_DIR 構成のとき本番ストアを禁止対象外にしてしまう。
+    ここで動的解決した DATA_DIR を必ず含めることで、custom 構成でも --out-dir が
+    本番ストアと衝突しないことを保証する。
     """
     repo_root = Path(__file__).resolve().parent.parent
-    return [Path.home() / ".claude", Path.home() / ".codex", repo_root]
+    roots = [Path.home() / ".claude", Path.home() / ".codex", repo_root]
+    roots.append(resolve_evolve_anything_data_dir())
+    return roots
 
 
 def validate_out_dir(out_dir: Path) -> Optional[str]:
@@ -674,7 +854,37 @@ def validate_out_dir(out_dir: Path) -> Optional[str]:
 # ─────────────────────────────────────────────────────────────────
 # CLI
 # ─────────────────────────────────────────────────────────────────
-def _write_json(path: Path, obj: Any) -> None:
+def _write_json(path: Path, obj: Any, *, out_dir: Path) -> None:
+    """out_dir 配下の出力ファイルへ書込む。
+
+    欠陥2対応: validate_out_dir は out_dir 自体（ディレクトリ）にしか掛からず、
+    out_dir 内に出力ファイル名（例: report.json）で本番ファイルへの symlink を
+    置かれると、そのまま辿って本番ストアを上書きしてしまう。書込み直前に
+    ``path`` の実体パス（symlink 解決後）を forbidden_out_dir_roots() と照合し、
+    禁止ルート配下なら書かずに例外で停止する。呼び出し側が個別にチェックし
+    忘れないよう、本関数に内蔵する（呼び出し箇所を経由すれば必ず効く）。
+
+    item2（#536 review）: 上の禁止ルート照合は「既知の危険な場所」の allowlist
+    的な検査に過ぎず、禁止ルートに含まれない任意の out_dir 外（例:
+    ``/tmp/elsewhere/victim.json``）への symlink 経由書込みは素通りしてしまう。
+    そこで ``out_dir`` を必須引数にし、``path`` の実体パスが out_dir の実体配下に
+    包含されることを主検査として要求する（禁止ルート照合は縦深防御として残す）。
+    """
+    real = Path(os.path.realpath(path))
+    real_out_dir = Path(os.path.realpath(out_dir))
+    try:
+        real.relative_to(real_out_dir)
+    except ValueError:
+        raise ProductionPathWriteError(
+            f"書込み先が out_dir 外を指しています（symlink 経由の可能性）: "
+            f"{path} の実体は {real} で out_dir（実体 {real_out_dir}）の外です"
+        )
+    for root in forbidden_out_dir_roots():
+        if _is_within(real, root):
+            raise ProductionPathWriteError(
+                f"書込み先が禁止ルート配下を指しています（symlink 経由の可能性）: "
+                f"{path} の実体は {real} で {root} 配下です"
+            )
     path.write_text(json.dumps(obj, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
 
 
@@ -719,23 +929,20 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     token_estimate = estimate_tokens(result.utterances)
 
-    # 成果物の書込（out_dir は Must2 で本番配下でないことを検証済み）。
-    _write_json(out_dir / "target_files.json", result.target_file_hashes)
-    _write_json(out_dir / "normalized_events.json", result.normalized_events)
-    _write_json(out_dir / "unique_keys.json", result.unique_keys)
-    _write_json(out_dir / "utterances.json", result.utterances)
-    _write_json(out_dir / "token_estimate.json", token_estimate)
-
-    # Must2: 最終 hash / 一覧検査は全ての書込が終わった後に行う
-    # （judge のコスト予約書込は run_probe 内では発生しないため C-0/C-1 と同じ
-    # 「LLM 呼び出し前の予約書込だけが漏れる」パターンは Phase 1 では起きないが、
-    # 契約として C-1 実行契約の順序に揃える）。
-    hashes_after = snapshot_production_hashes(store_paths)
-    listing_after = snapshot_data_dir_listing(data_dir)
-    hash_ok, hash_violations = verify_production_unchanged(hashes_before, hashes_after)
-    listing_ok, listing_violations = verify_data_dir_unchanged(listing_before, listing_after)
-    ok = hash_ok and listing_ok
-    violations = hash_violations + listing_violations
+    # 成果物の書込（out_dir は Must2 で本番配下でないことを検証済み。個々の
+    # 出力ファイル名が symlink 経由で本番へ逃げていないかは _write_json が
+    # 書込み直前に実体パスで検査する＝欠陥2対応）。
+    # report.json は「検査結果（production_store_guard）」を含まない業務成果物
+    # として先に書く。hashes_after / listing_after は report.json を含む
+    # **全ての** out_dir 書込みが完了した後に取る（欠陥1対応）。検査結果自体は
+    # 別ファイル guard.json へ最後に書く（report.json の内容に検査結果を混ぜると
+    # 「検査結果が検査対象の後に決まる」循環になり、報告書自身の書込みを
+    # after スナップショットの観測範囲から外さざるを得なくなるため）。
+    _write_json(out_dir / "target_files.json", result.target_file_hashes, out_dir=out_dir)
+    _write_json(out_dir / "normalized_events.json", result.normalized_events, out_dir=out_dir)
+    _write_json(out_dir / "unique_keys.json", result.unique_keys, out_dir=out_dir)
+    _write_json(out_dir / "utterances.json", result.utterances, out_dir=out_dir)
+    _write_json(out_dir / "token_estimate.json", token_estimate, out_dir=out_dir)
 
     report = {
         "counts": {
@@ -752,22 +959,43 @@ def main(argv: Optional[List[str]] = None) -> int:
         "child_ref_scope_agreement": result.child_ref_scope_agreement,
         "child_ref_scope_detail": result.child_ref_scope_detail,
         "token_estimate": token_estimate,
-        "production_store_guard": {
-            "ok": ok,
-            "violations": violations,
-            "hashes_before": hashes_before,
-            "hashes_after": hashes_after,
-            "data_dir": str(data_dir),
-            "data_dir_file_count_before": len(listing_before),
-            "data_dir_file_count_after": len(listing_after),
-        },
         "out_dir": str(out_dir),
     }
-    # report.json 自体は out_dir（本番配下でないことを検証済み）への書込であり、
-    # 上の検査対象（本番ストア・DATA_DIR）には含まれない。
-    _write_json(out_dir / "report.json", report)
+    _write_json(out_dir / "report.json", report, out_dir=out_dir)
 
-    print(json.dumps(report, ensure_ascii=False, indent=2))
+    # 欠陥1対応: report.json を含む全ての業務成果物書込みが完了した後に after を
+    # 取る。
+    #
+    # item3（#536 review・自己矛盾の解消）: この後に guard.json を書く。guard.json
+    # は「事後 hash 比較の結果」を内容に含むため、定義上 hashes_after 計算より前には
+    # 書けない（結果が決まる前に結果を書くことになる循環）。そこで guard.json だけは
+    # after スナップショットの観測対象に含めない設計を採用する。これが安全な理由:
+    # forbidden_out_dir_roots()（item1 対応）が実行時解決した DATA_DIR を必ず含むため、
+    # 起動時の validate_out_dir(out_dir) を通過した時点で out_dir は DATA_DIR 配下
+    # ではあり得ないことが保証されている。guard.json は out_dir 配下にしか書かれない
+    # （_write_json の out_dir 包含検査＝item2 対応）ので、guard.json 自身の書込みが
+    # listing_after（DATA_DIR 一覧）や hashes_after（本番4ストア。常に DATA_DIR 配下）
+    # に混入することは構造的に起こり得ない。よって「これより後に書込みを追加しない」
+    # という旧コメントは撤回し、guard.json は観測対象外のまま安全に書いてよい。
+    hashes_after = snapshot_production_hashes(store_paths)
+    listing_after = snapshot_data_dir_listing(data_dir)
+    hash_ok, hash_violations = verify_production_unchanged(hashes_before, hashes_after)
+    listing_ok, listing_violations = verify_data_dir_unchanged(listing_before, listing_after)
+    ok = hash_ok and listing_ok
+    violations = hash_violations + listing_violations
+
+    guard = {
+        "ok": ok,
+        "violations": violations,
+        "hashes_before": hashes_before,
+        "hashes_after": hashes_after,
+        "data_dir": str(data_dir),
+        "data_dir_file_count_before": len(listing_before),
+        "data_dir_file_count_after": len(listing_after),
+    }
+    _write_json(out_dir / "guard.json", guard, out_dir=out_dir)
+
+    print(json.dumps({**report, "production_store_guard": guard}, ensure_ascii=False, indent=2))
     if not ok:
         print("[phase1_codex_probe] FATAL: 本番ストアが変更された", file=sys.stderr)
         return 1

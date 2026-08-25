@@ -526,6 +526,25 @@ def test_build_proposal_digest_no_machinery_key_when_none_excluded(tmp_path: Pat
     assert "pj-a" not in out["excluded_machinery_by_pj"]
 
 
+def test_build_proposal_digest_surfaces_rephrase_similarity_dedup_by_pj(
+    tmp_path: Path, monkeypatch,
+):
+    """daily review の rephrase dedup 件数を digest 経路でも失わない（#543）。"""
+    monkeypatch.setattr(
+        pd._daily_review,
+        "build_review",
+        lambda *_args, **_kwargs: {
+            "groups": [],
+            "excluded_machinery_total": 0,
+            "rephrase_similarity_dedup_count": 2,
+        },
+    )
+
+    out = pd.build_proposal_digest(_queue("pj-a"), data_dir=tmp_path)
+
+    assert out["rephrase_similarity_dedup_by_pj"] == {"pj-a": 2}
+
+
 def test_global_group_carries_project_paths_from_queue_entries(tmp_path: Path):
     """#412 [Must]4: digest は各 PJ の project_path（queue エントリの絶対パス）を保持する。"""
     ws = tmp_path / "weak_signals.jsonl"
@@ -896,20 +915,35 @@ def test_build_proposal_prompt_contains_representative_and_commands():
 
 
 def test_build_proposal_prompt_offers_four_way_destination_choice():
-    """#498 要件5（#475 §4 の反映先つき4択を戻す）: 素の はい/いいえ ではなく、
-    共通ルール/PJルール/いまは反映しない/いいえ の4択を提示する。
+    """#541 D: ①②（共通ルール/PJルール）を「ルールに書く」1つへ統合し、空いた枠に
+    「既に反映済み」を追加した4択（ルールに書く/いまは反映しない/既に反映済み/いいえ）を
+    提示する（#475 §4 の反映先つき4択の再構成）。
     """
     groups = [_group(["k1"], rep="rep")]
     msg = pd.build_proposal_prompt(groups, "pj-a")
-    assert "共通ルールに書く" in msg
-    assert "このPJのルールに書く" in msg
+    assert "ルールに書く" in msg
     assert "いまは反映しない" in msg
+    assert "既に反映済み" in msg
     assert "いいえ" in msg
     assert "はい: " not in msg  # 旧・素の y/n 表記は出さない
 
 
+def test_build_proposal_prompt_already_reflected_choice_records_without_promoting():
+    """#541 D-2 決着（v2 [Must]1）: 「既に反映済み」の実体は record_reviewed のみで
+    --promote-weak を呼ばない（#514 の在庫レーンへ再提示バグが引っ越すのを防ぐ）。
+    """
+    groups = [_group(["k1"], rep="rep")]
+    msg = pd.build_proposal_prompt(groups, "pj-a")
+    assert "bin/evolve-reflect --already-reflected-weak k1 --pj pj-a" in msg
+    # 「既に反映済み」の指示行自体には --promote-weak を含めない（実体を混同させない）。
+    already_line = next(
+        line for line in msg.splitlines() if "--already-reflected-weak" in line
+    )
+    assert "--promote-weak" not in already_line
+
+
 def test_build_proposal_prompt_does_not_overpromise_rule_reflection():
-    """#498 要件3: 「はい」で共通ルールを選んでも、この時点ではまだ反映されていないことを
+    """#498 要件3: 「ルールに書く」を選んでも、この時点ではまだ反映されていないことを
     明示する（promote は記録のみで反映先ファイルへの書込みは別工程・promote.py の
     reflect_status="promoted" と整合）。
     """
