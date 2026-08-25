@@ -63,14 +63,17 @@ res = bootstrap_backlog.mark_done(slug, dry_run=dry_run)
 
 - `daily.eligible != True and not daily.correction_backlog`（新規 0 件・在庫 0 件 / error）→ **スキップ**（AskUserQuestion を出さない。「今日の修正確認: 新規なし ✓」を1行表示）
 - **`daily.excluded_machinery_total > 0`（machinery＝委譲メッセージ等の harness 注入除外・#443 PR2-a）→ 上記スキップ／下記 AskUserQuestion のどちらの分岐でも「除外: machinery {excluded_machinery_total} 件（委譲メッセージ等の harness 注入。実際に確認可能な件数には含まれていません）」を必ず1行添える（MUST — silence != evaluated）。** 候補が全件 machinery で `daily.eligible` が `False` になったケースこそ、この1行が無いと利用者には「今日の修正確認: 新規なし ✓」しか見えず除外の事実が完全に隠れる（最重要ケース）。
+- **`daily.rephrase_similarity_dedup_count > 0` → 「rephraseのsimilarity重複により自動的に畳んだ件数: {rephrase_similarity_dedup_count}件（既に確認済みの指摘と同一内容と判定し再提示をスキップしました）」を上記スキップ／下記 AskUserQuestion のどちらの分岐でも必ず1行添える（MUST — silence != evaluated・#543）。**
 - `daily.correction_backlog` が非空 → **在庫3択で確認する（MUST）**。手順は下記「修正在庫の3択（#514）」を参照（`daily.eligible` の真偽に関わらず実施する）。
 - `daily.eligible == True` → `daily.groups`（`correction_backlog` の件数分だけ枠を削った残り・cross-PJ 承認済み一致が先頭、続いて頻度降順 — #462）を1件ずつ**反映先つき4択で確認する（MUST — #475。在庫3択と合わせて最大5問を1バッチで）**。手順は下記「反映先つき4択（#475 §4）」を参照。
 - `daily.remaining > 0` なら「ほか {remaining} グループは次回以降に提示」を1行表示する
 - `daily.correction_backlog_remaining > 0` なら「ほか {correction_backlog_remaining} 件は在庫に残っています」を1行表示する
 
-### 反映先つき4択（#475 §4）
+### 反映先つき4択（#475 §4・#541 D）
 
 各 group について、**AskUserQuestion を呼ぶ前に agent が反映候補の起草行（`draft_line`）を作る**（§4.3。誰が書くかは常に agent の Edit/Write なので、順番を「選ばせた後」から「選ばせる前」に変えるだけ）。
+
+**#541 D-1**: 旧4択（①共通ルール ②PJルール ③いまは反映しない ④いいえ）は「既に反映済み」に合う選択肢が無かった（実インシデント: reflect フローの外でユーザーが直接ルールを書いた後、翌朝また同じ指摘が再提示された）。`AskUserQuestion` の `options` は `maxItems: 4` で5つ目を追加できないため、①②（共通/PJ）を①「ルールに書く」1つへ統合し、空いた枠に③「既に反映済み」を追加する。反映先（共通/PJ）は①選択後に Claude が提案し、ユーザーが一言で直せる（新しい AskUserQuestion は作らない — 下記「1（ルールに書く）」の手順1.5 を参照）。
 
 **0. 重複チェック（§4.5・設問枠を消費しない）**: `draft_line` を起草したら、既存の書き込み規約（[reflect/SKILL.md](../../reflect/SKILL.md) の「書き込み時のルール」）と同じ判断で候補ファイル（既存 rule ファイルのうち内容が近いもの）を1つ選び、`reflect_apply_match.check_line_applied` で正規化後一致を確認する:
 
@@ -99,32 +102,36 @@ result = check_line_applied(Path(candidate_file), draft_line)  # candidate_file 
 
 | # | label | detail |
 |---|---|---|
-| 1 | 共通ルールに書く（全PJで効く） | 次のセッションから全プロジェクトで効きます。あとで1コマンドで取り消せます（条件は反映時に表示）。 |
-| 2 | このPJのルールに書く | 次のセッションからこのプロジェクトだけで効きます。取り消しも同様です。 |
-| 3 | いまは反映しない（記録は残す） | 動作は変わりません。記録は消えず、5件たまったら見直しをまとめて案内します。 |
+| 1 | ルールに書く（共通／このPJ） | 次に反映先（全PJ共通／このPJだけ）を Claude が提案します。あとで1コマンドで取り消せます（条件は反映時に表示）。 |
+| 2 | いまは反映しない（記録は残す） | 動作は変わりません。記録は消えず、5件たまったら見直しをまとめて案内します。 |
+| 3 | 既に反映済み（記録だけ既読にする） | この指摘はもうルールに反映済みです。ルールへの書き込みは行わず、記録だけ既読にします。 |
 | 4 | いいえ（この指摘は不要） | 記録も反映もしません。次回から出しません。 |
 
 Other は tool が自動付与する自由記述欄（`options` には含めない）。
 
 **2. 選択後の処理**:
 
-- **1（共通ルール）/ 2（PJルール）**:
+- **1（ルールに書く）**:
   1. `PJ="${PJ:-$(pwd)}" && evolve-reflect --project-dir "$PJ" --promote-weak <group の signal_keys カンマ区切り>` で昇格する（従来どおり。出力は `promoted_keys`/`skipped`/`confirmed_idioms` を含む — 部分失敗時の扱いは下記「既読化」参照）。
-  2. 反映先ファイルを agent が判断する（既存の書き込み規約を流用・新しい選定ロジックは作らない）。**選んだ scope（共通=`~/.claude/rules/` / PJ=`<repo>/.claude/rules/`）の中に適切な既存ファイルが無く新規作成が必要と判明したら**、Edit/Write の**直前**に3択の追加確認を出す（§4.3.2）:
+  1.5. **反映先の提案（#541 D-1）**: Claude が反映先（共通=`~/.claude/rules/` / このPJ=`<repo>/.claude/rules/`）を、既存の書き込み規約（[reflect/SKILL.md](../../reflect/SKILL.md) の「書き込み時のルール」）と同じ判断基準で1つ選び、「{共通/このPJ}のルールに反映します」と1行提案する。**新しい AskUserQuestion は出さない** — ユーザーが直前の応答で異論を示さなければそのまま進め、一言（「共通で」「PJだけで」等）で訂正があればそちらに従う。
+  2. **選んだ scope の中に適切な既存ファイルが無く新規作成が必要と判明したら**、Edit/Write の**直前**に3択の追加確認を出す（§4.3.2）:
 
      | # | label | detail |
      |---|---|---|
      | 1 | 新しく作る | このファイルは無いので新規作成します。**取り消せません**。 |
      | 2 | 既存の `<候補ファイル>` に追記する（推奨） | 取り消せます。テーマが近い既存ファイルに1行追記します |
-     | 3 | やめる（記録だけ残す） | 反映しません。選択肢3と同じ扱いになります |
+     | 3 | やめる（記録だけ残す） | 反映しません。選択肢2（いまは反映しない）と同じ扱いになります |
 
-     既存ファイルへの追記なら（1/2いずれの結果でも）この追加確認はスキップしてそのまま書く。3を選んだ場合は下の「3（いまは反映しない）」と同じ処理に切り替える。
+     既存ファイルへの追記なら（1/2いずれの結果でも）この追加確認はスキップしてそのまま書く。3を選んだ場合は下の「2（いまは反映しない）」と同じ処理に切り替える。
   3. Edit（既存ファイル末尾に1行追記）または Write（新規ファイル）で `draft_line` を書き込む。**Edit/Write の前に、対象ファイルの現在の全文を読み一時ファイルに保存しておくこと（MUST）**（新規作成なら空ファイルを保存する）。反映先が `~/.claude/rules/` または `<repo>/.claude/rules/` 配下のときは次の手順4で `--before-content-file` が**必須**になる（省略すると CLI がエラーで停止する — 取り消し記録の欠落を黙認しないための仕様）。
   4. `evolve-reflect --apply <source_correction_id> --target-path <書き込んだファイル> --draft-line-file <draft_line を書いたファイル> --before-content-file <手順3で保存した全文>` を呼び、実在確認を通過したことを確認する（`status == "applied"`）。`source_correction_id` は `--promote-weak` の出力に対応する correction の `session_id`/`timestamp` から `make_source_correction_id` で作る（`--view` 出力の `source_correction_id` と同一形式）。`apply_unverified` が返ったら書き込みに失敗している可能性があるため対象ファイルを再確認する。**新規作成（空ファイルを渡した）のときは `status == "applied"` でも `revert_recorded: false`（`revert_reason: "new_file_not_revertible"`）が返る** — これは正常（新規ファイル作成は取り消し非対応・§8.2「やらないこと」）。
   5. 反映が完了したら「反映しました: `{target}`（1行追記）／取り消す場合: `bin/evolve-revert <entry_id>`／※このファイルをこの後さらに変更すると、この取り消しはできなくなります」を1行表示する（§4.3.1。新規作成のときは「取り消せません」に置き換える）。
   6. 既読化: 出力の `promoted_keys`（実際に昇格された signal_key）のみを `daily_review.record_reviewed(promoted_keys, slug, decision="promoted", dry_run=dry_run)` に渡す（`skipped` が空でなければ部分失敗＝#326 と同じ扱いで既読追記しない）。
-- **3（いまは反映しない）**: `--promote-weak` で昇格するところまでは同じ（`reflect_status` は `promoted` のまま反映先ファイルへは書かない）。`daily_review.record_reviewed(promoted_keys, slug, decision="deferred", dry_run=dry_run)` で既読追記する（**次回の evolve では再提示しない**。保留は reflect のバッチレビューへ再浮上する — §5.1 / [reflect/SKILL.md](../../reflect/SKILL.md)）。
-- **4（いいえ）**: `--promote-weak` を呼ばない。`daily_review.record_reviewed(signal_keys, slug, decision="rejected", dry_run=dry_run)` で既読追記する（次回から再提示しない）。
+
+  **#541 S4（`--apply` を通し損ねた場合の帰結）**: 上記は必ず**昇格（1）→ 本文起草・書込（3）→ `--apply`（4）**の3点セットで初めて「反映済み」になる。**手順4（`--apply`）を実行し損ねると**、`reflect_status` は `promoted` のまま昇格記録だけが残り、その correction は#514「修正在庫」レーン（下記「修正在庫の3択」）へ古い順に再浮上する。これは検出器の欠陥ではない（rule 本文が実際に書かれたかをコードから知る手段が無い）。在庫として再提示されたら「ルールには書いたが `--apply` の紐付けだけが済んでいない」ケースであると読み取り、対象ファイルを確認したうえで在庫3択の手順（`--apply` の再実行、または在庫の「もう出さない」）で処理する。
+- **2（いまは反映しない）**: `--promote-weak` で昇格するところまでは同じ（`reflect_status` は `promoted` のまま反映先ファイルへは書かない）。`daily_review.record_reviewed(promoted_keys, slug, decision="deferred", dry_run=dry_run)` で既読追記する。**#541 S2（deferred の再浮上先は2つに分かれる。矛盾しないよう明確化）**: ①**新規4択レーン**（本節・既読集合ベース）では、既読化済みなので**次回の evolve では再提示しない**。②**下記「修正在庫の3択」（#514 在庫レーン）**は corrections.jsonl の `reflect_status=promoted` かつ非 invalidated を直接読む別レーンで、既読集合を見ないため、deferred（`reflect_status` は `promoted` のまま）は**在庫レーンには古い順で出続ける**。これは意図的な設計（①「記録は残り reflect で再浮上」という約束と、②在庫レーンの「反映先未定の積み残しを埋もれさせない」という約束の両方を満たすには、在庫レーン側には見え続ける状態が正しい）。**選択肢3（既に反映済み）との違い**: ③は `--promote-weak` を呼ばず correction 自体を作らないため、①②いずれのレーンにも一切現れない。deferred（②）は在庫レーンに残るが「既に反映済み」（③）は完全に消える、という非対称が本設計の核心。
+- **3（既に反映済み）**: `--promote-weak` を呼ばない（呼ぶと#514在庫レーンに再提示バグが引っ越す — v2 [Must]1）。`PJ="${PJ:-$(pwd)}" && evolve-reflect --project-dir "$PJ" --already-reflected-weak <group の signal_keys カンマ区切り>` を実行する（内部で `daily_review.record_reviewed(signal_keys, slug, decision="already_reflected", dry_run=dry_run)` のみを呼ぶ）。次回から再提示しない。
+- **4（いいえ）**: `--promote-weak` を呼ばない。`PJ="${PJ:-$(pwd)}" && evolve-reflect --project-dir "$PJ" --reject-weak <signal_keys> --pj <slug>` を実行する（内部で `daily_review.record_reviewed(signal_keys, slug, decision="rejected", dry_run=dry_run)` を呼ぶ）。次回から再提示しない。
 - **Other（skill / hook を書かれた場合の応答・§4.4）**: 自由記述の内容で分岐する。memory 関連→ 既存の memory 反映フロー（Step 7）へ。pitfall 関連 → 既存の pitfall-curate フロー（#471）へ。**skill 関連** → 「この場では反映されません。skill を直す場合は `/evolve-anything:evolve-skill <名前>` を実行してください」と案内する（既読追記しない・次回再提示）。**hook 関連** → 「hook への反映は自動化されていません。必要なら `hooks/` を手で編集してください」と案内する（既読追記しない）。**判断が付かない** → 「memory と pitfall のどちらに書きますか？」等、その場で1回だけ聞き返す（黙って対象外にしない）。
 - **Skip / 中断** → 既読追記しない（次回再提示）。evolve 全体は完走する。
 

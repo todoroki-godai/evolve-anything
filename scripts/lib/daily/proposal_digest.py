@@ -345,6 +345,7 @@ def build_proposal_digest(
 
     Returns: {"generated_at": iso, "per_pj": {slug: [group, ...]}, "global": [group, ...],
               "project_paths": {slug: path}, "excluded_machinery_by_pj": {slug: {...}},
+              "rephrase_similarity_dedup_by_pj": {slug: int},
               "excluded_context_missing_by_pj": {slug: int}, "freshness_join_stats": {...}}
 
     1 PJ の digest 生成が例外を投げても他 PJ の digest 生成は継続する（fail-open）。
@@ -380,6 +381,7 @@ def build_proposal_digest(
     # （{slug: ...} の辞書）で digest 側にも集約する。捨てると朝の digest 経路だけ
     # 候補数が減るのに除外件数が利用者に見えなくなる。
     excluded_machinery_by_pj: Dict[str, Dict[str, Any]] = {}
+    rephrase_similarity_dedup_by_pj: Dict[str, int] = {}
     # #498 要件4: 説明文を組み立てられない group（llm_judge/rephrase で reason が無い・
     # #504: prev_action は判定材料から外した）は y/n を強行せず保留にする。黙って減らさず
     # 件数を surface する（excluded_machinery_by_pj と同じ {slug: count} の流儀）。
@@ -423,6 +425,9 @@ def build_proposal_digest(
                 "total": machinery_total,
                 "by_channel": review.get("excluded_machinery_by_channel") or {},
             }
+        rephrase_dedup_count = review.get("rephrase_similarity_dedup_count") or 0
+        if rephrase_dedup_count:
+            rephrase_similarity_dedup_by_pj[slug] = rephrase_dedup_count
 
     global_groups, per_pj = _extract_global_groups(per_pj)
 
@@ -436,6 +441,7 @@ def build_proposal_digest(
         # codex [Must]1（#443 PR2-a）: machinery 除外件数を slug 別に透明化する
         # （silence != evaluated）。0 件の slug はキーを持たない（他の {slug: ...} 辞書と同じ流儀）。
         "excluded_machinery_by_pj": excluded_machinery_by_pj,
+        "rephrase_similarity_dedup_by_pj": rephrase_similarity_dedup_by_pj,
         # #498 要件4: 保留にした（説明不能な）group の件数を slug 別に透明化する
         # （silence != evaluated）。0 件の slug はキーを持たない。
         "excluded_context_missing_by_pj": excluded_context_missing_by_pj,
@@ -617,24 +623,39 @@ def _reflect_choice_lines(
     reject_pj_flag: str,
     review_ref: str,
 ) -> List[str]:
-    """#498 要件3/5・#475 §4: 反映先つき4択（共通ルール/PJルール/いまは反映しない/いいえ）を
-    はい/いいえの代わりに提示する。「はい」は記録することしか保証しない（＝反映済みではない）
-    ため、「共通ルールに書く」を選んでも実際にルール文書へ書くのはこのあと Claude 自身が行う
-    作業であることを明示する（過剰約束の禁止・#498 要件3）。
+    """#498 要件3/5・#475 §4・#541 D: 反映先つき4択（ルールに書く/いまは反映しない/既に
+    反映済み/いいえ）をはい/いいえの代わりに提示する。「ルールに書く」は記録することしか
+    保証しない（＝反映済みではない）ため、選んでも実際にルール文書へ書くのはこのあと
+    Claude 自身が行う作業であることを明示する（過剰約束の禁止・#498 要件3）。
+
+    #541 D-1: 旧4択の①共通ルール／②PJルールを「①ルールに書く」1つへ統合し、空いた枠に
+    ③「既に反映済み」を追加した（AskUserQuestion の options は maxItems=4 で5つ目を
+    追加できないため）。反映先（共通/PJ）は①選択後に Claude が提案し、ユーザーが一言で
+    直せる形にする（この2択の AskUserQuestion は再発明しない — 反映先ファイル選定と同じ
+    既存の書き込み規約に委ねる）。
+
+    #541 D-2: ③「既に反映済み」の実体は `--already-reflected-weak`
+    （`daily_review.record_reviewed(decision="already_reflected")` のみ）で、
+    `--promote-weak` は呼ばない。`--promote-weak` は corrections.jsonl に
+    `reflect_status="promoted"` の correction を新規作成するため、そのまま使うと
+    #514 の修正在庫レーンが「まだ反映されていません」と蒸し返す（再提示バグの引っ越し）。
     """
     promote_cmd = f"{q_reflect_cmd} --promote-weak {keys}{promote_extra}"
+    already_reflected_cmd = f"{q_reflect_cmd} --already-reflected-weak {keys}{reject_pj_flag}"
     reject_cmd = f"{q_reflect_cmd} --reject-weak {keys}{reject_pj_flag}"
     return [
         "  この指摘をどう扱いますか？（AskUserQuestion。Other に自由記述も可）",
-        "    1) 共通ルールに書く（全PJで効く・あとで1コマンドで取り消せます）",
-        "    2) このPJのルールに書く（このPJだけで効く・あとで1コマンドで取り消せます）",
-        "    3) いまは反映しない（記録のみ・AI の振る舞いは変わりません）",
+        "    1) ルールに書く（共通ルール／このPJのルール・あとで1コマンドで取り消せます）",
+        "    2) いまは反映しない（記録のみ・AI の振る舞いは変わりません）",
+        "    3) 既に反映済み（記録だけ既読にします・ルールへは書き込みません）",
         "    4) いいえ（記録も反映もしません）",
-        f"  1/2 を選んだ場合: まず `{promote_cmd}` で記録する（この時点ではまだ"
-        "ルール文書には反映されていません）。次に書く文面を自分で起草し対象ファイルへ"
-        f"追記、`--apply` で反映を確認する。手順の詳細は {review_ref} の"
+        f"  1 を選んだ場合: まず `{promote_cmd}` で記録する（この時点ではまだ"
+        "ルール文書には反映されていません）。次に反映先（共通ルール／このPJのルール）を"
+        "Claude が提案し、違えば一言で直せます。決まったら書く文面を自分で起草し"
+        f"対象ファイルへ追記、`--apply` で反映を確認する。手順の詳細は {review_ref} の"
         "「反映先つき4択」を参照",
-        f"  3 を選んだ場合: `{promote_cmd}`（記録のみ・ルールには反映されません）",
+        f"  2 を選んだ場合: `{promote_cmd}`（記録のみ・ルールには反映されません）",
+        f"  3 を選んだ場合: `{already_reflected_cmd}`（記録のみ・ルールへの反映はしません）",
         f"  4 を選んだ場合: `{reject_cmd}`",
     ]
 

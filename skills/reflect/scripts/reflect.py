@@ -943,14 +943,29 @@ def main():
                              "過去経験を suppressed に分離し、関連度スコア付きで提示する（#565）")
     parser.add_argument("--relevance-threshold", type=float, default=None,
                         help="--context: 関連度ゲートの閾値（既定は校正済み 0.5・#565）")
-    parser.add_argument("--promote-weak", type=str, default=None,
+    # #541 codex M1: --promote-weak/--reject-weak/--already-reflected-weak は同一
+    # signal_key に対する三値択一の decision（promoted/rejected/already_reflected）であり、
+    # 同時指定は意味が矛盾する。旧実装は if 分岐順（promote が最優先）で decide していたため、
+    # `--promote-weak K --already-reflected-weak K` のように両方渡すと黙って promote が勝ち、
+    # 「既に反映済みは promote を呼ばない」という設計の中核を破っていた（corrections.jsonl に
+    # reflect_status=promoted のレコードが作られ、#514 在庫レーンへ再提示バグが引っ越す）。
+    # argparse の mutually exclusive group で同時指定自体を拒否する（分岐順に依存しない）。
+    _weak_decision_group = parser.add_mutually_exclusive_group()
+    _weak_decision_group.add_argument("--promote-weak", type=str, default=None,
                         help="指定 signal_key（カンマ区切り）の weak_signal を corrections へ昇格")
-    parser.add_argument("--reject-weak", type=str, default=None,
+    _weak_decision_group.add_argument("--reject-weak", type=str, default=None,
                         help="指定 signal_key（カンマ区切り）を『いいえ』として既読化する"
                              "（#409・weak_signal 自体は昇格しない）")
+    _weak_decision_group.add_argument("--already-reflected-weak", type=str, default=None,
+                        help="指定 signal_key（カンマ区切り）を『既に反映済み』として既読化する"
+                             "（#541 D-2・weak_signal 自体は昇格しない。--promote-weak は"
+                             "corrections.jsonl に reflect_status=promoted の新規レコードを"
+                             "作るため、#514 修正在庫レーンに再提示バグが引っ越す。ここでは"
+                             "record_reviewed のみ呼ぶ）")
     parser.add_argument("--pj", type=str, default=None,
-                        help="--promote-weak/--reject-weak: 既読記録の pj_slug（未指定は"
-                             "現在の PJ を pj_slug.resolve_pj_slug で解決）")
+                        help="--promote-weak/--reject-weak/--already-reflected-weak: "
+                             "既読記録の pj_slug（未指定は現在の PJ を"
+                             " pj_slug.resolve_pj_slug で解決）")
     parser.add_argument("--weak-signals-file", type=str, default=None,
                         help="weak_signals.jsonl のパス（テスト用）")
     parser.add_argument("--revoke-idiom", type=str, default=None,
@@ -1103,6 +1118,25 @@ def main():
         res = _record_reviewed(keys, pj_slug_value, decision="rejected", dry_run=args.dry_run)
         print(json.dumps({
             "status": "rejected_weak",
+            "pj_slug": pj_slug_value,
+            **res,
+        }, ensure_ascii=False, indent=2))
+        return
+
+    # --already-reflected-weak: 指定 signal_key を「既に反映済み」として既読化する（#541 D-2）。
+    # weak_signal 自体は昇格しない（corrections.jsonl へは何も書かない）。今回の反映は reflect
+    # フローの外（対話中の手書き Edit/Write 等）で起きたため、フロー内の promote 記録は実体を
+    # 伴わない。--promote-weak は reflect_status="promoted" の correction を新規作成し、
+    # #514 の修正在庫レーンが「まだ反映されていません」と蒸し返す（再提示バグの引っ越し）ため
+    # 使わない。record_reviewed のみが実体。
+    if args.already_reflected_weak is not None:
+        from correction_semantic.daily_review import record_reviewed as _record_reviewed
+        from pj_slug import resolve_pj_slug as _resolve_pj_slug
+        keys = [k.strip() for k in args.already_reflected_weak.split(",") if k.strip()]
+        pj_slug_value = args.pj or _resolve_pj_slug(current_project or str(project_root))
+        res = _record_reviewed(keys, pj_slug_value, decision="already_reflected", dry_run=args.dry_run)
+        print(json.dumps({
+            "status": "already_reflected_weak",
             "pj_slug": pj_slug_value,
             **res,
         }, ensure_ascii=False, indent=2))

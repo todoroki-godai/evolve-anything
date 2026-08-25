@@ -205,6 +205,96 @@
   parser を書かない方針のもとで未対応の既知の残存ギャップとして regression lock した
   （advisory カテゴリのため過剰検出よりコストが低い見落としとして許容）。CLAUDE.md の
   横断契約リストの `memory_guard` 記述を実装と一致するよう更新した。
+- **test(probe): 機構マーカー除外の casing/skip配線テストを強化し、正規化の複製と乖離検出を
+  撤回（#536 round6→7→縮小）** — round6/round7 で追加した NFKC 正規化（`_normalize_for_matching`/
+  `_oracle_normalize_for_matching`）と、PR #537 の実装を `git show`+`exec` で参照する乖離検出
+  テストは、設計レビューにより「#537（fix/vuln-scan-scope・未マージ）の正規化ロジックを独立
+  複製している」「乖離検出テストは branch/exec 失敗が全て skip 扱いになり CI で検査が常態的に
+  死にうる」「`exec` はプロセス環境を変更しうるため read-only でない」と判定され、本 PR から
+  撤回した（正規化の共通化は #537 マージ後に別 issue で扱う）。round5 由来の Cf/Mn/Me 除去
+  （NFKC は含まない）は維持している。維持した検査強化: ①casing 正規化を「fixture に書かれた
+  特定表記だけを正規化する辞書」へ差し替える narrow 化変異は、文字ごと独立ランダム選択
+  （固定 seed・9種×30サンプル）で検出できるようにした ②skip 条件の `pytest.mark.skipif`
+  decorator 配線そのものへの変異は、実ファイルを `HOME` 差し替えサブプロセスで実行し実テスト
+  関数の skip/実行結果を直接確認する統合テストで検出できるようにした ③`Me`
+  （Enclosing_Mark）カテゴリの実文字を fixture へ追加した ④fixture 健全性検査を
+  「codepoint の包含」から「Counter による多重集合完全一致」へ強化した ⑤skip 判定窓と
+  実行窓を同一の共有定数へ統一した。
+- **test(probe): `run_probe()` が読み取り専用契約を満たすことを書込みプリミティブの
+  フックで直接検査（#536 縮小版）** — 既存の本番ストア保護（固定4ストアの byte hash 比較 +
+  DATA_DIR 配下ファイル一覧の前後比較）は「知っている場所」しか見ないため、`run_probe()` が
+  **DATA_DIR 外**（未知の場所）へ書き込む変異を検出できない欠陥があった。列挙（allowlist）に
+  頼らず、`pathlib.Path.write_text`/`write_bytes`/`Path.open`（書込みモード）/組込み `open()`
+  （書込みモード）をフックし、`run_probe()` 実行全体で一度も呼ばれないことを直接検査する
+  テストを追加した。**検査範囲は `run_probe()` 単体**（本番ストアの選定・`out_dir` の禁止
+  ルート判定・symlink 経由の書込み検査は既存の別テストが対象。本テストはそれらを代替しない）。
+- **test(probe): round5 の自己構成回避手段（RTL mark・word joiner・単引用符属性・タグ内改行/
+  タブ）を ad-hoc 確認から恒久 fixture 化（#536）** — round5 完了報告で「緑を確認したが恒久化
+  していない」と申告した4件を `_INVISIBLE_CHAR_SURVIVAL_FIXTURE` / 新設
+  `_TAG_INTERNAL_WHITESPACE_SURVIVAL_FIXTURE` へ追加。加えて「fixture に書いた不可視文字が
+  ファイル保存経路で静かに消失し、検査していないのに緑になる」罠自体を検出するテストを
+  2本追加した（fixture 各エントリが意図した Cf/Mn/Me または改行/タブを実際に含むかを
+  assert する。人工的に消失状態を再現し、このテストが赤くなることを実測済み）。
+- **fix(probe): 本番ストア保護ガードの残存欠陥5件を修正（#534）** — `scripts/phase1_codex_probe.py`
+  に対する外部レビュー指摘を反映。①`--out-dir` 禁止ルートに実行時解決した DATA_DIR を追加
+  （`CLAUDE_PLUGIN_DATA` で `~/.claude` 配下以外を指す custom 構成での取りこぼしを解消）
+  ②出力ファイルへの書込みを `out_dir` 実体パス包含検査で必須化（禁止ルート以外への
+  symlink escape も遮断） ③`guard.json` を事後 hash 採取後に書く設計を、①のガードにより
+  `out_dir` が DATA_DIR 配下になり得ないことを根拠に安全と明記（旧コメントの自己矛盾を解消）
+  ④DATA_DIR 一覧の不変検査をファイルサイズでなく sha256 hash に変更（同一 byte 数の別内容
+  書換えを検出可能に） ⑤機構マーカー除外ステージに独立オラクル（`assert_machinery_exclusion_matches_oracle`）
+  を追加し、除外ステージの配線切れ・入替を段階カウントのレンジ検査だけでは検出できない
+  ケースまで捕捉する。
+- **fix(probe): 機構マーカー除外の独立オラクルを実装から真に独立させる（#536 round3）** —
+  従来の `expected_machinery_survivors` は実装定数 `MACHINERY_MARKERS`／判定関数
+  `is_machinery_text` をそのまま再利用しており、マーカー1件の削除・改変を実装とオラクル
+  の両方が同じ間違いで見逃すトートロジーだった。`MACHINERY_MARKERS`／`is_machinery_text`
+  を一切参照しない独立実装（`_ORACLE_MACHINERY_MARKERS`／`_oracle_is_machinery_text`）を
+  追加してオラクルをこちらへ切替え、テスト側にも実装定数から一切 import しないリテラル
+  マーカー集合と、人手でラベル付けした「入力テキスト→期待生存可否」fixture を追加した。
+- **fix(probe): 機構マーカー除外の人手 fixture に不足していた入力クラスを追加（#536 round4）** —
+  round3 の独立オラクル自体は正しかったが、人手ラベル fixture が全角空白（U+3000）・属性付き
+  タグ（`<skill name="evolve">`）・`event_msg` チャネルを一切カバーしておらず、これらの表現差
+  に対応するコードを実装とオラクル双方から同時に削る変異が検出不能だった。fixture へ該当
+  入力クラスを追加し、チャネル非依存性（I4: `command-name`/`local-command-stdout`/
+  `command-message` は両チャネル共通というADR実測に基づく）を検査する新規テストを追加した。
+- **fix(probe): 機構マーカー除外に自己閉じタグ・大小文字ゆれの正規化を追加（#536 round4続）** —
+  `<image/>`（スラッシュ直前に空白なし）は `head_tag` が `"image/"` を返し
+  `MACHINERY_MARKERS` と完全一致せず除外漏れになっていた。`<SKILL>` 等の大小文字ゆれも
+  同様に漏れていた。実データ（`~/.codex/sessions` 726ファイル・実候補6467件）では
+  出現0件を実測したが、「迷ったら除外せず検査対象に倒す」方針に基づき実装・独立オラクル
+  双方にタグ末尾スラッシュ除去+小文字化の正規化を追加し、fixture にも該当入力クラスを
+  追加した。
+- **test(probe): real_home テストに実 Codex セッション不在時の skip ガードを追加（#536）** —
+  `test_phase1_codex_probe.py` の `@pytest.mark.real_home` 4件は `Path.home()/".codex"/"sessions"`
+  を直読みしており、対象ディレクトリが無い環境（実測: HOME を一時ディレクトリへ差し替えて
+  再現）では `target_files=0` のまま `_assert_stage_counts_plausible` 等が意味のない失敗を
+  起こしていた（4件中2件が実際に FAILED することを実測確認）。実データが無いことを理由付き
+  skip として明示するガードを追加し、実データがある環境（開発機）では引き続き実行され緑に
+  なることも実測で確認した。
+- **fix(probe): 機構マーカー除外の不可視文字対応をカテゴリ判定へ、skip ガードを対象期間の実在
+  判定へ強化（#536 round5）** — 前回（round4）の不可視文字対応は BOM 等の特定文字列を先頭から
+  列挙する方式で、`<​skill>`（`<` 直後に ZWSP）や `<skill​>`（タグ名末尾に ZWSP）等タグ内部の
+  不可視文字を検出できなかった。列挙をやめ、Unicode カテゴリ Cf（Format）/ Mn（結合文字）/
+  Me（Enclosing）で位置に関わらず除去する方式（`scripts/lib/skill_vuln_scan.py` の
+  `_strip_invisible_chars` と同一設計。branch 未マージのため import せず独立に複製）に変更し、
+  実装・独立オラクル双方に適用した。また大小文字ゆれの fixture が `SKILL`/`Skill`/`COMMAND-NAME`
+  の3語しかカバーしておらず、正規化を狭い辞書へ差し替える変異を検出できなかったため、9種
+  マーカー全体へ fixture を拡張した。real_home テストの skip 条件も「対象ディレクトリの存在」
+  から「固定14日窓に対象 JSONL が実在するか」へ変更し（空ディレクトリでの意味のない失敗を防止）、
+  skip 条件自体を通常テストから直接検査するテストと、skip 理由を必ず表示する `pytest.ini`
+  の `-ra` 設定・その設定の消失を検出するテストを追加した。
+- **fix(evolve): rephrase の既読指摘が similarity 差だけで再提示される問題を修正（#543）** —
+  daily review の read 時に限り、provenance から `similarity` だけを除いた identity が同じ
+  signal_key を既読集合へ一時展開する。新しい key や永続データは作らず、他チャネルと
+  bootstrap の既読判定は変更しない。畳んだ件数は `build_review` の結果と daily digest の
+  JSON 経路へ伝播する（朝の通知本文への表示配線は本 PR のスコープ外・別 issue）。
+- **fix(evolve): 反映済み weak_signal の再提示に「既に反映済み」選択肢を追加（#541）** —
+  日次の反映先つき4択に「既に反映済み」（`record_reviewed(decision="already_reflected")`
+  のみ・`--promote-weak` を呼ばない）を追加し、旧①共通ルール／②PJルールは「ルールに書く」
+  1つへ統合（AskUserQuestion の `maxItems=4` 制約下で5択目を作れないため）。反映先は選択後に
+  Claude が提案しユーザーが一言で直せる。bootstrap の初回一括確認にも既読ゲート
+  （`filter_actionable`）を通し、日次4択で既読化済みの signal_key が再噴出しないようにした。
 - **fix(implement): テレメトリ書込みを write barrier へ統一** — `usage.jsonl` の直接追記を廃止し、
   実装と実行手順の双方を `store_write` 経由に揃えた。
 - **fix(capture): 日本語の明示的な欠陥指摘を決定論で捕捉（#527）** — 固定評価セットの

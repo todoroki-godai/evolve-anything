@@ -2074,6 +2074,96 @@ class TestWeakReviewRecording:
         assert out["status"] == "rejected_weak"
         assert out["pj_slug"]  # 空でない（resolve_pj_slug が basename 等を返す）
 
+    # --- #541 D-2: --already-reflected-weak（既読化のみ・promote しない） ---
+
+    def test_already_reflected_weak_records_reviewed_without_promoting(self, tmp_path, capsys):
+        """#541 Must2 決着: 「既に反映済み」は record_reviewed(decision="already_reflected")
+        のみで、--promote-weak のように corrections.jsonl へ reflect_status="promoted" の
+        レコードを新規作成しない（在庫レーンへバグが引っ越すのを防ぐ）。
+        """
+        corr = tmp_path / "corrections.jsonl"
+        with mock.patch("sys.argv", ["reflect", "--already-reflected-weak", "k1,k2",
+                                     "--pj", "myproj", "--corrections-file", str(corr)]):
+            reflect.main()
+        out = json.loads(capsys.readouterr().out)
+        assert out["status"] == "already_reflected_weak"
+        assert out["pj_slug"] == "myproj"
+        assert out["written"] == 2
+
+        sys.path.insert(0, str(_plugin_root / "scripts" / "lib"))
+        from correction_semantic.daily_review import read_reviewed_keys
+        seen = read_reviewed_keys()
+        assert "k1" in seen
+        assert "k2" in seen
+
+        # corrections.jsonl には何も書かれない（promote を呼んでいない）
+        assert not corr.exists() or corr.read_text(encoding="utf-8").strip() == ""
+
+    def test_already_reflected_weak_dry_run_writes_nothing(self, tmp_path, capsys):
+        with mock.patch("sys.argv", ["reflect", "--already-reflected-weak", "k1",
+                                     "--pj", "myproj", "--dry-run"]):
+            reflect.main()
+        out = json.loads(capsys.readouterr().out)
+        assert out["dry_run"] is True
+
+        sys.path.insert(0, str(_plugin_root / "scripts" / "lib"))
+        from correction_semantic.daily_review import read_reviewed_keys
+        assert "k1" not in read_reviewed_keys()
+
+    def test_already_reflected_weak_defaults_pj_to_resolved_slug(self, tmp_path, capsys, monkeypatch):
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))
+        with mock.patch("sys.argv", ["reflect", "--already-reflected-weak", "k1"]):
+            reflect.main()
+        out = json.loads(capsys.readouterr().out)
+        assert out["status"] == "already_reflected_weak"
+        assert out["pj_slug"]
+
+    def test_already_reflected_weak_decision_value_is_already_reflected(self, tmp_path, capsys):
+        """既読レコードの decision フィールドが厳密に "already_reflected" であること
+        （"promoted"/"rejected"/"deferred" のいずれとも混同しない・#541 計測要件の前提）。
+        """
+        with mock.patch("sys.argv", ["reflect", "--already-reflected-weak", "k1", "--pj", "myproj"]):
+            reflect.main()
+        capsys.readouterr()
+
+        import rl_common
+        env = os.environ.get("CLAUDE_PLUGIN_DATA", "")
+        seen_path = Path(rl_common.resolve_data_dir(env)) / "correction_review_seen.jsonl"
+        lines = [json.loads(l) for l in seen_path.read_text(encoding="utf-8").splitlines() if l.strip()]
+        recs = [r for r in lines if r.get("key") == "k1"]
+        assert recs
+        assert recs[-1]["decision"] == "already_reflected"
+
+    def test_promote_weak_and_already_reflected_weak_are_mutually_exclusive(self, tmp_path, capsys):
+        """#541 codex M1: --promote-weak と --already-reflected-weak を同時指定すると、
+        分岐順（--promote-weak が先に判定される）で promote が勝ち、corrections.jsonl に
+        reflect_status="promoted" のレコードが作られてしまう（「既に反映済みは promote を
+        呼ばない」という設計の中核を破る）。argparse レベルで排他にし、SystemExit で拒否する。
+        """
+        corr = tmp_path / "corrections.jsonl"
+        with mock.patch("sys.argv", ["reflect", "--promote-weak", "k1",
+                                     "--already-reflected-weak", "k1",
+                                     "--pj", "myproj", "--corrections-file", str(corr)]):
+            with pytest.raises(SystemExit):
+                reflect.main()
+        # corrections.jsonl には何も書かれない（拒否されたので promote 側の副作用が発生しない）。
+        assert not corr.exists() or corr.read_text(encoding="utf-8").strip() == ""
+
+    def test_reject_weak_and_already_reflected_weak_are_mutually_exclusive(self, tmp_path, capsys):
+        """同様に --reject-weak / --already-reflected-weak も排他（3値択一の decision を
+        同時に2つ指定させない）。"""
+        with mock.patch("sys.argv", ["reflect", "--reject-weak", "k1",
+                                     "--already-reflected-weak", "k1", "--pj", "myproj"]):
+            with pytest.raises(SystemExit):
+                reflect.main()
+
+    def test_promote_weak_and_reject_weak_are_mutually_exclusive(self, tmp_path, capsys):
+        """既存の2フラグ同士も排他にする（#541 M1 是正で3値とも同一グループに揃える）。"""
+        with mock.patch("sys.argv", ["reflect", "--promote-weak", "k1",
+                                     "--reject-weak", "k1", "--pj", "myproj"]):
+            with pytest.raises(SystemExit):
+                reflect.main()
+
     # --- #412 [Must]5: promote 失敗時に既読化しない ---
 
     def test_promote_weak_partial_failure_only_records_succeeded_key(self, tmp_path, capsys):
