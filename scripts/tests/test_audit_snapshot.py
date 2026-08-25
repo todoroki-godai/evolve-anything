@@ -139,6 +139,14 @@ def _isolate_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     # （submodule は from . import DATA_DIR の関数内 lazy 参照なので親属性の差し替えで届く）。
     import telemetry_query
     monkeypatch.setattr(telemetry_query, "DATA_DIR", tmp_path / "no-telemetry-data")
+    # live_checkout_health builder（#548）は evolve-anything 本体の checkout の実 git 状態
+    # （branch/dirty/ahead）を毎回読むため、開発中の worktree（非既定ブランチ・dirty が常態）
+    # では snapshot がブレる。判定を固定で "safe"（沈黙）に落とし決定論化する。
+    import live_checkout
+    monkeypatch.setattr(
+        live_checkout, "check",
+        lambda caller_file, expected_root=None: live_checkout.LiveCheckoutResult(status="safe"),
+    )
     return proj
 
 

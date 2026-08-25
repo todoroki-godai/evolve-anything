@@ -125,6 +125,9 @@ def _install_env(tmp_path, monkeypatch):
     # テストで2件以上＝digest 化してしまうのを防ぐ（queue_notice テストと同型）。
     monkeypatch.setattr(restore_state, "_build_data_dir_migration_output", lambda: None)
     monkeypatch.setattr(restore_state, "_build_utterance_staleness_output", lambda: None)
+    # #548: live_checkout も同じ env ガードで発火し、実行中の worktree の実状態を
+    # probe してこのテストの関心事でない digest を混入させる（queue_notice テストと同型）。
+    monkeypatch.setattr(restore_state, "_build_live_checkout_output", lambda: None)
     return source
 
 

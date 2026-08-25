@@ -87,6 +87,10 @@ def _install_env(tmp_path, monkeypatch):
     # （フル文の PJ 名等が消える）。ここで明示的に無効化する。
     monkeypatch.setattr(restore_state, "_build_data_dir_migration_output", lambda: None)
     monkeypatch.setattr(restore_state, "_build_utterance_staleness_output", lambda: None)
+    # #548: live_checkout も同じ env ガードで発火し、実行中の worktree（開発中で
+    # 非既定ブランチ／dirty が常態）を実 probe してこの test file の関心事でない
+    # digest を混入させる。他2系統と同様に明示的に無効化する。
+    monkeypatch.setattr(restore_state, "_build_live_checkout_output", lambda: None)
     # rl_common.resolve_data_dir は env をそのまま返す（marker 無し）。
     return source
 

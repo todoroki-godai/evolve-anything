@@ -39,6 +39,7 @@ from session_notify import (  # noqa: E402
     _build_session_proposal_output,
     _build_judge_cap_output,
     _build_icebox_output,
+    _build_live_checkout_output,
     _merge_notification_text,
     _build_additional_context,
     _pj_slug,
@@ -184,7 +185,7 @@ def _call_builder(builder: "Callable", *args):
 
 
 def _collect_notifications(stack: "ExitStack") -> "tuple[list[NotificationItem], dict | None]":
-    """9系統＋corrupt判定を順に呼び、``(items, proposal_output)`` を返す。
+    """9系統＋corrupt判定（+ #548 live_checkout）を順に呼び、``(items, proposal_output)`` を返す。
 
     各系統呼び出しは ``_call_builder`` で個別に保護されるため、1系統の例外が他系統の
     収集結果を巻き込まない。pending_trigger・icebox レーン1 は ``stack`` に lock を
@@ -199,6 +200,7 @@ def _collect_notifications(stack: "ExitStack") -> "tuple[list[NotificationItem],
         _call_builder(_build_evolve_drain_output),
         _call_builder(_build_data_dir_migration_output),
         _call_builder(_build_utterance_staleness_output),
+        _call_builder(_build_live_checkout_output),
     ):
         if item is not None:
             items.append(item)

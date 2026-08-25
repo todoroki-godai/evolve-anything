@@ -14,6 +14,7 @@ from contextlib import ExitStack
 from pathlib import Path
 
 from .model import NotificationItem, _classify_daily_snapshot_file
+from .live_checkout_notice import _build_live_checkout_output  # noqa: F401 — #548
 
 # #503 §3.1-3: decision_text の prefix 除去に使う。merge 側が付け直すため二重にしない。
 _PREFIX = "[evolve-anything] "
