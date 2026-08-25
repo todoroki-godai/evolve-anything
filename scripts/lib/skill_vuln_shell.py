@@ -16,9 +16,13 @@ _HEREDOC_OPENER_RE = re.compile(
     r"(?<!<)<<(?P<strip_tabs>-?)(?!<)\s*"
     r"(?:'(?P<single>[^'\n]+)'|\"(?P<double>[^\"\n]+)\"|(?P<bare>[A-Za-z_][A-Za-z0-9_]*))"
 )
-_HEREDOC_SHELL_COMMAND_RE = re.compile(
-    r"(?i)(?:^|[;&|]\s*)(?:sudo\s+)?(?:\S*/)?(?:sh|bash|zsh|ksh|dash)\b"
+_HEREDOC_DATA_COMMANDS = frozenset(
+    {
+        "cat",  # Copies stdin to output and never interprets it as shell source.
+        "tee",  # Copies stdin to files/stdout and never interprets it as shell source.
+    }
 )
+_HEREDOC_DATA_UNSAFE_CONTEXT_RE = re.compile(r"[;&|()`$]")
 
 # Shell の「どこで論理行が続くか」は is_shell_continuation と
 # join_logical_lines の2関数に集約する。新しい継続構文を検出 pattern ごとに
@@ -31,8 +35,8 @@ def effective_shell_text(stripped_line: str) -> str:
     This is the sole comment-removal entry point used by physical-line scanning,
     logical-line joining, and flow analysis.  It intentionally is not a full shell
     parser.  Uncertain constructs stay inspectable.  Heredocs are handled separately:
-    bodies executed by sh/bash/zsh/ksh/dash stay inspectable, while bodies supplied to
-    data commands such as ``cat`` are explicit data zones and bypass shell processing.
+    all bodies stay inspectable unless the opener is a direct invocation of a known
+    non-executing data command such as ``cat`` or ``tee``.
 
     ``#`` begins a comment only outside quotes, when unescaped, and at the beginning of
     a shell word (line start, whitespace, or a shell operator boundary).  Thus URL
@@ -122,6 +126,8 @@ def compute_shell_scope_lines(
     shell candidates.  Fence markers are excluded.  An unclosed fence extends to EOF
     under CommonMark, so its remainder is also a shell candidate.  This differs from
     literal-zone trust: adding shell scope strengthens inspection instead of hiding it.
+    Heredoc suppression is applied later only to direct, known data-command openers;
+    unknown or compound opener contexts remain in this inspectable scope.
     """
     scope: set = set()
     stripped_lines = [raw.rstrip("\r\n") for raw in lines]
@@ -147,13 +153,22 @@ def compute_shell_scope_lines(
     return scope
 
 
+def _is_known_data_heredoc_command(prefix: str) -> bool:
+    """Return whether an opener prefix is a direct known data-command invocation."""
+    stripped = prefix.strip()
+    if not stripped or _HEREDOC_DATA_UNSAFE_CONTEXT_RE.search(stripped):
+        return False
+    command = stripped.split(None, 1)[0].rsplit("/", 1)[-1]
+    return command in _HEREDOC_DATA_COMMANDS
+
+
 def compute_heredoc_zones(lines: List[str], shell_scope: set) -> Tuple[set, set]:
     """Return ``(shell_body_lines, data_body_and_terminator_lines)`` for heredocs.
 
     Recognizes ``<<WORD``, ``<<-WORD``, and single/double-quoted delimiters.  The body
-    stays executable only when the introducing command is sh/bash/zsh/ksh/dash (also
-    absolute/relative command paths and an optional ``sudo``).  Unclosed heredocs do
-    not create a suppressing zone.
+    is suppressed only when the opener is a direct invocation of a known command that
+    treats stdin as data.  Unknown, wrapped, or compound contexts stay inspectable so
+    syntax variation cannot opt out of scanning.  Unclosed heredocs do not suppress.
     """
     shell_body: set = set()
     data_zone: set = set()
@@ -169,7 +184,7 @@ def compute_heredoc_zones(lines: List[str], shell_scope: set) -> Tuple[set, set]
             continue
         delimiter = match.group("single") or match.group("double") or match.group("bare")
         strip_tabs = match.group("strip_tabs") == "-"
-        executes_shell = bool(_HEREDOC_SHELL_COMMAND_RE.search(line[: match.start()]))
+        is_known_data = _is_known_data_heredoc_command(line[: match.start()])
         close_at = None
         for j in range(idx + 1, len(lines)):
             if (j + 1) not in shell_scope:
@@ -186,11 +201,11 @@ def compute_heredoc_zones(lines: List[str], shell_scope: set) -> Tuple[set, set]
             idx += 1
             continue
         body_lines = set(range(idx + 2, close_at + 1))
-        if executes_shell:
-            shell_body.update(body_lines)
-        else:
+        if is_known_data:
             data_zone.update(body_lines)
             data_zone.add(close_at + 1)
+        else:
+            shell_body.update(body_lines)
         idx = close_at + 1
     return shell_body, data_zone
 
