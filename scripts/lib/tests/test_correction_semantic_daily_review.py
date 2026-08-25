@@ -91,6 +91,42 @@ def test_record_reviewed_appends_and_reads_back(tmp_path: Path):
     assert dr.read_reviewed_keys(path=seen) == {"k1", "k2"}
 
 
+def test_default_seen_path_no_base_matches_store_write_data_dir(tmp_path: Path, monkeypatch):
+    """#541 codex M3: default_seen_path()（path 省略・本番既定解決）が指す data_dir は、
+    store_write が実際に書き込む data_dir（rl_common.DATA_DIR・call-time 属性参照）と
+    一致していなければならない。
+
+    反例（旧実装で赤くなる）: rl_common import 時に DATA_DIR=A が確定した後、
+    CLAUDE_PLUGIN_DATA を B に変更しても、旧 default_seen_path() は独自に
+    ``resolve_data_dir(os.environ["CLAUDE_PLUGIN_DATA"])`` を呼ぶため B を返す一方、
+    store_write は rl_common.DATA_DIR（＝A のまま）へ書く。既読にしたはずが
+    write 先と read 先が分裂し、翌朝また提示される（pitfall_module_level_datadir_import_copy
+    と同型）。修正後は both が rl_common.DATA_DIR を単一ソースとして参照する。
+    """
+    import rl_common
+    from correction_semantic import daily_review as _dr
+
+    # ①rl_common import 時点で DATA_DIR=A が確定している状態を模す。
+    dir_a = tmp_path / "A"
+    dir_a.mkdir()
+    monkeypatch.setattr(rl_common, "DATA_DIR", dir_a, raising=False)
+
+    # ②その後 CLAUDE_PLUGIN_DATA だけを B に変更する（rl_common.DATA_DIR は追従しない）。
+    dir_b = tmp_path / "B"
+    dir_b.mkdir()
+    monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(dir_b))
+
+    # write 側が実際に使う data_dir（store_write と同じ call-time 属性参照）。
+    write_data_dir = rl_common.DATA_DIR
+
+    # read 側（default_seen_path・path 省略の本番既定解決）が使う data_dir。
+    seen_path = _dr.default_seen_path()
+
+    assert seen_path.parent == write_data_dir, (
+        f"read 側 data_dir({seen_path.parent}) が write 側 data_dir({write_data_dir}) と分裂"
+    )
+
+
 def test_record_reviewed_dry_run_no_write(tmp_path: Path):
     # 最下層まで dry-run ゲートを貫通（pitfall_dryrun_stateful_store_write）
     seen = _seen(tmp_path)
@@ -107,6 +143,39 @@ def test_record_reviewed_dedup_is_idempotent(tmp_path: Path):
     dr.record_reviewed(["k1"], "evolve-anything", decision="rejected", path=seen)
     dr.record_reviewed(["k1"], "evolve-anything", decision="rejected", path=seen)
     assert dr.read_reviewed_keys(path=seen) == {"k1"}
+
+
+def test_record_reviewed_row_count_overcounts_under_concurrent_write_race(tmp_path: Path):
+    """#541 codex M6: record_reviewed はロック外で既存集合を read するため、2つの呼び出しが
+    互いの書込前の**同じ古い集合**を読むと、同一 key に対して複数行が append されうる
+    （read 側の ``read_reviewed_keys`` は set 化するため機能上は無害だが、行数をそのまま
+    「decision の実頻度」として数えると水増しになる）。ここでは実際に2プロセス相当の
+    read-then-write を直列に模倣し、①ファイルの行数は2行（水増し）②一意 key 集合は1件
+    （正しい計測）であることを両方確認する。
+    """
+    seen = _seen(tmp_path)
+
+    # ①②とも「書込前の既存集合（空）」を読んだ状態から to_write を決める（race を模倣）。
+    existing_before_race = dr.read_reviewed_keys(path=seen)
+    assert existing_before_race == set()
+
+    from rl_common import store_write_raw
+    from datetime import datetime, timezone
+
+    for _ in range(2):  # 2つの並行呼び出しがどちらも "k1" を to_write に積んだ状態を模倣
+        store_write_raw(seen, {
+            "key": "k1", "pj_slug": "evolve-anything",
+            "decision": "already_reflected",
+            "reviewed_at": datetime.now(timezone.utc).isoformat(),
+        })
+
+    raw_lines = [l for l in seen.read_text(encoding="utf-8").splitlines() if l.strip()]
+    assert len(raw_lines) == 2, "水増しの再現に失敗（レースが起きていない）"
+
+    # ナイーブな「行数」は2（誤り）。正しい計測は一意 key 集合の要素数（1）。
+    assert len(raw_lines) != 1
+    assert dr.read_reviewed_keys(path=seen) == {"k1"}
+    assert len(dr.read_reviewed_keys(path=seen)) == 1
 
 
 # ─────────────────────────────────────────────────────────────────

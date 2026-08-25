@@ -90,6 +90,17 @@
   から「固定14日窓に対象 JSONL が実在するか」へ変更し（空ディレクトリでの意味のない失敗を防止）、
   skip 条件自体を通常テストから直接検査するテストと、skip 理由を必ず表示する `pytest.ini`
   の `-ra` 設定・その設定の消失を検出するテストを追加した。
+- **fix(evolve): rephrase の既読指摘が similarity 差だけで再提示される問題を修正（#543）** —
+  daily review の read 時に限り、provenance から `similarity` だけを除いた identity が同じ
+  signal_key を既読集合へ一時展開する。新しい key や永続データは作らず、他チャネルと
+  bootstrap の既読判定は変更しない。畳んだ件数は `build_review` の結果と daily digest の
+  JSON 経路へ伝播する（朝の通知本文への表示配線は本 PR のスコープ外・別 issue）。
+- **fix(evolve): 反映済み weak_signal の再提示に「既に反映済み」選択肢を追加（#541）** —
+  日次の反映先つき4択に「既に反映済み」（`record_reviewed(decision="already_reflected")`
+  のみ・`--promote-weak` を呼ばない）を追加し、旧①共通ルール／②PJルールは「ルールに書く」
+  1つへ統合（AskUserQuestion の `maxItems=4` 制約下で5択目を作れないため）。反映先は選択後に
+  Claude が提案しユーザーが一言で直せる。bootstrap の初回一括確認にも既読ゲート
+  （`filter_actionable`）を通し、日次4択で既読化済みの signal_key が再噴出しないようにした。
 - **fix(implement): テレメトリ書込みを write barrier へ統一** — `usage.jsonl` の直接追記を廃止し、
   実装と実行手順の双方を `store_write` 経由に揃えた。
 - **fix(capture): 日本語の明示的な欠陥指摘を決定論で捕捉（#527）** — 固定評価セットの
