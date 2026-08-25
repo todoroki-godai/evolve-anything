@@ -360,6 +360,33 @@ def _append_weak_semantics(lines: list, result: dict) -> None:
     )
 
 
+def _append_corrections_read_health(lines: list, result: dict) -> None:
+    """corrections.jsonl の read が劣化しているときだけ詳細を1行添える（#533）。
+
+    ``_append_queue_status`` は劣化を ``queue_status_reason`` に既に折り込むが（EMPTY を
+    SETUP_REQUIRED へ昇格・READY reason へ注記追記）、その1行は短縮された注記文のみで
+    error 本文までは持たない。ここでは ``corrections_read_health`` の生 dict から詳細
+    （``error`` 文字列・``malformed_lines`` 件数）を出す。健全（キー欠落含む後方互換）なら
+    何も出さない（silent truncation 禁止の原則を「健全なのに毎回出す」ノイズにしない）。
+    """
+    health = result.get("corrections_read_health") or {}
+    readable = health.get("readable", True)
+    malformed = int(health.get("malformed_lines", 0) or 0)
+    if readable and malformed <= 0:
+        return
+    if not readable:
+        err = health.get("error") or "unknown error"
+        lines.append(
+            f"（corrections.jsonl 読取失敗: {err}"
+            f" — 反映待ち在庫・new_corrections が過小表示の可能性）"
+        )
+    if malformed:
+        lines.append(
+            f"（corrections.jsonl に壊れた行 {malformed} 件"
+            f" — 該当行は無視・反映待ち在庫が過小表示の可能性）"
+        )
+
+
 def _append_queue_status(lines: list, result: dict) -> None:
     """queue 全体の状態ラベル + 理由を先頭に1行出す（#267 Sprint 1）。
 
@@ -389,6 +416,7 @@ def format_queue_table(result: dict) -> str:
 
     lines: list[str] = []
     _append_queue_status(lines, result)
+    _append_corrections_read_health(lines, result)
     if not queue:
         lines.append(
             f"[fleet:queue] 待ち PJ はありません"

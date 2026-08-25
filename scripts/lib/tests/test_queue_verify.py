@@ -474,6 +474,98 @@ class TestComputeQueueStatus:
         assert out["queue_status"] == "EMPTY"
         assert out["queue_status_reason"]
 
+    # --- corrections read health（#533: silence != evaluated）---------------
+
+    def test_healthy_read_health_does_not_change_empty_status(self):
+        """陽性対照: readable=True・malformed=0 は従来通り EMPTY のまま。"""
+        out = qv.compute_queue_status(
+            queue=[],
+            untracked_with_material=[],
+            skipped_dead=[],
+            skipped_phantom=[],
+            unattributed_total=0,
+            corrections_read_health={"readable": True, "error": None, "malformed_lines": 0},
+        )
+        assert out["queue_status"] == "EMPTY"
+
+    def test_unreadable_corrections_promotes_empty_to_setup_required(self):
+        out = qv.compute_queue_status(
+            queue=[],
+            untracked_with_material=[],
+            skipped_dead=[],
+            skipped_phantom=[],
+            unattributed_total=0,
+            corrections_read_health={
+                "readable": False,
+                "error": "Permission denied",
+                "malformed_lines": 0,
+            },
+        )
+        assert out["queue_status"] == "SETUP_REQUIRED"
+        assert "Permission denied" in out["queue_status_reason"]
+
+    def test_malformed_lines_promotes_empty_to_setup_required(self):
+        out = qv.compute_queue_status(
+            queue=[],
+            untracked_with_material=[],
+            skipped_dead=[],
+            skipped_phantom=[],
+            unattributed_total=0,
+            corrections_read_health={"readable": True, "error": None, "malformed_lines": 2},
+        )
+        assert out["queue_status"] == "SETUP_REQUIRED"
+        assert "壊れた行" in out["queue_status_reason"]
+
+    def test_degraded_read_note_appended_to_ready_reason_not_hidden(self):
+        """queue が非空（READY）でも劣化注記を reason に残す（無音にしない）。"""
+        out = qv.compute_queue_status(
+            queue=[{"pj_slug": "a"}],
+            untracked_with_material=[],
+            skipped_dead=[],
+            skipped_phantom=[],
+            unattributed_total=0,
+            corrections_read_health={"readable": True, "error": None, "malformed_lines": 3},
+        )
+        assert out["queue_status"] == "READY"
+        assert "壊れた行" in out["queue_status_reason"]
+
+    def test_missing_health_arg_is_back_compat_no_change(self):
+        """health 未指定（既存呼び出し）は挙動不変。"""
+        out = qv.compute_queue_status(
+            queue=[],
+            untracked_with_material=[],
+            skipped_dead=[],
+            skipped_phantom=[],
+            unattributed_total=0,
+        )
+        assert out["queue_status"] == "EMPTY"
+        assert "corrections.jsonl" not in out["queue_status_reason"]
+
+
+class TestFormatCorrectionsReadHealthNote:
+    def test_healthy_returns_none(self):
+        assert qv.format_corrections_read_health_note(
+            {"readable": True, "error": None, "malformed_lines": 0}
+        ) is None
+
+    def test_none_input_returns_none(self):
+        assert qv.format_corrections_read_health_note(None) is None
+        assert qv.format_corrections_read_health_note({}) is None
+
+    def test_unreadable_includes_error_text(self):
+        note = qv.format_corrections_read_health_note(
+            {"readable": False, "error": "boom", "malformed_lines": 0}
+        )
+        assert note is not None
+        assert "boom" in note
+
+    def test_malformed_includes_count(self):
+        note = qv.format_corrections_read_health_note(
+            {"readable": True, "error": None, "malformed_lines": 5}
+        )
+        assert note is not None
+        assert "5" in note
+
 
 # --- attach_verify_pending（#267 I3: バルク read + group by）-----------------
 

@@ -20,9 +20,11 @@ evolve.py 1739→156行+7 sub-module と同じ手法・ADR-048）。
 from __future__ import annotations
 
 import json
+import os
+import stat as _stat
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, NamedTuple, Optional
 
 
 # --- alias fold primitive（queue.py._equivalence_slugs が使用）----------------
@@ -192,7 +194,164 @@ def bootstrap_consumed_by_pj(
     return len(without_bootstrap) - len(kept)
 
 
-# --- store reader: 前回 evolve 以降の corrections カウント（PJ 別）------------
+# --- store reader: corrections.jsonl 共有 raw read + read-health（#533）------
+
+
+class CorrectionsSnapshot(NamedTuple):
+    """``read_corrections_records_with_health`` が返す records と health の組（#533）。
+
+    records と health は必ず同じ1回の read から生まれる。呼び出し口は
+    ``fleet.cli._gather_queue_result``（CLI 経路の唯一の実 read）と
+    ``fleet.queue.build_queue_result``（公開 API の薄い wrapper）の2箇所のみで、
+    いずれも1回 read した組をそのまま ``fleet.queue._build_queue_result_from_snapshot``
+    （private・I/O なしの純集計関数）へ渡す。tuple 互換のため
+    ``records, health = snapshot`` の unpack も可能（設計経緯は #533/#538 の issue 履歴参照。
+    このコメントには現行の契約だけを書く）。
+    """
+
+    records: List[Dict[str, Any]]
+    health: Dict[str, Any]
+
+
+def read_corrections_records_with_health(
+    corrections_path: Path,
+) -> CorrectionsSnapshot:
+    """corrections.jsonl を1回 read し、``(有効な dict レコード, read health)`` を返す。
+
+    ``new_corrections_by_pj`` / ``count_unattributed_corrections`` /
+    ``correction_semantic.correction_backlog`` の各 reader が独立に「ファイル不在→空リスト・
+    ``OSError``→空リスト・JSON decode 失敗→無言 skip」を行っていたため、読取不能（権限エラー等）
+    と壊れた行ありのケースが呼び側から区別できず、queue 側に「在庫ゼロ」として無音で伝播していた
+    （issue #533・``silence != evaluated``）。本関数を単一ソースにし、件数計算に使う従来通りの
+    レコードリストと、劣化を表す health dict の両方を同時に返す。
+
+    health の契約:
+      - ``readable``: ファイルを最後まで読めたか（``OSError`` で失敗すると False）
+      - ``error``: ``readable=False`` のときの例外文字列（成功時は None）
+      - ``malformed_lines``: 空行以外で JSON decode に失敗した・dict でなかった・不正 UTF-8 で
+        decode できなかった行数
+
+    ファイル不在は「劣化」ではなく「正常な空在庫」（``readable=True, malformed_lines=0``）。
+
+    #538 round2 [Must]3: 従来は ``errors="replace"`` で decode していたため、不正バイト列が
+    U+FFFD 置換文字へ静かに丸められ、置換後の文字列が偶然 JSON として parse に成功すると
+    （例: ``b'{"project_path":"alp\\xffha"}'`` → ``alp�ha``）``readable=true,
+    malformed_lines=0`` の健全扱いになり、当該レコードが誰にも気づかれず破損値のまま集計に
+    混入していた。行単位で ``strict`` decode し、``UnicodeDecodeError`` を JSON decode 失敗と
+    同じ「malformed 行」として数える（ファイル全体を unreadable にはしない — 1行の破損で
+    他の健全な行まで読み捨てるのは #533 が解消した「読取不能と壊れた行の混同」を UTF-8 単位で
+    再導入することになるため）。
+
+    #538 round3 [Must]2: 親ディレクトリの検索(x)権限が無い場合、``Path.exists()`` /
+    ``Path.is_symlink()`` はいずれも内部で ``OSError`` を握りつぶし ``False`` を返す
+    （Python 3.8+ の pathlib 仕様）。従来はこの2つで存在判定してから read していたため、
+    権限エラーが「真の未作成」と区別できず ``readable=true`` の正常な空在庫に誤判定していた。
+    ``exists()``/``is_symlink()`` に頼らず、まず ``lstat()`` を試みて ``FileNotFoundError``
+    （真の未作成）と、その他の ``OSError``（権限エラー等）を区別する。
+
+    #538 round4 [Must]2: 上記 ``lstat()`` は「ファイルの存在確認」と「実際に読む」の間に
+    TOCTOU（time-of-check-to-time-of-use）の窓を作る。``lstat()`` 成功直後（symlink 実体
+    確認の直後も同様）にファイルが unlink/rename されると、以前は続く ``path.read_bytes()``
+    の ``FileNotFoundError`` を他の ``OSError`` と一括で「読取不能」扱いしていたため、
+    「真の不在（正常な空在庫）」であるべきケースが誤って劣化扱いになっていた。
+    ``read_bytes()`` 自身が投げる ``FileNotFoundError`` は常に「read 直前に消えた＝真の不在」
+    を意味する ―― ただし通常ファイルの場合に限る。
+
+    #538 round5 [Must]1(I1): symlink の場合はこの「真の不在」扱いが誤りうる。symlink 判定→
+    ``path.stat()``（実体確認）成功後、``read_bytes()`` 直前に **target だけ** が unlink/
+    rename されるレースでは、symlink エントリ自体は残ったまま参照先だけが消える＝dangling
+    symlink であり、直前の ``path.stat()`` 分岐と同じ「劣化」（``readable=False``）が正しい。
+    一方 symlink エントリ自体（link）ごと消えた場合は通常ファイルと同じ「真の不在」。
+    ``read_bytes()`` が ``FileNotFoundError`` を投げた時点で symlink だったなら、再度
+    ``lstat()`` して link 自体の消失か target だけの消失かを分離する。
+    """
+    health: Dict[str, Any] = {"readable": True, "error": None, "malformed_lines": 0}
+    path = Path(corrections_path)
+    try:
+        st = path.lstat()
+    except FileNotFoundError:
+        # 真の未作成 = 正常な空在庫。
+        return CorrectionsSnapshot([], health)
+    except OSError as exc:
+        # 親ディレクトリの権限エラー等。exists()/is_symlink() は同じ例外を握りつぶして
+        # False を返すため、ここで先に区別する必要がある。
+        health["readable"] = False
+        health["error"] = str(exc)
+        return CorrectionsSnapshot([], health)
+
+    was_symlink = _stat.S_ISLNK(st.st_mode)
+    if was_symlink:
+        # symlink エントリ自体は存在する。リンク先の実体を辿って確認する。
+        try:
+            path.stat()
+        except FileNotFoundError:
+            # #538 round2 [Must]4: dangling symlink（リンク先が存在しない）は「正常な空在庫」
+            # と区別し、劣化として surface する。
+            health["readable"] = False
+            health["error"] = f"dangling symlink: {path} -> {os.readlink(path)}"
+            return CorrectionsSnapshot([], health)
+        except OSError as exc:
+            health["readable"] = False
+            health["error"] = str(exc)
+            return CorrectionsSnapshot([], health)
+
+    try:
+        raw_bytes = path.read_bytes()
+    except FileNotFoundError:
+        if was_symlink:
+            # #538 round5 [Must]1(I1): 直前の path.stat() 成功後に target だけが消えた
+            # レース。symlink エントリ自体がまだ在るかを再 lstat() で確認して切り分ける。
+            try:
+                path.lstat()
+            except FileNotFoundError:
+                # link エントリ自体も消えた＝通常ファイルと同じ「真の不在」。
+                return CorrectionsSnapshot([], health)
+            except OSError as exc:
+                health["readable"] = False
+                health["error"] = str(exc)
+                return CorrectionsSnapshot([], health)
+            # link は残っているのに read できない＝target だけが消えた dangling symlink。
+            health["readable"] = False
+            health["error"] = f"dangling symlink (target vanished after stat): {path}"
+            return CorrectionsSnapshot([], health)
+        # 通常ファイルの ``FileNotFoundError`` は lstat() 成功直後に消えたレース。
+        # 「読取不能」ではなく「真の不在」＝正常な空在庫として扱う（readable=True のまま）。
+        return CorrectionsSnapshot([], health)
+    except OSError as exc:
+        health["readable"] = False
+        health["error"] = str(exc)
+        return CorrectionsSnapshot([], health)
+
+    out: List[Dict[str, Any]] = []
+    for raw_line in raw_bytes.split(b"\n"):
+        line_bytes = raw_line.strip()
+        if not line_bytes:
+            continue
+        try:
+            s = line_bytes.decode("utf-8")
+        except UnicodeDecodeError:
+            health["malformed_lines"] += 1
+            continue
+        try:
+            rec = json.loads(s)
+        except (json.JSONDecodeError, ValueError):
+            health["malformed_lines"] += 1
+            continue
+        if not isinstance(rec, dict):
+            health["malformed_lines"] += 1
+            continue
+        out.append(rec)
+    return CorrectionsSnapshot(out, health)
+
+
+def corrections_read_health(corrections_path: Path) -> Dict[str, Any]:
+    """corrections.jsonl の read health だけを返す（``build_queue_result`` 用の単発 probe）。
+
+    ``{"readable": bool, "error": Optional[str], "malformed_lines": int}``。
+    劣化していない（ファイル不在含む）なら ``readable=True and malformed_lines == 0``。
+    """
+    _, health = read_corrections_records_with_health(corrections_path)
+    return health
 
 
 def _correction_slug(project_path: Any) -> str:
@@ -250,8 +409,8 @@ def _ts_strictly_after(ts: Any, last: str) -> bool:
 def new_corrections_by_pj(
     pj_slug: str,
     *,
+    records: List[Dict[str, Any]],
     last_evolve_at: Optional[str] = None,
-    corrections_path: Path,
 ) -> int:
     """pj_slug の corrections のうち ``last_evolve_at`` 以降の件数を返す。
 
@@ -259,26 +418,15 @@ def new_corrections_by_pj(
     corrections は ``project_path`` を bare slug に正規化（``_correction_slug``）してから
     scope する（実コーパスでフルパス / slug が混在するため）。timestamp は ``_ts_strictly_after``
     で datetime 比較する（`Z` / `+00:00` 終端混在を吸収・None 時は全件なので影響しない）。
-    ファイル不在 → 0。
+
+    ``records``（``read_corrections_records_with_health`` が既に返した有効レコード列）は
+    必須。呼び出し元は常に1回 read した snapshot をそのまま渡す（#533 — probe 時の health と
+    集計対象の records が別々の read から来ると食い違うスナップショット不一致が起きるため、
+    本関数自身が独立 read する経路は持たない）。読取不能・壊れた行の可視化は
+    ``corrections_read_health``（#533）。
     """
-    path = Path(corrections_path)
-    if not path.exists():
-        return 0
-    try:
-        text = path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return 0
     count = 0
-    for line in text.splitlines():
-        s = line.strip()
-        if not s:
-            continue
-        try:
-            rec = json.loads(s)
-        except (json.JSONDecodeError, ValueError):
-            continue
-        if not isinstance(rec, dict):
-            continue
+    for rec in records:
         if _correction_slug(rec.get("project_path")) not in _aliases_for(pj_slug):
             continue
         if last_evolve_at is not None:
@@ -290,7 +438,10 @@ def new_corrections_by_pj(
 
 
 def count_unattributed_corrections(
-    corrections_path: Path, *, since: Optional[str] = None
+    corrections_path: Optional[Path] = None,
+    *,
+    since: Optional[str] = None,
+    records: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """``project_path`` 欠落で PJ 帰属不能な corrections を source 別に数える（#91）。
 
@@ -307,26 +458,21 @@ def count_unattributed_corrections(
 
     返り値: ``{"total": int, "by_source": {source: count}}``。``source`` 欠落は ``(unknown)``。
     ファイル不在 / 読込失敗 → ``{"total": 0, "by_source": {}}``（advisory ゆえ落とさない）。
+    読取不能・壊れた行の可視化は ``corrections_read_health``（#533）。
+
+    ``records``（既に read 済みのレコード列）を渡すと再 read しない（#538 round2 [Must]1・
+    ``new_corrections_by_pj`` と同じ理由）。未指定時は ``corrections_path`` から自前で read する
+    （後方互換）。
     """
     result: Dict[str, Any] = {"total": 0, "by_source": {}}
-    path = Path(corrections_path)
-    if not path.exists():
-        return result
-    try:
-        text = path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return result
     by_source: Dict[str, int] = result["by_source"]
-    for line in text.splitlines():
-        s = line.strip()
-        if not s:
-            continue
-        try:
-            rec = json.loads(s)
-        except (json.JSONDecodeError, ValueError):
-            continue
-        if not isinstance(rec, dict):
-            continue
+    if records is None:
+        if corrections_path is None:
+            raise TypeError(
+                "count_unattributed_corrections には corrections_path か records のどちらかが必要"
+            )
+        records, _health = read_corrections_records_with_health(Path(corrections_path))
+    for rec in records:
         if _correction_slug(rec.get("project_path")):
             continue  # 帰属可能なものは対象外
         if since is not None and not _ts_strictly_after(rec.get("timestamp"), since):
@@ -360,6 +506,7 @@ def collect_untracked_materials(
     corrections_path: Path,
     dir_map: Dict[str, str],
     correction_backlog_counts: Optional[Dict[str, int]] = None,
+    corr_records: Optional[List[Dict[str, Any]]] = None,
 ) -> List[Dict[str, Any]]:
     """material（weak/corr）を持つが queue 母集団（tracked）に居ない PJ を advisory 列挙する（#86）。
 
@@ -376,6 +523,12 @@ def collect_untracked_materials(
     対象 slug について ``weak_unprocessed_by_pj`` + ``new_corrections_by_pj``
     （untracked は last_evolve state 無し＝全件）を集計し、``material_count >= threshold``
     または ``correction_backlog > 0`` のものを返す。在庫は material_count に加算しない。
+
+    ``corr_records``（``read_corrections_records_with_health`` が既に返した有効レコード列）を
+    渡すと corrections.jsonl を再 read しない（#538 round3 [Must]1 — ``build_queue_result`` が
+    先に読んだ1回の snapshot を使い回さないと、probe/backlog 集計とこの collector の間で別読みに
+    なり、read 結果が変化したときに snapshot 不一致が起きる）。未指定時は従来通り
+    ``corrections_path`` から自前で read する（後方互換）。
 
     Returns:
         ``[{pj_slug, project_path, material_count, weak_unprocessed, new_corrections,
@@ -400,12 +553,17 @@ def collect_untracked_materials(
         seen.add(slug)
         candidates.append(slug)
 
+    # #538 round8: corr_records 未指定時の self-read は1回だけ行い（ループ内で slug ごとに
+    # 再読みしない）、new_corrections_by_pj には常に records を渡す（同関数は records 必須の
+    # 純集計になった。独立 read 経路は本関数のこの1箇所に集約する）。
+    records = corr_records if corr_records is not None else read_corrections_records_with_health(
+        corrections_path
+    ).records
+
     out: List[Dict[str, Any]] = []
     for slug in candidates:
         weak = weak_unprocessed_by_pj(slug, weak_signals_path=weak_signals_path)
-        corr = new_corrections_by_pj(
-            slug, last_evolve_at=None, corrections_path=corrections_path
-        )
+        corr = new_corrections_by_pj(slug, last_evolve_at=None, records=records)
         count = weak + corr
         backlog = int(backlog_counts.get(slug, 0) or 0)
         if count < threshold and backlog <= 0:
@@ -433,6 +591,7 @@ def collect_phantom_materials(
     corrections_path: Path,
     dir_map: Dict[str, str],
     correction_backlog_counts: Optional[Dict[str, int]] = None,
+    corr_records: Optional[List[Dict[str, Any]]] = None,
 ) -> List[Dict[str, Any]]:
     """閾値以上 material または修正在庫を持ち、実 dir に解決できない slug を列挙する（#88/#515）。
 
@@ -445,6 +604,9 @@ def collect_phantom_materials(
     ④ material_count（weak + corr・untracked は全件）が threshold 以上、または
     correction_backlog が1件以上。material_count 降順
     （同数は pj_slug 昇順）で返す。waiting には昇格させない（temp slug は意図的に除外）。
+
+    ``corr_records`` は ``collect_untracked_materials`` と同じ契約（渡すと再 read しない・
+    #538 round3 [Must]1）。
 
     Returns:
         ``[{pj_slug, material_count, weak_unprocessed, new_corrections, correction_backlog}]``（project_path は
@@ -468,12 +630,16 @@ def collect_phantom_materials(
         seen.add(slug)
         candidates.append(slug)
 
+    # #538 round8: corr_records 未指定時の self-read は1回だけ行う（new_corrections_by_pj は
+    # records 必須の純集計になったため、独立 read 経路は本関数のこの1箇所に集約する）。
+    records = corr_records if corr_records is not None else read_corrections_records_with_health(
+        corrections_path
+    ).records
+
     out: List[Dict[str, Any]] = []
     for slug in candidates:
         weak = weak_unprocessed_by_pj(slug, weak_signals_path=weak_signals_path)
-        corr = new_corrections_by_pj(
-            slug, last_evolve_at=None, corrections_path=corrections_path
-        )
+        corr = new_corrections_by_pj(slug, last_evolve_at=None, records=records)
         count = weak + corr
         backlog = int(backlog_counts.get(slug, 0) or 0)
         if count < threshold and backlog <= 0:

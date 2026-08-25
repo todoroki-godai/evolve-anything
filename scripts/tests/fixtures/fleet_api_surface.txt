@@ -15,6 +15,7 @@ STATUS_STALE = 'STALE'
 AccountMismatchError (no signature)
 AuditResult(status: 'str', env_score: 'float | None' = None, phase: 'str | None' = None, growth_level: 'int | None' = None, latest_audit: 'datetime | None' = None, message: 'str' = '', issues_summary: 'IssuesSummary | None' = None) -> None
 CodexUsageResult(by_project: 'dict[str, dict]' = <factory>, status: 'str' = 'ok', error: 'str | None' = None) -> None
+CorrectionsSnapshot(records: List[Dict[str, Any]], health: Dict[str, Any])
 Fact(file_path: 'Path', name: 'str', description: 'str', body: 'str', parse_ok: 'bool', malformed_frontmatter: 'bool' = False, links: 'list[str]' = <factory>, is_stale: 'bool' = False, is_superseded: 'bool' = False) -> None
 FleetRow(pj_name: 'str', status: 'str', env_score: 'float | None' = None, growth_level: 'int | None' = None, phase: 'str | None' = None, latest_audit: 'datetime | None' = None, audit_status: 'str' = 'OK', message: 'str' = '', issues_summary: 'IssuesSummary | None' = None, subagents_30d: 'int' = 0, tokens_30d: 'int | None' = None, cache_hit_pct: 'float | None' = None, cache_reuse_factor: 'float | None' = None) -> None
 GitCommandError(cmd: 'List[str]', returncode: 'int', stderr: 'str')
@@ -33,8 +34,8 @@ build_queue_result(*, pj_slugs: 'List[str]', threshold: 'int', weak_signals_path
 classify_project(pj_path: 'Path', settings_path: 'Path | None' = None, auto_memory_root: 'Path | None' = None, stale_days: 'int' = 30, now: 'datetime | None' = None) -> 'str'
 collect_codex_usage(db_path: 'Path | None' = None, *, window_days: 'int' = 30, now: 'datetime | None' = None) -> 'CodexUsageResult'
 collect_fleet_status(root: 'Path | None' = None, settings_path: 'Path | None' = None, auto_memory_root: 'Path | None' = None, data_dir: 'Path | None' = None, timeout: 'float' = 30.0, max_workers: 'int' = 2, projects: 'list[Path] | None' = None) -> 'list[FleetRow]'
-collect_phantom_materials(*, material_slugs: 'List[str]', tracked_slugs: 'set', threshold: 'int', weak_signals_path: 'Optional[Path]', corrections_path: 'Path', dir_map: 'Dict[str, str]', correction_backlog_counts: 'Optional[Dict[str, int]]' = None) -> 'List[Dict[str, Any]]'
-collect_untracked_materials(*, material_slugs: 'List[str]', tracked_slugs: 'set', threshold: 'int', weak_signals_path: 'Optional[Path]', corrections_path: 'Path', dir_map: 'Dict[str, str]', correction_backlog_counts: 'Optional[Dict[str, int]]' = None) -> 'List[Dict[str, Any]]'
+collect_phantom_materials(*, material_slugs: 'List[str]', tracked_slugs: 'set', threshold: 'int', weak_signals_path: 'Optional[Path]', corrections_path: 'Path', dir_map: 'Dict[str, str]', correction_backlog_counts: 'Optional[Dict[str, int]]' = None, corr_records: 'Optional[List[Dict[str, Any]]]' = None) -> 'List[Dict[str, Any]]'
+collect_untracked_materials(*, material_slugs: 'List[str]', tracked_slugs: 'set', threshold: 'int', weak_signals_path: 'Optional[Path]', corrections_path: 'Path', dir_map: 'Dict[str, str]', correction_backlog_counts: 'Optional[Dict[str, int]]' = None, corr_records: 'Optional[List[Dict[str, Any]]]' = None) -> 'List[Dict[str, Any]]'
 commit_paths(worktree: 'Path', message: 'str', paths: 'List[str]', *, run: 'RunFunc' = <function _install_llm_guard.<locals>._guarded_run at 0x...>) -> 'None'
 commits_ahead(worktree: 'Path', base_branch: 'str', *, run: 'RunFunc' = <function _install_llm_guard.<locals>._guarded_run at 0x...>) -> 'int'
 confirm_batch(*, yes: 'bool', input_func: 'Callable[[str], str]' = <built-in function input>) -> 'bool'
@@ -59,7 +60,7 @@ format_status_table(rows: 'list[FleetRow]', now: 'datetime | None' = None) -> 's
 has_uncommitted_changes(worktree: 'Path', *, paths: 'Optional[List[str]]' = None, run: 'RunFunc' = <function _install_llm_guard.<locals>._guarded_run at 0x...>) -> 'bool'
 load_proposals_report(path: 'Path') -> 'Dict[str, Any]'
 main(argv: 'list[str] | None' = None) -> 'int'
-new_corrections_by_pj(pj_slug: 'str', *, last_evolve_at: 'Optional[str]' = None, corrections_path: 'Path') -> 'int'
+new_corrections_by_pj(pj_slug: 'str', *, records: 'List[Dict[str, Any]]', last_evolve_at: 'Optional[str]' = None) -> 'int'
 parse_active_gh_account(gh_auth_status_output: 'str') -> 'Optional[str]'
 parse_fact_file(path: 'Path') -> 'Fact'
 persist_last_evolve(pj_slug: 'str', *, ts: 'Optional[str]' = None, dry_run: 'bool' = False) -> 'Dict[str, Any]'
@@ -84,3 +85,162 @@ weak_unprocessed_by_pj(pj_slug: 'str', *, weak_signals_path: 'Optional[Path]' = 
 worktree_path(project_path: 'Path', executor: 'str', task_id: 'str', *, worktree_root: 'Path' = PosixPath('/private/tmp'), random_suffix: 'Optional[str]' = None) -> 'Path'
 write_fleet_run(rows: 'list[FleetRow]', fleet_runs_dir: 'Path | None' = None, now: 'datetime | None' = None) -> 'Path'
 write_reports(report: 'Dict[str, Any]', *, data_dir: 'Path', date_str: 'Optional[str]' = None) -> "'tuple[Path, Path]'"
+
+# fleet public submodule function / class signatures
+fleet.audit_runner.AuditResult(status: 'str', env_score: 'float | None' = None, phase: 'str | None' = None, growth_level: 'int | None' = None, latest_audit: 'datetime | None' = None, message: 'str' = '', issues_summary: 'IssuesSummary | None' = None) -> None
+fleet.audit_runner.IssuesSummary(line_violations: 'int' = 0, hardcoded_values: 'int' = 0, potential_duplicates: 'int' = 0, corrections_unprocessed: 'int' = 0, skill_quality_degraded_count: 'int' = 0) -> None
+fleet.audit_runner.run_audit_subprocess(pj_path: 'Path', timeout: 'float' = 10.0, data_dir: 'Path | None' = None, rl_audit_bin: 'Path | None' = None) -> 'AuditResult'
+fleet.cli.main(argv: 'list[str] | None' = None) -> 'int'
+fleet.cli_pr.run_pr_finish_command(args: 'argparse.Namespace') -> 'int'
+fleet.cli_pr.run_pr_start_command(args: 'argparse.Namespace') -> 'int'
+fleet.cli_propose.run_propose_command(args: 'argparse.Namespace') -> 'int'
+fleet.codex_usage.CodexUsageResult(by_project: 'dict[str, dict]' = <factory>, status: 'str' = 'ok', error: 'str | None' = None) -> None
+fleet.codex_usage.collect_codex_usage(db_path: 'Path | None' = None, *, window_days: 'int' = 30, now: 'datetime | None' = None) -> 'CodexUsageResult'
+fleet.collectors.FleetRow(pj_name: 'str', status: 'str', env_score: 'float | None' = None, growth_level: 'int | None' = None, phase: 'str | None' = None, latest_audit: 'datetime | None' = None, audit_status: 'str' = 'OK', message: 'str' = '', issues_summary: 'IssuesSummary | None' = None, subagents_30d: 'int' = 0, tokens_30d: 'int | None' = None, cache_hit_pct: 'float | None' = None, cache_reuse_factor: 'float | None' = None) -> None
+fleet.collectors.aggregate_sessions_by_project(*, window_days: 'int' = 30, now: 'datetime | None' = None, canonical: 'Path | None' = None, since: 'datetime | None' = None) -> 'dict[str, int]'
+fleet.collectors.aggregate_subagents_by_project(subagents_path: 'Path | None' = None, *, window_days: 'int' = 30, now: 'datetime | None' = None) -> 'dict[str, int]'
+fleet.collectors.collect_fleet_status(root: 'Path | None' = None, settings_path: 'Path | None' = None, auto_memory_root: 'Path | None' = None, data_dir: 'Path | None' = None, timeout: 'float' = 30.0, max_workers: 'int' = 2, projects: 'list[Path] | None' = None) -> 'list[FleetRow]'
+fleet.collectors.detect_equal_issue_counts(rows: 'list[FleetRow]') -> 'list[dict]'
+fleet.collectors.write_fleet_run(rows: 'list[FleetRow]', fleet_runs_dir: 'Path | None' = None, now: 'datetime | None' = None) -> 'Path'
+fleet.detect.detect_all_projects(*, projects_root: 'Optional[Path]' = None, store_path: 'Optional[Path]' = None, errors_path: 'Optional[Path]' = None, utterances: 'Optional[List[Dict[str, Any]]]' = None, max_transcripts: 'int' = 60, dry_run: 'bool' = False, only: 'Optional[List[str]]' = None, fs_root: 'Optional[Path]' = None, progress: 'bool' = True) -> 'Dict[str, Any]'
+fleet.detect.detect_exit_code(result: 'Dict[str, Any]') -> 'int'
+fleet.formatters.format_codex_usage_section(result: "'CodexUsageResult'", now: 'datetime | None' = None) -> 'str'
+fleet.formatters.format_queue_table(result: 'dict') -> 'str'
+fleet.formatters.format_status_json(rows: 'list[FleetRow]') -> 'str'
+fleet.formatters.format_status_table(rows: 'list[FleetRow]', now: 'datetime | None' = None) -> 'str'
+fleet.plugin_freshness.PluginFreshness(name: 'str', marketplace: 'str', installed_version: 'str', latest_version: 'str | None', status: 'str', detail: 'str' = '', disabled: 'bool' = False) -> None
+fleet.plugin_freshness.check_plugin_freshness(plugins_root: 'Path | None' = None, settings_path: 'Path | None' = None) -> 'list[PluginFreshness]'
+fleet.plugin_freshness.format_plugin_freshness_table(rows: 'list[PluginFreshness]', as_json: 'bool' = False) -> 'str'
+fleet.pr.AccountMismatchError (no signature)
+fleet.pr.GitCommandError(cmd: 'List[str]', returncode: 'int', stderr: 'str')
+fleet.pr.ProposalTargetError (no signature)
+fleet.pr.WorktreeError (no signature)
+fleet.pr.active_gh_account(*, run: 'RunFunc' = <function _install_llm_guard.<locals>._guarded_run at 0x...>) -> 'Optional[str]'
+fleet.pr.branch_exists(project_path: 'Path', branch: 'str', *, run: 'RunFunc' = <function _install_llm_guard.<locals>._guarded_run at 0x...>) -> 'bool'
+fleet.pr.branch_name(executor: 'str', task_id: 'str') -> 'str'
+fleet.pr.build_pr_body(entry: 'Dict[str, Any]', *, report: 'Dict[str, Any]', diff_stat_text: 'str') -> 'str'
+fleet.pr.build_pr_title(pj_slug: 'str', date_str: 'str') -> 'str'
+fleet.pr.commit_paths(worktree: 'Path', message: 'str', paths: 'List[str]', *, run: 'RunFunc' = <function _install_llm_guard.<locals>._guarded_run at 0x...>) -> 'None'
+fleet.pr.commits_ahead(worktree: 'Path', base_branch: 'str', *, run: 'RunFunc' = <function _install_llm_guard.<locals>._guarded_run at 0x...>) -> 'int'
+fleet.pr.create_pr(worktree: 'Path', *, title: 'str', body: 'str', base: 'str', draft: 'bool' = False, run: 'RunFunc' = <function _install_llm_guard.<locals>._guarded_run at 0x...>) -> 'Dict[str, Any]'
+fleet.pr.create_worktree(project_path: 'Path', task_id: 'str', *, executor: 'str', worktree_root: 'Path' = PosixPath('/private/tmp'), run: 'RunFunc' = <function _install_llm_guard.<locals>._guarded_run at 0x...>) -> 'Dict[str, Any]'
+fleet.pr.current_branch(repo_path: 'Path', *, run: 'RunFunc' = <function _install_llm_guard.<locals>._guarded_run at 0x...>) -> 'str'
+fleet.pr.default_branch(repo_path: 'Path', *, run: 'RunFunc' = <function _install_llm_guard.<locals>._guarded_run at 0x...>) -> 'str'
+fleet.pr.diff_stat(worktree: 'Path', base_branch: 'str', *, run: 'RunFunc' = <function _install_llm_guard.<locals>._guarded_run at 0x...>) -> 'str'
+fleet.pr.expected_account(owner: 'str') -> 'str'
+fleet.pr.find_latest_proposals_json(data_dir: 'Path') -> 'Optional[Path]'
+fleet.pr.find_pj_entry(report: 'Dict[str, Any]', pj_slug: 'str') -> 'Optional[Dict[str, Any]]'
+fleet.pr.has_uncommitted_changes(worktree: 'Path', *, paths: 'Optional[List[str]]' = None, run: 'RunFunc' = <function _install_llm_guard.<locals>._guarded_run at 0x...>) -> 'bool'
+fleet.pr.load_proposals_report(path: 'Path') -> 'Dict[str, Any]'
+fleet.pr.parse_active_gh_account(gh_auth_status_output: 'str') -> 'Optional[str]'
+fleet.pr.push_branch(worktree: 'Path', branch: 'str', *, run: 'RunFunc' = <function _install_llm_guard.<locals>._guarded_run at 0x...>) -> 'None'
+fleet.pr.resolve_target(data_dir: 'Path', pj_slug: 'str') -> "'tuple[Dict[str, Any], Dict[str, Any], Path]'"
+fleet.pr.resolve_worktree(project_path: 'Path', *, executor: 'str', task_id: 'str', run: 'RunFunc' = <function _install_llm_guard.<locals>._guarded_run at 0x...>) -> 'Path'
+fleet.pr.today_str() -> 'str'
+fleet.pr.touched_skill_names(diff_stat_text: 'str') -> 'List[str]'
+fleet.pr.validate_branch(worktree: 'Path', executor: 'str', task_id: 'str', *, run: 'RunFunc' = <function _install_llm_guard.<locals>._guarded_run at 0x...>) -> 'str'
+fleet.pr.validate_executor(executor: 'str') -> 'str'
+fleet.pr.validate_task_id(task_id: 'str') -> 'str'
+fleet.pr.verify_push_account(project_path: 'Path', *, run: 'RunFunc' = <function _install_llm_guard.<locals>._guarded_run at 0x...>) -> 'str'
+fleet.pr.worktree_path(project_path: 'Path', executor: 'str', task_id: 'str', *, worktree_root: 'Path' = PosixPath('/private/tmp'), random_suffix: 'Optional[str]' = None) -> 'Path'
+fleet.project_loader.MemoryDir(memory_dir: Path, pj_display: str)
+fleet.project_loader.classify_project(pj_path: 'Path', settings_path: 'Path | None' = None, auto_memory_root: 'Path | None' = None, stale_days: 'int' = 30, now: 'datetime | None' = None) -> 'str'
+fleet.project_loader.enumerate_memory_dirs(projects_root: 'Path | None' = None) -> 'list[MemoryDir]'
+fleet.project_loader.enumerate_projects(root: 'Path') -> 'list[Path]'
+fleet.project_loader.resolve_auto_memory_dir(pj_path: 'Path') -> 'Path'
+fleet.propose.build_batch_report(batch: 'List[Dict[str, Any]]', *, generated_at: 'str', cost: 'Dict[str, Any]') -> 'Dict[str, Any]'
+fleet.propose.confirm_batch(*, yes: 'bool', input_func: 'Callable[[str], str]' = <built-in function input>) -> 'bool'
+fleet.propose.estimate_cost(targets: 'List[Dict[str, Any]]') -> 'Dict[str, Any]'
+fleet.propose.filter_previously_rejected_candidates(result: 'Dict[str, Any]', slug: 'str', *, history: 'Optional[List[Dict[str, Any]]]' = None) -> 'Dict[str, Any]'
+fleet.propose.format_cost_confirmation(cost: 'Dict[str, Any]') -> 'str'
+fleet.propose.render_cli_summary(report: 'Dict[str, Any]', md_path: 'Path', json_path: 'Path') -> 'str'
+fleet.propose.render_markdown_report(report: 'Dict[str, Any]') -> 'str'
+fleet.propose.run_propose_batch(targets: 'List[Dict[str, Any]]', *, run_evolve_fn: 'Optional[Callable[..., Dict[str, Any]]]' = None) -> 'List[Dict[str, Any]]'
+fleet.propose.select_targets(queue_data: 'Optional[Dict[str, Any]]', *, max_pj: 'int') -> 'List[Dict[str, Any]]'
+fleet.propose.summarize_pj_result(result: 'Dict[str, Any]', *, suppressed_rejected_count: 'int' = 0) -> 'Dict[str, Any]'
+fleet.propose.write_reports(report: 'Dict[str, Any]', *, data_dir: 'Path', date_str: 'Optional[str]' = None) -> "'tuple[Path, Path]'"
+fleet.queue.build_queue_result(*, pj_slugs: 'List[str]', threshold: 'int', weak_signals_path: 'Optional[Path]', corrections_path: 'Path', last_evolve_map: 'Dict[str, str]', activity_map: 'Dict[str, Dict[str, int]]', generated_at: 'str', pj_paths: 'Optional[Dict[str, str]]' = None, material_slugs: 'Optional[List[str]]' = None, untracked_dir_map: 'Optional[Dict[str, str]]' = None) -> 'Dict[str, Any]'
+fleet.queue.fold_activity_counts(slug: 'str', subagent_counts: 'Dict[str, int]', session_counts: 'Dict[str, int]') -> 'Dict[str, int]'
+fleet.queue.select_evolve_queue(pj_materials: 'List[Dict[str, Any]]', threshold: 'int') -> 'List[Dict[str, Any]]'
+fleet.queue_materials.CorrectionsSnapshot(records: List[Dict[str, Any]], health: Dict[str, Any])
+fleet.queue_materials.bootstrap_consumed_by_pj(pj_slug: 'str', *, weak_signals_path: 'Optional[Path]' = None, marker_base: 'Optional[Path]' = None) -> 'int'
+fleet.queue_materials.collect_phantom_materials(*, material_slugs: 'List[str]', tracked_slugs: 'set', threshold: 'int', weak_signals_path: 'Optional[Path]', corrections_path: 'Path', dir_map: 'Dict[str, str]', correction_backlog_counts: 'Optional[Dict[str, int]]' = None, corr_records: 'Optional[List[Dict[str, Any]]]' = None) -> 'List[Dict[str, Any]]'
+fleet.queue_materials.collect_untracked_materials(*, material_slugs: 'List[str]', tracked_slugs: 'set', threshold: 'int', weak_signals_path: 'Optional[Path]', corrections_path: 'Path', dir_map: 'Dict[str, str]', correction_backlog_counts: 'Optional[Dict[str, int]]' = None, corr_records: 'Optional[List[Dict[str, Any]]]' = None) -> 'List[Dict[str, Any]]'
+fleet.queue_materials.corrections_read_health(corrections_path: 'Path') -> 'Dict[str, Any]'
+fleet.queue_materials.count_unattributed_corrections(corrections_path: 'Optional[Path]' = None, *, since: 'Optional[str]' = None, records: 'Optional[List[Dict[str, Any]]]' = None) -> 'Dict[str, Any]'
+fleet.queue_materials.new_corrections_by_pj(pj_slug: 'str', *, records: 'List[Dict[str, Any]]', last_evolve_at: 'Optional[str]' = None) -> 'int'
+fleet.queue_materials.read_corrections_records_with_health(corrections_path: 'Path') -> 'CorrectionsSnapshot'
+fleet.queue_materials.weak_content_poor_by_pj(pj_slug: 'str', *, weak_signals_path: 'Optional[Path]' = None, marker_base: 'Optional[Path]' = None) -> 'int'
+fleet.queue_materials.weak_machinery_by_pj(pj_slug: 'str', *, weak_signals_path: 'Optional[Path]' = None, marker_base: 'Optional[Path]' = None) -> 'int'
+fleet.queue_materials.weak_unprocessed_by_pj(pj_slug: 'str', *, weak_signals_path: 'Optional[Path]' = None, marker_base: 'Optional[Path]' = None) -> 'int'
+fleet.queue_state.persist_last_evolve(pj_slug: 'str', *, ts: 'Optional[str]' = None, dry_run: 'bool' = False) -> 'Dict[str, Any]'
+fleet.queue_state.read_last_evolve(*, data_dir: 'Optional[Path]' = None) -> 'Dict[str, str]'
+fleet.queue_verify.attach_verify_pending(materials: 'List[Dict[str, Any]]', *, canonicalize: 'Callable[[str], str]') -> 'None'
+fleet.queue_verify.compute_queue_status(*, queue: 'List[Dict[str, Any]]', untracked_with_material: 'List[Dict[str, Any]]', skipped_dead: 'List[Dict[str, Any]]', skipped_phantom: 'List[Dict[str, Any]]', unattributed_total: 'int', corrections_read_health: 'Optional[Dict[str, Any]]' = None) -> 'Dict[str, str]'
+fleet.queue_verify.compute_verify_pending(*, advisory_records: 'List[Dict[str, Any]]', optimize_records: 'List[Dict[str, Any]]', exposure_sessions: 'int', now: 'Optional[datetime]' = None) -> 'Dict[str, Any]'
+fleet.queue_verify.format_corrections_read_health_note(corrections_read_health: 'Optional[Dict[str, Any]]') -> 'Optional[str]'
+fleet.queue_verify.format_verify_pending_promoted_reason(vp: 'Optional[Dict[str, Any]]', *, material_count: 'int', threshold: 'int') -> 'str'
+fleet.queue_verify.format_verify_pending_suffix(vp: 'Optional[Dict[str, Any]]') -> 'str'
+fleet.queue_verify.latest_accept_event(advisory_records: 'List[Dict[str, Any]]', optimize_records: 'List[Dict[str, Any]]') -> 'Optional[tuple]'
+fleet.queue_verify.verify_pending_by_pj(pj_slug: 'str', *, advisory_records: 'Optional[List[Dict[str, Any]]]' = None) -> 'Dict[str, Any]'
+fleet.recall.Fact(file_path: 'Path', name: 'str', description: 'str', body: 'str', parse_ok: 'bool', malformed_frontmatter: 'bool' = False, links: 'list[str]' = <factory>, is_stale: 'bool' = False, is_superseded: 'bool' = False) -> None
+fleet.recall.RecallHit(pj_display: 'str', file_path: 'Path', score: 'float', snippet: 'str', is_index: 'bool', is_linked: 'bool' = False, linked: "list['RecallHit']" = <factory>) -> None
+fleet.recall.format_hits(hits: 'list[RecallHit]', *, as_json: 'bool') -> 'str'
+fleet.recall.parse_fact_file(path: 'Path') -> 'Fact'
+fleet.recall.recall(query: 'str', *, limit: 'int' = 10, projects_root: 'Path | None' = None) -> 'list[RecallHit]'
+fleet.recall.reinforce_recall_hits(hits: 'list[RecallHit]') -> 'None'
+
+# fleet public class method / property signatures
+AccountMismatchError.add_note(self, note, /)
+AccountMismatchError.args (getset_descriptor)
+AccountMismatchError.with_traceback(self, tb, /)
+AuditResult.env_score = None
+AuditResult.growth_level = None
+AuditResult.issues_summary = None
+AuditResult.latest_audit = None
+AuditResult.message = ''
+AuditResult.phase = None
+CodexUsageResult.error = None
+CodexUsageResult.status = 'ok'
+CorrectionsSnapshot.__iter__(self, /)
+CorrectionsSnapshot.count(self, value, /)
+CorrectionsSnapshot.health (_tuplegetter)
+CorrectionsSnapshot.index(self, value, start=0, stop=9223372036854775807, /)
+CorrectionsSnapshot.records (_tuplegetter)
+Fact.is_stale = False
+Fact.is_superseded = False
+Fact.malformed_frontmatter = False
+FleetRow.audit_status = 'OK'
+FleetRow.cache_hit_pct = None
+FleetRow.cache_reuse_factor = None
+FleetRow.env_score = None
+FleetRow.growth_level = None
+FleetRow.issues_summary = None
+FleetRow.latest_audit = None
+FleetRow.message = ''
+FleetRow.phase = None
+FleetRow.subagents_30d = 0
+FleetRow.tokens_30d = None
+GitCommandError.add_note(self, note, /)
+GitCommandError.args (getset_descriptor)
+GitCommandError.with_traceback(self, tb, /)
+IssuesSummary.corrections_unprocessed = 0
+IssuesSummary.hardcoded_values = 0
+IssuesSummary.line_violations = 0
+IssuesSummary.potential_duplicates = 0
+IssuesSummary.skill_quality_degraded_count = 0
+IssuesSummary.total(self) -> 'int'
+MemoryDir.__iter__(self, /)
+MemoryDir.count(self, value, /)
+MemoryDir.index(self, value, start=0, stop=9223372036854775807, /)
+MemoryDir.memory_dir (_tuplegetter)
+MemoryDir.pj_display (_tuplegetter)
+PluginFreshness.detail = ''
+PluginFreshness.disabled = False
+ProposalTargetError.add_note(self, note, /)
+ProposalTargetError.args (getset_descriptor)
+ProposalTargetError.with_traceback(self, tb, /)
+RecallHit.is_linked = False
+WorktreeError.add_note(self, note, /)
+WorktreeError.args (getset_descriptor)
+WorktreeError.with_traceback(self, tb, /)

