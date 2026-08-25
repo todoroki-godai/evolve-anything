@@ -8,18 +8,303 @@ Test Plan C-2 の追加変異（#5〜#9）を実際に適用して赤くなる�
 """
 from __future__ import annotations
 
+import builtins
 import json
+import random
 import sys
+import unicodedata
 from datetime import date
 from pathlib import Path
+from typing import List, Tuple
 
 import pytest
+
+# #536 round6 I3/I6: pytester fixture（pytest 内蔵プラグイン）を使い、skipif
+# decorator の配線そのものを統合テストする。round7 codex Nit: 下の1行の宣言は
+# 「このモジュールだけで有効化する」という記述が誤りだったため訂正する ──
+# `pytest_plugins` の登録先はモジュールでなく **pytest セッション全体**（pytest
+# 公式仕様上そう定義されている）。実際には `pytest.ini` の `addopts` へ
+# `-p pytester` を追加していないため、他の収集済みテストファイルも
+# `pytester` fixture を使える状態になる（副作用は無害＝pytester 自体は他の
+# テストの挙動に干渉しない標準プラグインだが、事実として本ファイル固有の設定
+# ではない）。
+pytest_plugins = ["pytester"]
 
 _SCRIPTS_DIR = Path(__file__).resolve().parent.parent
 if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
 import phase1_codex_probe as p  # noqa: E402
+
+
+# ─────────────────────────────────────────────────────────────────
+# real_home テスト用 skip ガード（#536 team-lead 追加確認・round5 で強化）
+#
+# real_home マーカーは root conftest の HOME 隔離を opt-out するだけで、対象
+# ディレクトリ（実 ~/.codex/sessions）の実在は保証しない。実在チェックを
+# 怠ると、実 Codex セッションが無い環境（CI ランナー・別ユーザーの開発機等）
+# では target_files=0 のまま _assert_stage_counts_plausible の下限チェック
+# （227件）に引っかかり、意味のある失敗ではなく「環境にデータが無い」だけの
+# ことで赤くなる。実測（HOME を実 ~/.codex を含まない一時ディレクトリへ
+# 差し替えて実行）で target_files=0 → 2/4 の real_home テストが実際に FAILED
+# することを確認済み。
+#
+# round5 codex Must I3: 旧版は「ディレクトリが存在するか」だけを見ていたため、
+# 空ディレクトリ（存在するが対象14日窓に JSONL が無い）では skip されず実行を
+# 選び、target_files=0 のまま下限チェックで落ちる（Should 指摘）。ディレクトリ
+# 存在ではなく、real_home テストが実際に使う固定14日窓（2026-08-23 起点・
+# run_probe の呼び出し引数と同一値）に対象 JSONL が実在するかで判定する。
+_REAL_CODEX_SESSIONS_ROOT = Path.home() / ".codex" / "sessions"
+_REAL_HOME_TEST_BASE_DATE = date(2026, 8, 23)
+_REAL_HOME_TEST_DAYS = 14
+
+
+def _real_codex_sessions_available(
+    sessions_root: Path = _REAL_CODEX_SESSIONS_ROOT,
+    base_date: date = _REAL_HOME_TEST_BASE_DATE,
+    days: int = _REAL_HOME_TEST_DAYS,
+) -> bool:
+    """real_home テストの skip 条件（#536 round5 Should）。
+
+    ディレクトリの存在だけでなく、固定14日窓に対象 JSONL が実在するかで判定
+    する。skip 条件を評価する関数として切り出すのは、real_home マーカーの
+    外（通常テスト実行）から直接検査できるようにするため（round5 codex Must
+    I3: 「条件自体を real_home でないテストから検証していないため『常に
+    skip』変異を検出できない」への対応）。
+    """
+    return len(p.iter_date_dir_files(sessions_root, base_date, days)) > 0
+
+
+def _real_home_skip_reason(
+    sessions_root: Path, base_date: date, days: int
+) -> str:
+    """skip 理由文字列の単一ソース（#536 round6 I8）。
+
+    real_home テスト自身が窓（sessions_root/base_date/days）を再度直書きすると、
+    guard 側の窓だけを更新したときに両者が乖離する（Should I8）。理由文字列も
+    含め _real_home_skip_marker を単一の呼び出し口とし、real_home テスト側は
+    個別の窓を書かず _REAL_CODEX_SESSIONS_ROOT / _REAL_HOME_TEST_BASE_DATE /
+    _REAL_HOME_TEST_DAYS のみを参照する。
+    """
+    return (
+        f"{sessions_root} の {base_date} 起点 "
+        f"{days}日窓に対象 JSONL がありません。real_home テストは実 "
+        "Codex セッションが存在する環境でのみ意味を持つ検査のため skip します（#536）。"
+    )
+
+
+def _real_home_skip_marker(
+    sessions_root: Path = _REAL_CODEX_SESSIONS_ROOT,
+    base_date: date = _REAL_HOME_TEST_BASE_DATE,
+    days: int = _REAL_HOME_TEST_DAYS,
+):
+    """skipif マーカーの構築を関数として切り出す（#536 round6 I3/I6）。
+
+    旧版は `_skip_if_no_real_codex_sessions = pytest.mark.skipif(not
+    _real_codex_sessions_available(), ...)` を import 時に固定評価しており、
+    「`_real_codex_sessions_available()` の**呼び出し配線**そのもの
+    （decorator 式が実際にこの関数の結果を使っているか）」を検査する手段が
+    無かった（round5 codex Must I3/I6: `not _real_codex_sessions_available()`
+    を `True` に固定する変異は、helper 単体テストや `-ra` 静的テストでは
+    検出できない）。関数化することで、
+    `test_real_home_skip_wiring_available_vs_unavailable`（pytester 経由）が
+    available=True/False それぞれで実際に pytest 収集させ、非skip/理由付きskip
+    になることを統合テストできる。
+    """
+    available = _real_codex_sessions_available(sessions_root, base_date, days)
+    reason = _real_home_skip_reason(sessions_root, base_date, days)
+    return pytest.mark.skipif(not available, reason=reason)
+
+
+# skip 理由は必ず出す（silence != evaluated）。黙って skip して緑に見せない。
+# pytest.ini の addopts に `-ra` を追加し、通常実行でも skip 理由サマリが
+# 必ず表示されるようにする（round5 codex Must I3。設定が消えたら
+# test_pytest_ini_reports_skip_reasons が検出する）。
+_skip_if_no_real_codex_sessions = _real_home_skip_marker()
+
+
+def test_real_codex_sessions_available_false_for_empty_window(tmp_path):
+    """壊す不変条件: I3 Should（skip 条件が『ディレクトリ存在』でなく『対象14日窓に
+    実在 JSONL があるか』で判定される）
+    ／通したい検査経路: _real_codex_sessions_available（real_home マーカーの外・
+    通常テストから直接検査）。
+    ディレクトリは存在するが対象日付ディレクトリが無いケースで False になる
+    ことを確認する。旧実装（`sessions_root.exists()` のみ）はこのケースで
+    True を返し本テストが落ちる。
+    """
+    root = tmp_path / "sessions"
+    root.mkdir()
+    assert _real_codex_sessions_available(root, date(2026, 8, 23), 14) is False
+
+
+def test_real_codex_sessions_available_true_when_window_has_files(tmp_path):
+    """陽性対照: 対象14日窓に JSONL が実在すれば True になる。"""
+    root = tmp_path / "sessions"
+    date_dir = root / "2026" / "08" / "20"
+    date_dir.mkdir(parents=True)
+    (date_dir / "f.jsonl").write_text("{}\n", encoding="utf-8")
+    assert _real_codex_sessions_available(root, date(2026, 8, 23), 14) is True
+
+
+def test_real_codex_sessions_available_ignores_files_outside_window(tmp_path):
+    """陰性試験: 窓外の日付ディレクトリに JSONL があっても対象窓が空なら False。
+    （分散・入替変異相当: ファイルは実在するが対象期間の外という状態を固定する）
+    """
+    root = tmp_path / "sessions"
+    out_of_window_dir = root / "2026" / "07" / "01"  # 基準日8/23から14日窓の外
+    out_of_window_dir.mkdir(parents=True)
+    (out_of_window_dir / "f.jsonl").write_text("{}\n", encoding="utf-8")
+    assert _real_codex_sessions_available(root, date(2026, 8, 23), 14) is False
+
+
+def test_pytest_ini_reports_skip_reasons():
+    """壊す不変条件: I3（skip 時の理由が通常実行で必ず表示される設定が外れて
+    いないこと。理由は reason= に保持されるだけでは表示されず、pytest.ini の
+    addopts に -ra/-rs が必要）
+    ／通したい検査経路: pytest.ini の addopts 行に -ra または -rs が含まれること。
+    この設定自体が将来消えても検出できるよう、静的にファイル内容を検査する
+    （実行結果の標準出力パースは pytest-xdist 経由の並列実行では取得しづらい
+    ため、設定の存在を直接検査する形にする）。
+    """
+    ini_path = _SCRIPTS_DIR.parent / "pytest.ini"
+    content = ini_path.read_text(encoding="utf-8")
+    addopts_line = next(
+        line for line in content.splitlines() if line.strip().startswith("addopts")
+    )
+    tokens = addopts_line.split()
+    assert "-ra" in tokens or "-rs" in tokens, (
+        f"pytest.ini の addopts に -ra/-rs がありません: {addopts_line!r}"
+    )
+
+
+def test_real_home_skip_wiring_available_vs_unavailable(pytester, tmp_path):
+    """壊す不変条件: `_real_home_skip_marker` 関数**単体**が available/unavailable
+    それぞれで正しい skipif を構築すること（marker 構築ロジックの unit test）。
+
+    round7 codex Must J3: 本テストは `_real_home_skip_marker` を呼んで作った
+    **合成テスト関数**を検査するだけで、実際の4つの real_home テストに
+    `_skip_if_no_real_codex_sessions` が配線されているかは見ていない。
+    `_skip_if_no_real_codex_sessions = pytest.mark.skipif(True, ...)` の
+    ように**変数の右辺そのもの**を変異させると、合成テストも実4テストも
+    **同じ**（変異後の）マーカー値を参照するため、本テストは変異を検出できない
+    （実測: 変異後も本テスト単体は緑のまま）。J3 を満たす検査は下の
+    `test_real_home_tests_actually_skip_or_run_based_on_home_availability`
+    （実ファイル・実テスト関数をサブプロセスで動かす）を参照。本テストは
+    marker 構築ロジックの unit test として補助的に残す。
+    ／通したい検査経路: `_real_home_skip_marker` を使って構築した decorator を
+    実際に pytest 収集にかけ、対象データがある窓では非skip・無い窓では
+    理由付き skip になることを、pytester（pytest 内蔵の統合テスト用 fixture）
+    経由で実測する。real_home マーカー自体は使わず（HOME 隔離と無関係な検査
+    のため）、`_real_home_skip_marker` が返す decorator の実際の効果だけを見る。
+    """
+    available_root = tmp_path / "available_sessions" / "2026" / "08" / "20"
+    available_root.mkdir(parents=True)
+    (available_root / "f.jsonl").write_text("{}\n", encoding="utf-8")
+    available_root_top = tmp_path / "available_sessions"
+
+    unavailable_root = tmp_path / "unavailable_sessions"
+    unavailable_root.mkdir()
+
+    tests_dir = str(_SCRIPTS_DIR / "tests")
+
+    pytester.makepyfile(
+        test_wiring_probe=f'''
+import sys
+sys.path.insert(0, {tests_dir!r})
+from datetime import date
+from pathlib import Path
+import test_phase1_codex_probe as t
+
+_marker_available = t._real_home_skip_marker(
+    Path({str(available_root_top)!r}), date(2026, 8, 20), 1
+)
+_marker_unavailable = t._real_home_skip_marker(
+    Path({str(unavailable_root)!r}), date(2026, 8, 20), 1
+)
+
+
+@_marker_available
+def test_when_available():
+    assert True
+
+
+@_marker_unavailable
+def test_when_unavailable():
+    assert True
+'''
+    )
+    result = pytester.runpytest("-v", "-ra")
+    result.assert_outcomes(passed=1, skipped=1)
+    result.stdout.fnmatch_lines(["*test_when_available PASSED*"])
+    result.stdout.fnmatch_lines(["*test_when_unavailable SKIPPED*"])
+    # 理由文字列も配線されていること（I3 の「理由が必ず出る」契約と同型の検査）。
+    result.stdout.fnmatch_lines([f"*{unavailable_root}*"])
+
+
+def test_real_home_tests_actually_skip_or_run_based_on_home_availability(pytester, monkeypatch, tmp_path):
+    """壊す不変条件: J3（decorator 配線検査は合成テストでなく**実際の** real_home
+    テスト関数に対して行う。`_skip_if_no_real_codex_sessions` の変数の右辺
+    そのものを変異させても検出できる）
+    ／通したい検査経路: このテストファイル自身（実ファイル）を `HOME` 環境変数を
+    差し替えたサブプロセスで実行し、実テスト関数
+    `test_run_probe_does_not_touch_production_stores`（4件の real_home テストの
+    代表・production store 資産の実在に依存しないため軽量）の skip/実行結果が
+    `HOME`（＝`_real_codex_sessions_available()` の既定評価対象）に追随することを
+    確認する。`HOME` はサブプロセスへ継承される（`monkeypatch.setenv` →
+    `pytester.runpytest_subprocess` は同一プロセスの `os.environ` を経由して
+    子プロセスへ伝播することを実測済み）。
+    """
+    avail_home = tmp_path / "avail_home"
+    date_dir = avail_home / ".codex" / "sessions" / "2026" / "08" / "23"
+    date_dir.mkdir(parents=True)
+    (date_dir / "f.jsonl").write_text(
+        json.dumps({
+            "timestamp": "2026-08-23T00:00:00.000Z", "type": "session_meta",
+            "payload": {"id": "s1", "cwd": "/x/evolve-anything"},
+        }) + "\n",
+        encoding="utf-8",
+    )
+
+    unavail_home = tmp_path / "unavail_home"
+    (unavail_home / ".codex" / "sessions").mkdir(parents=True)
+
+    target_test = f"{Path(__file__)}::test_run_probe_does_not_touch_production_stores"
+
+    monkeypatch.setenv("HOME", str(unavail_home))
+    result_unavail = pytester.runpytest_subprocess(target_test, "-p", "no:cacheprovider")
+    result_unavail.assert_outcomes(skipped=1)
+
+    monkeypatch.setenv("HOME", str(avail_home))
+    result_avail = pytester.runpytest_subprocess(target_test, "-p", "no:cacheprovider")
+    outcomes = result_avail.parseoutcomes()
+    assert outcomes.get("skipped", 0) == 0, (
+        f"対象 JSONL がある HOME でも実 real_home テストが skip されています: {outcomes}"
+    )
+    assert outcomes.get("passed", 0) == 1, f"available な HOME で実テストが pass していません: {outcomes}"
+
+
+# ─────────────────────────────────────────────────────────────────
+# #536 round6 codex Should → round7 codex Must J5/K1: PR #537 との複製の乖離検出
+#
+# round6 で追加した cross-PR 乖離検出テスト（#537 のファイルを git show で
+# read-only 参照し exec して比較）は round7 レビューで以下の欠陥を実測された:
+#   - J5: branch/path 不在・exec 例外・期待シンボル不在の**すべて**が skip
+#     扱いになり、CI が #537 のローカル branch を fetch しない通常構成では
+#     常に無検査のまま緑になる（検査が常態的に死ぬ）
+#   - K1: 「git show は read-only」でも、取得した Python コードを exec する
+#     行為自体は read-only ではない（#537 側にトップレベル副作用があれば
+#     このプロセスの環境が変更されてしまう）
+# 加えて、ユーザー判断で #537 は prompt_injection の reject を advisory へ
+# 降格し抑制ロジックを削除する予定（＝参照先の実装がこれから大きく変わる）。
+# J5 を正しく直すには固定 commit SHA の必須化・取得/exec/シンボル解決失敗を
+# fail 扱いにする必要があるが、それでも「exec による副作用」という K1 の
+# 構造的リスクは残る（安全にするには static 解析等の別実装が要る＝本 round の
+# スコープを超える）。#537 の設計自体が流動的な現時点でこの機構を保守する
+# コストとリスクが見合わないと判断し、乖離検出テストは本 PR から落とす
+# （team-lead 提示の選択肢を採用。理由は #536 round7 完了報告に記載）。
+# #537 マージ後、両実装が安定してから別 issue で「main 上の同一ファイルを
+# 通常 import する」形（branch 参照・exec 不要になる）で再検討すること。
+# ─────────────────────────────────────────────────────────────────
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -95,6 +380,389 @@ def test_all_nine_machinery_markers_detected():
     assert p.is_machinery_text("<not_a_marker>\nbody") is False
 
 
+# 実装定数 (p.MACHINERY_MARKERS) からも独立オラクル定数 (p._ORACLE_MACHINERY_MARKERS)
+# からも一切 import・反復しない、テスト自身がリテラルで書き下した第三の集合
+# （#536 round3 codex Must1）。これと両定数を突合することで、どちらか片方だけ
+# マーカーが削除・改変されても検出できる（両方が同時に同じ変異を受けない限り）。
+_INDEPENDENT_LITERAL_MACHINERY_MARKERS = frozenset(
+    {
+        "recommended_plugins",
+        "task-notification",
+        "command-name",
+        "local-command-stdout",
+        "command-message",
+        "skill",
+        "environment_context",
+        "user_action",
+        "image",
+    }
+)
+
+
+def test_machinery_marker_set_matches_independent_literal():
+    """壊す不変条件: item5（MACHINERY_MARKERS からの要素削除・改変を検出）
+    ／通したい検査経路: 実装定数・独立オラクル定数それぞれと、テストが直書きした
+    リテラル集合との完全一致比較。
+    ``p.MACHINERY_MARKERS`` から要素を1件削っても is_machinery_text 自体は
+    変更されないため実装内テストは通ってしまうが、本テストはリテラル集合との
+    差分として検出する。
+    """
+    assert p.MACHINERY_MARKERS == _INDEPENDENT_LITERAL_MACHINERY_MARKERS
+    assert p._ORACLE_MACHINERY_MARKERS == _INDEPENDENT_LITERAL_MACHINERY_MARKERS
+
+
+# #536 round6 codex Must I2: fixture に**文字列リテラルとして書かれた**大小文字
+# ゆれ（例: "SKILL"/"Skill"/"TaSk-NoTiFiCaTiOn"）は、何件追加しても「fixture に
+# 書かれた表記だけを正規化する辞書」への narrow 化変異を防げない（変異する側が
+# ソース中の全リテラルを列挙してハードコードできてしまうため）。ソースコード上に
+# 存在しない casing をテスト**実行時に**プログラム的に生成することで、辞書型の
+# narrow 化がこれを予測・列挙できないようにする。
+def _alternating_case(s: str) -> str:
+    """偶数インデックスを大文字・奇数インデックスを小文字にする決定論変換。"""
+    return "".join(ch.upper() if i % 2 == 0 else ch.lower() for i, ch in enumerate(s))
+
+
+def _alternating_case_offset(s: str) -> str:
+    """`_alternating_case` と位相を1つずらした版（もう1パターン生成する）。"""
+    return "".join(ch.lower() if i % 2 == 0 else ch.upper() for i, ch in enumerate(s))
+
+
+def test_case_fold_handles_generated_casing_not_hardcodable_literals():
+    """壊す不変条件: I2（casing 正規化を『fixture に書かれた特定表記だけを
+    正規化する辞書』へ実装・オラクル双方を同時に narrow 化する変異。fixture が
+    何表記固定しても、辞書がそれらを丸ごと列挙すれば通ってしまうため、
+    ソースに存在しない casing をテスト実行時に生成して当てる）
+    ／通したい検査経路: is_machinery_text と _oracle_is_machinery_text の両方。
+    9種マーカー全体 × 2種類の生成パターンを総当たりする。
+    """
+    for marker in sorted(p.MACHINERY_MARKERS):
+        for variant in (_alternating_case(marker), _alternating_case_offset(marker)):
+            text = f"<{variant}>x</{variant}>"
+            assert p.is_machinery_text(text) is True, text
+            assert p._oracle_is_machinery_text(text) is True, text
+
+
+def test_alternating_case_generates_casing_absent_from_source_literals():
+    """陽性対照 + fixture 健全性: 生成された casing 文字列が、このテストファイル
+    自身のソースコード中にリテラルとして存在しないことを確認する。存在すれば
+    「ハードコード辞書でも予測できてしまう」ため、この検査の前提が崩れる。
+    """
+    own_source = Path(__file__).read_text(encoding="utf-8")
+    for marker in sorted(p.MACHINERY_MARKERS):
+        for variant in (_alternating_case(marker), _alternating_case_offset(marker)):
+            if variant == marker or variant == marker.lower() or variant == marker.upper():
+                continue  # casing 変換が無効な語（記号のみ等）は対象外
+            assert variant not in own_source, (
+                f"生成した casing {variant!r} が既にソース中にリテラルとして存在します"
+                "（ハードコード辞書で予測可能になってしまう）"
+            )
+
+
+# #536 round7 codex Must J2: `_alternating_case`/`_alternating_case_offset` の
+# 2パターンだけでは「lower/upper/title/capitalize/alternating2種だけを許可する
+# 辞書」への narrow 化変異を検出できなかった（レビュー実測: この2パターンを
+# 含む有限個の**名前の付く変換**をちょうど許可リスト化されると、fixture が
+# 何パターン追加しても最終的に列挙され尽くす）。名前の付く変換ではなく、
+# 各文字ごとに独立にランダムな大文字/小文字を選ぶ生成方式にすることで、
+# 「既知の変換関数の出力」では実質的に説明できない casing を大量に作る
+# （固定 seed で決定論を維持）。
+_RANDOM_CASE_SEED = 536_07
+_RANDOM_CASE_SAMPLES_PER_MARKER = 30
+
+
+def _random_case_variants(s: str, count: int, seed: int) -> List[str]:
+    """`s` の各文字について独立にランダムへ大小文字を選ぶ variant を `count` 個
+    生成する（固定 seed で決定論。テスト実行のたびに同じ集合になる）。
+    """
+    rng = random.Random(seed)
+    return ["".join(rng.choice((ch.lower(), ch.upper())) for ch in s) for _ in range(count)]
+
+
+def test_case_fold_handles_random_per_character_casing_not_named_transforms():
+    """壊す不変条件: I2/J2（casing 正規化を『lower/upper/title/capitalize/
+    alternating の有限個の名前付き変換だけを許可する辞書』へ narrow 化する変異。
+    レビューはこの変異で `_alternating_case`/`_alternating_case_offset` の2パターン
+    しか検査していなかった round6 版テストが緑のまま生存することを実測した）
+    ／通したい検査経路: is_machinery_text と _oracle_is_machinery_text の両方。
+    9種マーカー × 30 サンプル（文字ごと独立ランダム選択）を総当たりする。
+    """
+    for marker in sorted(p.MACHINERY_MARKERS):
+        for variant in _random_case_variants(marker, _RANDOM_CASE_SAMPLES_PER_MARKER, _RANDOM_CASE_SEED):
+            text = f"<{variant}>x</{variant}>"
+            assert p.is_machinery_text(text) is True, text
+            assert p._oracle_is_machinery_text(text) is True, text
+
+
+def test_random_case_variants_are_not_named_transform_outputs():
+    """陽性対照 + fixture 健全性: 生成した variant の大半が、5つの代表的な
+    「名前の付く変換」（lower/upper/title/capitalize/`_alternating_case`）の
+    どれとも一致しないことを確認する（一致してしまうと narrow dict でも
+    偶然通ってしまい、この検査の前提＝『名前付き変換では説明できない』が崩れる）。
+    9種マーカー × 30 サンプルのうち、8割以上が非一致であることを閾値として置く
+    （マーカーが短い・記号主体だと偶然一致しうるため完全一致は要求しない）。
+    """
+    total = 0
+    non_named = 0
+    for marker in sorted(p.MACHINERY_MARKERS):
+        named_outputs = {
+            marker.lower(), marker.upper(), marker.title(), marker.capitalize(),
+            _alternating_case(marker), _alternating_case_offset(marker),
+        }
+        for variant in _random_case_variants(marker, _RANDOM_CASE_SAMPLES_PER_MARKER, _RANDOM_CASE_SEED):
+            total += 1
+            if variant not in named_outputs:
+                non_named += 1
+    assert total > 0
+    ratio = non_named / total
+    assert ratio >= 0.8, f"ランダム生成 casing のうち非named-transform率が低すぎます: {ratio:.2f}"
+
+
+# 入力テキスト → 期待生存可否 の fixture。ラベルは is_machinery_text /
+# _oracle_is_machinery_text のどちらも呼ばずに、人手でテキストを読んで判定した
+# 期待値（#536 round3 codex Must1「入力→期待生存発話の fixture を実装定数・
+# 判定関数から独立して定義する」）。
+_INDEPENDENT_SURVIVAL_FIXTURE: List[Tuple[str, bool]] = [
+    ("<recommended_plugins>\n一覧です", False),  # 9種の先頭
+    ("<task-notification>\n通知", False),
+    ("<command-name>ls</command-name>", False),
+    ("<local-command-stdout>...</local-command-stdout>", False),
+    ("<command-message>...</command-message>", False),
+    ("<skill>evolve</skill>", False),
+    ("<environment_context>...</environment_context>", False),
+    ("<user_action>click</user_action>", False),
+    ("<image>base64...</image>", False),
+    ("普通の発話です。よろしくお願いします。", True),  # 通常発話
+    ("<not_a_marker>本文", True),  # タグはあるが機構マーカーでない
+    ("普通の発話に <recommended_plugins> という単語が混じるだけ", True),  # 先頭でない
+    ("﻿  \n<skill>evolve</skill>", False),  # BOM・空白混入後の機構タグ
+    ("", True),  # 空文字は機構でない
+    ("<recommended_plugins", True),  # 閉じ `>` が無く head_tag 相当は不成立
+    # #536 round4 codex Must: 全角空白（U+3000）は Unicode カテゴリ Zs（空白）に
+    # 属し、strip_leading_noise の `.lstrip()`（round5 以降: Cf/Mn/Me 除去＋NFKC
+    # 正規化の後に適用。round6 で NFKC 追加。Nit: このコメントは round4 時点の
+    # 個別文字列挙設計を説明していたが現行実装と食い違っていたため #536 round6 で
+    # 現行仕様に合わせて訂正した）が対象とする表現差クラス。ASCII 空白・BOM・改行
+    # だけの fixture では、全角空白 strip 対応を削る変異（変異1）を検出できない。
+    ("　<skill>evolve</skill>", False),  # 全角空白のみ先頭に混入した機構タグ
+    ("　\n<recommended_plugins>\n一覧です", False),  # 全角空白+改行の複合
+    # #536 round4 codex Must: head_tag は `<tag ...>` の inner を空白分割し先頭語を
+    # タグ名とする（属性付きタグにも対応する契約）。属性なしタグしか無い fixture
+    # では、この分割対応を削る変異（変異2）を検出できない。
+    ('<skill name="evolve">x</skill>', False),  # 属性付き機構タグ（9種のうち1つを代表）
+    ('<command-name value="ls">x</command-name>', False),  # 属性付き・両チャネル共通マーカー
+    ('<not_a_marker attr="x">本文</not_a_marker>', True),  # 属性付きだが機構マーカーでない（陽性対照）
+    # #536 round5 team-lead 追加確認・自己構成の回避手段5: 属性を単引用符にした場合
+    # （二重引用符の fixture しか無いと、二重引用符専用の判定へ narrow 化する変異を
+    # 検出できない）。head_tag は引用符種別を一切見ない（inner.split()[0] で先頭
+    # トークンを取るだけ）契約なので、単引用符でも機構判定は揺らがない。
+    ("<skill name='evolve'>x</skill>", False),  # 属性が単引用符の機構タグ
+    # #536 チームリード追加確認: 自己閉じ形（スラッシュの前に空白が無い）は
+    # `inner.split()[0]` が "image/" のようにスラッシュ込みで返るため、
+    # 正規化を怠ると不一致になる表現差クラス（実データ ~/.codex/sessions 726
+    # ファイル・実候補 6467 件を実測し出現数0件を確認済みだが、迷ったら除外
+    # せず検査対象に倒す方針で対応する）。
+    ("<image/>", False),  # 自己閉じ・スラッシュ直前に空白なし
+    ("<skill/>", False),  # 同上
+    ("<image />", False),  # 自己閉じ・スラッシュ直前に空白あり（元々検出できていた形）
+    ("<not_a_marker/>", True),  # 自己閉じだが機構マーカーでない（陽性対照）
+    # タグ名の大小文字ゆれ。実データでは出現0件を実測済みだが、同じ理由で
+    # 正規化する（Codex 側の出力ゆれで大文字化される可能性を排除できないため）。
+    ("<SKILL>evolve</SKILL>", False),  # 全大文字
+    ("<Skill>evolve</Skill>", False),  # 先頭大文字
+    ("<COMMAND-NAME>ls</COMMAND-NAME>", False),  # 全大文字・両チャネル共通マーカー
+    ("<Not_A_Marker>本文</Not_A_Marker>", True),  # 大文字だが機構マーカーでない（陽性対照）
+    # #536 round5 codex Must I2: 大小文字ゆれの正規化を「fixture にある特定の
+    # 語だけを小文字化する辞書」へ差し替える変異（実装・オラクル双方を同時に
+    # 変異）を適用すると、上の3語（SKILL/Skill/COMMAND-NAME）だけの fixture では
+    # 全テストが通ってしまった（実測: <Image/> と <Recommended_Plugins> は双方
+    # False で漏れた）。9種の機構マーカー**全体**に対して大小文字ゆれを固定し、
+    # 「特定語の辞書」への変異では通らないようにする。
+    ("<Image/>", False),  # 自己閉じ・先頭大文字
+    ("<IMAGE/>", False),  # 自己閉じ・全大文字
+    ("<Recommended_Plugins>\n一覧です", False),  # 先頭大文字・アンダースコア区切り
+    ("<RECOMMENDED_PLUGINS>\n一覧です", False),  # 全大文字
+    ("<Task-Notification>\n通知", False),  # 先頭大文字・ハイフン区切り
+    ("<TASK-NOTIFICATION>\n通知", False),  # 全大文字
+    ("<Local-Command-Stdout>...</Local-Command-Stdout>", False),  # 先頭大文字
+    ("<Command-Message>...</Command-Message>", False),  # 先頭大文字
+    ("<Environment_Context>...</Environment_Context>", False),  # 先頭大文字
+    ("<User_Action>click</User_Action>", False),  # 先頭大文字
+    ("<Not_Recommended_Plugins>本文", True),  # 似た大文字語だが機構マーカーでない（陽性対照）
+]
+
+# #536 round5 codex Must I1: 不可視文字（Cf/Mn/Me、位置不問）が「テキスト先頭」
+# にも「タグ名の内側」にも入れられる。個別の1文字だけを fixture に足す方式では
+# 次の1文字で破れる（列挙で直さない・design-before-fanout）ため、複数カテゴリ・
+# 複数位置の組合せを固定する。値は verify-checks-by-breaking.md の「境界値と
+# 表現差」節に従い ZWSP（Cf）・BOM（Cf）・結合文字（Mn）・異体字セレクタ（Mn）を
+# それぞれ異なる位置（先頭・タグ開始直後・タグ名内部・タグ名末尾）に配置する。
+# #536 round5 codex Must I1: 不可視文字（Cf/Mn/Me、位置不問）が「テキスト先頭」
+# にも「タグ名の内側」にも入れられる。個別の1文字だけを fixture に足す方式では
+# 次の1文字で破れる（列挙で直さない・design-before-fanout）ため、複数カテゴリ・
+# 複数位置の組合せを固定する。値は verify-checks-by-breaking.md の「境界値と
+# 表現差」節に従い ZWSP（Cf）・BOM（Cf）・結合文字（Mn）・異体字セレクタ（Mn）を
+# それぞれ異なる位置（先頭・タグ開始直後・タグ名内部・タグ名末尾）に配置する。
+#
+# #536 round6 codex Must I7: 「Cf/Mn/Me のいずれかを含む」という**カテゴリ**だけの
+# 健全性検査では、意図した特定の文字が別の Cf/Mn/Me 文字にすり替わっても検出
+# できない（保存経路の消失で別文字に化けても気づけない）。各エントリへ**期待する
+# 厳密な codepoint 集合**を第3要素として持たせ、健全性検査はカテゴリでなく
+# 「この codepoint が実際に含まれるか」を assert する。
+#
+# #536 round6 codex Must I5: `Me`（Enclosing_Mark）は実装・オラクル双方の
+# カテゴリ集合定数に含まれてはいたが、fixture に**実際の Me 文字**が1件も無く、
+# `Me` をカテゴリ集合から削る変異が全テスト緑のまま生存した。実 Me 文字
+# （U+20DD COMBINING ENCLOSING CIRCLE）を追加する。
+_INVISIBLE_CHAR_SURVIVAL_FIXTURE: List[Tuple[str, bool, "frozenset[int]"]] = [
+    ("\u200b<skill>x</skill>", False, frozenset({0x200B})),  # 先頭に ZWSP（Cf）
+    ("<\u200bskill>x</skill>", False, frozenset({0x200B})),  # `<` 直後に ZWSP
+    ("<skill\u200b>x</skill>", False, frozenset({0x200B})),  # タグ名末尾に ZWSP（`>` 直前）
+    ("<sk\u200bill>x</skill>", False, frozenset({0x200B})),  # タグ名の途中に ZWSP
+    ("<\ufeffskill>x</skill>", False, frozenset({0xFEFF})),  # `<` 直後に BOM（Cf）
+    # \uXXXX エスケープで明示する（実測: 結合文字・異体字セレクタをリテラル文字
+    # で直書きすると、ファイル保存経路の Unicode 正規化で静かに消え、Mn 経路を
+    # 検査していないのに緑になる偽陽性 fixture を作った。#536 round5 自己発見）。
+    ("<sk\u0301ill>x</skill>", False, frozenset({0x0301})),  # 結合文字（Mn・acute accent）
+    ("<skill\ufe0f>x</skill>", False, frozenset({0xFE0F})),  # 異体字セレクタ（Mn・VS16）
+    ("<image\u200b/>", False, frozenset({0x200B})),  # 自己閉じタグのスラッシュ直前に ZWSP
+    # #536 round5 team-lead 追加確認・自己構成の回避手段3・4・6:
+    # ad-hoc 確認済みだったが恒久化していなかった入力クラスを固定する。
+    ("<sk\u200fill>x</skill>", False, frozenset({0x200F})),  # RTL mark（Cf）
+    ("\u2060<skill>x</skill>", False, frozenset({0x2060})),  # word joiner（Cf）
+    # #536 round6 codex Must I5: 実 Me 文字（COMBINING ENCLOSING CIRCLE）。
+    ("<sk\u20ddill>x</skill>", False, frozenset({0x20DD})),  # タグ名内部に Me 文字
+    ("普通の発話です\u200b。", True, frozenset({0x200B})),  # ZWSP を含むが機構マーカーでない通常発話（陽性対照）
+]
+
+
+def test_invisible_char_fixture_entries_actually_contain_invisible_chars():
+    """壊す不変条件: 不可視文字リテラルがファイル保存経路で静かに消失し、検査して
+    いないのに緑になる偽陽性を作る罠（#536 round5 自己発見。結合文字・異体字セレクタを
+    リテラル直書きした際に実際に踏んだ）。fixture 定義自体が健全（意図した
+    **厳密な codepoint** を実際に含む）であることを検査する（#536 round6 I7:
+    カテゴリ一致だけでは「別の Cf/Mn/Me 文字へのすり替え」を見逃すため厳密化。
+    round7 codex Must J4: 「包含」（missing が無いこと）だけの検査は、期待
+    codepoint を残したまま**余分な** Cf/Mn/Me 文字を追加する・同じ codepoint を
+    **重複**させる変異を見逃す。text 中の Cf/Mn/Me codepoint の多重集合
+    （出現回数を含む）と期待集合の多重集合が**完全一致**することを要求する）。
+    ／通したい検査経路: _INVISIBLE_CHAR_SURVIVAL_FIXTURE の各エントリに対する
+    Cf/Mn/Me codepoint の Counter（多重集合）完全一致チェック。
+    """
+    from collections import Counter as _Counter
+
+    for text, _expected, expected_codepoints in _INVISIBLE_CHAR_SURVIVAL_FIXTURE:
+        actual_counter = _Counter(
+            ord(ch) for ch in text if unicodedata.category(ch) in {"Cf", "Mn", "Me"}
+        )
+        # 現行 fixture はいずれの期待 codepoint も1個ずつのみを意図する
+        # （重複を意図するエントリがあれば expected_codepoints の型を multiset へ
+        # 拡張すること。現状は set のため各要素の期待出現数は1固定）。
+        expected_counter = _Counter({cp: 1 for cp in expected_codepoints})
+        assert actual_counter == expected_counter, (
+            f"fixture entry の不可視文字の多重集合が期待と一致しません"
+            f"（保存経路での消失/すり替え/余分な混入/重複の疑い）: {text!r} "
+            f"actual={ {hex(k): v for k, v in actual_counter.items()} } "
+            f"expected={ {hex(k): v for k, v in expected_counter.items()} }"
+        )
+        for cp in expected_codepoints:
+            assert unicodedata.category(chr(cp)) in {"Cf", "Mn", "Me"}, (
+                f"期待 codepoint {hex(cp)} が Cf/Mn/Me カテゴリではありません（fixture定義ミス）"
+            )
+
+
+
+# #536 round5 team-lead 追加確認・自己構成の回避手段6: タグ名と `>` の間に改行/タブ
+# （\t・\n は Unicode カテゴリ Cc（Control）であり Cf/Mn/Me ではないため、
+# 上の _INVISIBLE_CHAR_SURVIVAL_FIXTURE とは別カテゴリの表現差として区別する。
+# head_tag の `inner.split()[0]`（デフォルト引数の split は全空白種別対応）が
+# 対象。ad-hoc 確認済みだったが恒久化していなかったもの）。
+_TAG_INTERNAL_WHITESPACE_SURVIVAL_FIXTURE: List[Tuple[str, bool]] = [
+    ("<skill\n>x</skill>", False),  # タグ名と `>` の間に改行
+    ("<skill\t>x</skill>", False),  # タグ名と `>` の間にタブ
+    ("<not_a_marker\n>本文", True),  # 同じ表現差だが機構マーカーでない（陽性対照）
+]
+
+
+def test_tag_internal_whitespace_fixture_entries_actually_contain_control_chars():
+    """壊す不変条件: 上と同じ「保存経路での消失」の罠を、改行/タブ（Cc）についても
+    fixture 定義自体の健全性検査で防ぐ。
+    ／通したい検査経路: _TAG_INTERNAL_WHITESPACE_SURVIVAL_FIXTURE の各エントリに
+    タグ名と `>` の間の制御文字（\\n・\\t）が実在すること。
+    """
+    for text, _expected in _TAG_INTERNAL_WHITESPACE_SURVIVAL_FIXTURE:
+        assert ("\n" in text) or ("\t" in text), (
+            f"fixture entry に改行/タブが含まれていません（保存経路での消失の疑い）: {text!r}"
+        )
+
+
+def test_filter_machinery_matches_tag_internal_whitespace_fixture():
+    """壊す不変条件: I3/#536 round5 自己構成6（タグ名と `>` の間の改行/タブで
+    機構判定が回避できない）
+    ／通したい検査経路: filter_machinery（head_tag の `inner = t[1:end].strip()` と
+    `inner.split()[0]` が両方ともデフォルト＝全空白種別対応であることに依存。実測:
+    `.strip()` だけ・`.split()` だけを個別に ASCII 空白限定へ narrow 化しても、
+    もう片方が拾うため単独では壊れない＝多重防御になっている。両方を同時に
+    narrow 化する変異で初めて赤くなることを確認済み）。
+    """
+    candidates = [
+        p.RawCandidate(
+            file="f.jsonl", channel="response_item", line_no=i, timestamp="2026-08-20T00:00:00.000Z",
+            ts_ms=0.0, text=text, cwd=None, session_id="s1", prev_action=None,
+        )
+        for i, (text, _expected) in enumerate(_TAG_INTERNAL_WHITESPACE_SURVIVAL_FIXTURE)
+    ]
+    expected_survivors = [
+        text for text, expected in _TAG_INTERNAL_WHITESPACE_SURVIVAL_FIXTURE if expected
+    ]
+    actual_survivors = [c.text for c in p.filter_machinery(candidates)]
+    assert actual_survivors == expected_survivors
+
+
+def test_filter_machinery_matches_independently_labeled_fixture():
+    """壊す不変条件: item5（マーカー文字列の改変・swap・判定弱体化を、実装からの
+    独立算出でなく人手ラベル済み fixture との突合で検出）
+    ／通したい検査経路: filter_machinery（run_probe の唯一の適用点と同じ関数）。
+    """
+    candidates = [
+        p.RawCandidate(
+            file="f.jsonl", channel="response_item", line_no=i, timestamp="2026-08-20T00:00:00.000Z",
+            ts_ms=0.0, text=text, cwd=None, session_id="s1", prev_action=None,
+        )
+        for i, (text, _expected) in enumerate(_INDEPENDENT_SURVIVAL_FIXTURE)
+    ]
+    expected_survivors = [text for text, expected in _INDEPENDENT_SURVIVAL_FIXTURE if expected]
+    actual_survivors = [c.text for c in p.filter_machinery(candidates)]
+    assert actual_survivors == expected_survivors
+
+
+def test_filter_machinery_matches_invisible_char_fixture():
+    """壊す不変条件: I1（不可視文字が先頭・タグ開始直後・タグ名内部・タグ名末尾の
+    いずれに入っても機構判定が揺らがない）
+    ／通したい検査経路: filter_machinery（is_machinery_text 経由）。
+    ZWSP/BOM（Cf）・結合文字/異体字セレクタ（Mn）を複数位置に配置した fixture。
+    列挙修正（特定の1文字だけ追加）ではこの fixture の一部しか通らない。
+    """
+    candidates = [
+        p.RawCandidate(
+            file="f.jsonl", channel="response_item", line_no=i, timestamp="2026-08-20T00:00:00.000Z",
+            ts_ms=0.0, text=text, cwd=None, session_id="s1", prev_action=None,
+        )
+        for i, (text, _expected, _cp) in enumerate(_INVISIBLE_CHAR_SURVIVAL_FIXTURE)
+    ]
+    expected_survivors = [text for text, expected, _cp in _INVISIBLE_CHAR_SURVIVAL_FIXTURE if expected]
+    actual_survivors = [c.text for c in p.filter_machinery(candidates)]
+    assert actual_survivors == expected_survivors
+
+
+def test_oracle_is_machinery_text_matches_invisible_char_fixture():
+    """壊す不変条件: I1（独立オラクル側も同じ不可視文字クラスで判定が揺らがない。
+    レビュー指摘は実装・オラクル『双方』が False になったケース）
+    ／通したい検査経路: _oracle_is_machinery_text（is_machinery_text から独立）。
+    """
+    for text, expected_survives, _cp in _INVISIBLE_CHAR_SURVIVAL_FIXTURE:
+        assert p._oracle_is_machinery_text(text) is (not expected_survives), text
+
+
 def test_developer_role_excluded_by_reducer():
     """壊す不変条件: D3（developer role はユーザー発話でない）
     ／通したい検査経路: parse_session_file の role dispatch。
@@ -122,6 +790,45 @@ def test_marker_like_text_not_at_head_is_not_excluded():
     """陽性対照: 先頭以外に marker 文字列を含む本文（意味を変えない差分）は除外されない。"""
     text = "普通の発話です。<recommended_plugins> という単語だけ本文中に出てくる。"
     assert p.is_machinery_text(text) is False
+
+
+# I4（#536 round4 codex Must）: 除外結果は入力チャネルに依存しない。
+# ADR（docs/decisions/drafts/055-codex-rollout-ingest.md:281-283）は
+# command-name / local-command-stdout / command-message の3種を
+# response_item / event_msg 両チャネル共通と実測している。人手ラベル済み
+# fixture が全件 channel="response_item" 固定だと、event_msg チャネルだけを
+# 無条件生存させる（あるいはその逆）配線の欠陥を検出できない。
+_CHANNEL_INDEPENDENT_FIXTURE: List[Tuple[str, str, bool]] = [
+    ("<command-name>ls</command-name>", "response_item", False),
+    ("<command-name>ls</command-name>", "event_msg", False),
+    ("<local-command-stdout>...</local-command-stdout>", "response_item", False),
+    ("<local-command-stdout>...</local-command-stdout>", "event_msg", False),
+    ("<command-message>...</command-message>", "response_item", False),
+    ("<command-message>...</command-message>", "event_msg", False),
+    ("普通の発話です。", "response_item", True),
+    ("普通の発話です。", "event_msg", True),
+]
+
+
+def test_filter_machinery_is_channel_independent():
+    """壊す不変条件: I4（除外結果は入力チャネルに依存しない）
+    ／通したい検査経路: filter_machinery（is_machinery_text はテキストのみを見て
+    判定し channel を参照しないという設計契約）。
+    変異（filter_machinery を channel=="event_msg" のときだけ無条件生存させる等）
+    を適用すると、同一マーカーが片方のチャネルでのみ生存し本テストが落ちる。
+    """
+    candidates = [
+        p.RawCandidate(
+            file="f.jsonl", channel=channel, line_no=i, timestamp="2026-08-20T00:00:00.000Z",
+            ts_ms=0.0, text=text, cwd=None, session_id="s1", prev_action=None,
+        )
+        for i, (text, channel, _expected) in enumerate(_CHANNEL_INDEPENDENT_FIXTURE)
+    ]
+    expected_survivors = [
+        (text, channel) for text, channel, expected in _CHANNEL_INDEPENDENT_FIXTURE if expected
+    ]
+    actual_survivors = [(c.text, c.channel) for c in p.filter_machinery(candidates)]
+    assert actual_survivors == expected_survivors
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -157,14 +864,15 @@ def test_child_session_file_excluded_with_both_markers(tmp_path):
 
 
 @pytest.mark.real_home
+@_skip_if_no_real_codex_sessions
 def test_child_reference_scope_phase1_vs_full_agreement():
     """壊す不変条件: X2（Phase1限定走査と全走査が一致する）
     ／通したい検査経路: run_probe の child_ref_scope_agreement フラグ。
     """
     result = p.run_probe(
-        sessions_root=Path.home() / ".codex" / "sessions",
-        base_date=date(2026, 8, 23),
-        days=14,
+        sessions_root=_REAL_CODEX_SESSIONS_ROOT,
+        base_date=_REAL_HOME_TEST_BASE_DATE,
+        days=_REAL_HOME_TEST_DAYS,
     )
     assert result.child_ref_scope_agreement is True
 
@@ -280,6 +988,26 @@ def test_no_cli_version_based_filtering_in_source():
     assert "cli_version" not in src
 
 
+def test_real_home_tests_do_not_hardcode_window_literals():
+    """壊す不変条件: I8（skip 判定窓と実行窓は同一ソースでなければならない。
+    real_home テストが `base_date=date(2026, 8, 23)` を再度直書きすると、guard
+    側だけ窓を更新したときに両者が乖離する。旧窓だけにデータがある場合は
+    実行して target_files=0 で失敗し、新窓だけにある場合は全 skip になる）
+    ／通したい検査経路: このテストファイル自身のソースを静的に検査し、
+    `run_probe(` 呼び出しが `base_date=date(2026, 8, 23)` を直書きしていない
+    （＝共有定数 `_REAL_HOME_TEST_BASE_DATE` を参照している）ことを確認する。
+    """
+    own_source = Path(__file__).read_text(encoding="utf-8")
+    import re as _re
+
+    # 実コード上の kwarg 直書き（末尾カンマ付き）だけを対象にし、このテスト自身の
+    # docstring 中の説明文（バッククォート区切り・カンマなし）を誤検出しない。
+    hardcoded = _re.findall(r"base_date=date\(2026,\s*8,\s*23\),", own_source)
+    assert not hardcoded, (
+        f"real_home テストが窓を再度直書きしています（_REAL_HOME_TEST_BASE_DATE を参照すべき）: {hardcoded}"
+    )
+
+
 # ─────────────────────────────────────────────────────────────────
 # X3: 日付ディレクトリ方式のファイル選定
 # ─────────────────────────────────────────────────────────────────
@@ -333,32 +1061,131 @@ def test_production_guard_passes_when_unchanged_present_file():
 # ─────────────────────────────────────────────────────────────────
 # 実データ E2E（C-1・実機ベンチ）
 # ─────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────
+# C-1: 実データ regression の桁チェック。
+#
+# 旧実装は ADR 実測値（2026-08-23 早朝）に対して厳密一致・狭いレンジで
+# assert していたため、実 ~/.codex/sessions が日々増える限り毎日落ちる作りに
+# なっていた（テスト名は order_of_magnitude＝桁が合っていることの検査のはず
+# なのに、実装は完全一致を要求していて名実が食い違っていた）。
+#
+# 下限は ADR 基準値（データは単調増加想定。削除運用は無い前提）。
+# 上限は基準値のおよそ2.2倍。根拠: 本修正当日（2026-08-23）の実測で
+# target_files が早朝227→同日昼231へ半日弱で +4 件増加した実ペースに対し、
+# 数ヶ月分の通常運用増加を吸収しつつ、重複カウント・暴走等の異常な増加は
+# 検出できる余裕として採用した（厳密な統計的根拠ではなく実測ペースからの
+# 経験的マージン。今後乖離が大きくなったら基準値ごと更新すること）。
+_ADR_BASELINE_LOWER_COUNTS = {
+    "target_files": 227,
+    "raw": 769,
+    "after_child_exclusion": 503,
+    "after_machinery_exclusion": 373,
+    "after_dedup": 259,
+}
+_ADR_BASELINE_UPPER_COUNTS = {
+    "target_files": 500,
+    "raw": 1700,
+    "after_child_exclusion": 1100,
+    "after_machinery_exclusion": 820,
+    "after_dedup": 570,
+}
+
+
+def _assert_stage_counts_plausible(c: "p.StageCounts") -> None:
+    """段階カウントが「桁が合っている」ことを検査する。
+
+    (1) 各段階が ADR 基準値の下限〜上限レンジ内であること（stale exact-match
+    対策。レンジは上のモジュール定数が単一ソース）。
+    (2) パイプライン構造上必ず成り立つ段階間の非増加関係
+    （raw >= after_child_exclusion >= after_machinery_exclusion >= after_dedup）。
+    これは実データの増減に関係なく常に成り立つべき不変条件で、絶対値レンジと
+    違って将来も陳腐化しない。
+    """
+    for name, lower in _ADR_BASELINE_LOWER_COUNTS.items():
+        value = getattr(c, name)
+        upper = _ADR_BASELINE_UPPER_COUNTS[name]
+        assert lower <= value <= upper, (
+            f"{name}={value} は想定レンジ [{lower}, {upper}] 外です"
+        )
+    assert c.raw >= c.after_child_exclusion >= c.after_machinery_exclusion >= c.after_dedup >= 0, (
+        "段階間の非増加関係が崩れています: "
+        f"raw={c.raw} after_child_exclusion={c.after_child_exclusion} "
+        f"after_machinery_exclusion={c.after_machinery_exclusion} after_dedup={c.after_dedup}"
+    )
+    assert c.target_files > 0
+
+
+def test_assert_stage_counts_plausible_rejects_below_lower_bound():
+    """陰性試験: 下限未満（データ欠落・収集退行を模す）は赤くなる。
+    ／通したい検査経路: _assert_stage_counts_plausible の下限チェック。
+    """
+    c = p.StageCounts(
+        target_files=1, raw=1, after_child_exclusion=1,
+        after_machinery_exclusion=1, after_dedup=1,
+        unattributed_dropped=0, child_files=0, parse_error_lines=0,
+    )
+    with pytest.raises(AssertionError):
+        _assert_stage_counts_plausible(c)
+
+
+def test_assert_stage_counts_plausible_rejects_above_upper_bound():
+    """陰性試験: 上限超過（重複カウント・暴走を模す）は赤くなる。
+    ／通したい検査経路: _assert_stage_counts_plausible の上限チェック。
+    """
+    c = p.StageCounts(
+        target_files=10_000, raw=10_000, after_child_exclusion=10_000,
+        after_machinery_exclusion=10_000, after_dedup=10_000,
+        unattributed_dropped=0, child_files=0, parse_error_lines=0,
+    )
+    with pytest.raises(AssertionError):
+        _assert_stage_counts_plausible(c)
+
+
+def test_assert_stage_counts_plausible_rejects_broken_stage_ordering():
+    """陰性試験: 段階間の非増加関係が崩れている（フィルタが効いていない等）
+    と、絶対値レンジ内でも赤くなる。
+    ／通したい検査経路: _assert_stage_counts_plausible の段階間不変条件チェック。
+    """
+    c = p.StageCounts(
+        target_files=300, raw=800, after_child_exclusion=900,  # raw を超える
+        after_machinery_exclusion=400, after_dedup=300,
+        unattributed_dropped=0, child_files=0, parse_error_lines=0,
+    )
+    with pytest.raises(AssertionError):
+        _assert_stage_counts_plausible(c)
+
+
+def test_assert_stage_counts_plausible_accepts_baseline_boundary():
+    """陽性対照: ADR 基準値そのもの（下限の境界値）は許容される。"""
+    c = p.StageCounts(
+        target_files=227, raw=769, after_child_exclusion=503,
+        after_machinery_exclusion=373, after_dedup=259,
+        unattributed_dropped=0, child_files=0, parse_error_lines=0,
+    )
+    _assert_stage_counts_plausible(c)  # 例外が出ないこと自体が検査
+
+
 @pytest.mark.real_home
+@_skip_if_no_real_codex_sessions
 def test_run_probe_against_real_codex_sessions_matches_expected_order_of_magnitude():
     """壊す不変条件: C-1（実データで完走し段階件数が ADR 実測値と整合する）
-    ／通したい検査経路: run_probe のパイプライン全体（実 ~/.codex/sessions を読む）。
-
-    ADR 実測時点（2026-08-23 早朝）の値は 227/769/503/373/259。本テスト実行時点
-    までの通常利用差分（実測 2〜3 件の増分。ADR 自身も 671→675→677→679 と
-    測定間の増分を記録している）を許容し、厳密一致でなく近傍レンジで検査する。
-    最終 dedup 後の値（259）は許容差ゼロで一致することを確認する
-    （dedup はマッチ対の text_hash が同一のため machinery 除外の順序と可換）。
+    ／通したい検査経路: run_probe のパイプライン全体（実 ~/.codex/sessions を読む）
+    + _assert_stage_counts_plausible（桁レンジ・段階間不変条件）
+    + assert_machinery_exclusion_matches_oracle（item5・実データでの独立オラクル突合）。
     """
     result = p.run_probe(
-        sessions_root=Path.home() / ".codex" / "sessions",
-        base_date=date(2026, 8, 23),
-        days=14,
+        sessions_root=_REAL_CODEX_SESSIONS_ROOT,
+        base_date=_REAL_HOME_TEST_BASE_DATE,
+        days=_REAL_HOME_TEST_DAYS,
     )
     c = result.counts
-    assert c.target_files == 227
-    assert 760 <= c.raw <= 780
-    assert 495 <= c.after_child_exclusion <= 510
-    assert 365 <= c.after_machinery_exclusion <= 380
-    assert c.after_dedup == 259
+    _assert_stage_counts_plausible(c)
     assert c.parse_error_lines == 0
+    p.assert_machinery_exclusion_matches_oracle(result)
 
 
 @pytest.mark.real_home
+@_skip_if_no_real_codex_sessions
 def test_run_probe_does_not_touch_production_stores():
     """壊す不変条件: C-3（本番ストアに一切書かない）
     ／通したい検査経路: run_probe 実行前後で本番3ストア + utterances.db の byte hash 不変。
@@ -366,13 +1193,76 @@ def test_run_probe_does_not_touch_production_stores():
     paths = p.production_store_paths()
     before = p.snapshot_production_hashes(paths)
     p.run_probe(
-        sessions_root=Path.home() / ".codex" / "sessions",
-        base_date=date(2026, 8, 23),
-        days=14,
+        sessions_root=_REAL_CODEX_SESSIONS_ROOT,
+        base_date=_REAL_HOME_TEST_BASE_DATE,
+        days=_REAL_HOME_TEST_DAYS,
     )
     after = p.snapshot_production_hashes(paths)
     ok, violations = p.verify_production_unchanged(before, after)
     assert ok is True, violations
+
+
+# ─────────────────────────────────────────────────────────────────
+# #536 縮小版（team-lead 指摘）: 固定4ストア＋DATA_DIR 一覧比較だけでは
+# 「DATA_DIR 外・4ストア外への書込み」を検出できない（列挙による検査の限界）。
+# `run_probe()` は docstring で「IO は read-only」と契約している純粋計算関数
+# （実際のファイル書込みは main() の `_write_json` だけが行う設計）。この契約を
+# 列挙に頼らず直接検査する: 書込みプリミティブ（Path.write_text/write_bytes/
+# Path.open の書込みモード）をフックし、run_probe() 実行中に**一切呼ばれない**
+# ことを確認する。列挙（allowlist/特定パスの禁止リスト）を使わないため、
+# 「まだ知られていない書込み先」であっても検出できる。
+# ─────────────────────────────────────────────────────────────────
+def test_run_probe_performs_no_filesystem_writes(tmp_path, monkeypatch):
+    """壊す不変条件: run_probe() は read-only（DATA_DIR 内外を問わず一切書かない）。
+    固定4ストア＋DATA_DIR 一覧の前後比較（`test_run_probe_does_not_touch_
+    production_stores` 等）は「知っている場所」しか見ないため、run_probe が
+    DATA_DIR 外の任意の場所（例: 一時ファイル・ログ・キャッシュ）へ書く変異を
+    素通りしてしまう。
+    ／通したい検査経路: `pathlib.Path.write_text` / `Path.write_bytes` /
+    書込みモードの `Path.open` / 書込みモードの組込み `open()` をフックし、
+    run_probe() 呼び出し全体で一度も呼ばれないことを直接確認する（列挙に
+    頼らない）。組込み `open()` も対象に含める理由: `Path.write_text` 等だけを
+    フックする版で自己検証したところ、`open(str_path, "w")`（raw 組込み関数
+    経由の書込み）を run_probe 内へ追加する変異が検出されず素通りした（実測。
+    自己構成の回避手段として発見・是正）。
+    """
+    write_calls: List[str] = []
+
+    orig_write_text = Path.write_text
+    orig_write_bytes = Path.write_bytes
+    orig_path_open = Path.open
+    orig_builtin_open = builtins.open
+
+    def _tracking_write_text(self, *args, **kwargs):
+        write_calls.append(f"write_text:{self}")
+        return orig_write_text(self, *args, **kwargs)
+
+    def _tracking_write_bytes(self, *args, **kwargs):
+        write_calls.append(f"write_bytes:{self}")
+        return orig_write_bytes(self, *args, **kwargs)
+
+    def _tracking_path_open(self, mode="r", *args, **kwargs):
+        if any(flag in mode for flag in ("w", "a", "x", "+")):
+            write_calls.append(f"Path.open(mode={mode!r}):{self}")
+        return orig_path_open(self, mode, *args, **kwargs)
+
+    def _tracking_builtin_open(file, mode="r", *args, **kwargs):
+        if any(flag in mode for flag in ("w", "a", "x", "+")):
+            write_calls.append(f"open(mode={mode!r}):{file}")
+        return orig_builtin_open(file, mode, *args, **kwargs)
+
+    # fixture データの用意（session jsonl の書込み）は監視対象外＝先に済ませる。
+    # 監視対象は run_probe() 呼び出しそのものだけ。
+    _small_fixture_for_oracle(tmp_path)
+
+    monkeypatch.setattr(Path, "write_text", _tracking_write_text)
+    monkeypatch.setattr(Path, "write_bytes", _tracking_write_bytes)
+    monkeypatch.setattr(Path, "open", _tracking_path_open)
+    monkeypatch.setattr(builtins, "open", _tracking_builtin_open)
+
+    p.run_probe(sessions_root=tmp_path, base_date=date(2026, 8, 20), days=1)
+
+    assert write_calls == [], f"run_probe() がファイル書込みを行いました: {write_calls}"
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -441,14 +1331,15 @@ def test_prev_action_duplicate_channel_reuses_same_snapshot(tmp_path):
 
 
 @pytest.mark.real_home
+@_skip_if_no_real_codex_sessions
 def test_prev_action_populated_end_to_end_against_real_data():
     """陽性対照 + 統合検査: 実データで prev_action が非 None の発話が実在すること
     （全件 None のまま構造的に歪んでいないこと・Must1 反映確認）。
     """
     result = p.run_probe(
-        sessions_root=Path.home() / ".codex" / "sessions",
-        base_date=date(2026, 8, 23),
-        days=14,
+        sessions_root=_REAL_CODEX_SESSIONS_ROOT,
+        base_date=_REAL_HOME_TEST_BASE_DATE,
+        days=_REAL_HOME_TEST_DAYS,
     )
     non_none = sum(1 for u in result.utterances if u["prev_action"] is not None)
     assert non_none > 0
@@ -486,8 +1377,18 @@ def test_validate_out_dir_rejects_repo_root():
     assert reason is not None
 
 
-def test_validate_out_dir_accepts_isolated_tmp_dir(tmp_path):
-    """陽性対照: 隔離された一時ディレクトリは拒否されない。"""
+def test_validate_out_dir_accepts_isolated_tmp_dir(tmp_path, monkeypatch, tmp_path_factory):
+    """陽性対照: 隔離された一時ディレクトリは拒否されない。
+
+    root conftest.py の autouse HOME/DATA_DIR 隔離が全テストで
+    ``CLAUDE_PLUGIN_DATA=str(tmp_path)`` を設定するため、DATA_DIR が
+    item1 の禁止ルートに加わった今、素の ``tmp_path`` を out_dir に使うと
+    「DATA_DIR 配下の出力」として常に拒否されてしまう（本テストが検査したい
+    「無関係な隔離ディレクトリは拒否されない」という主張とは別の理由で赤くなる）。
+    DATA_DIR を tmp_path と無関係な場所へ明示的にずらして検査する。
+    """
+    unrelated_data_dir = tmp_path_factory.mktemp("unrelated_data_dir")
+    monkeypatch.setattr(p, "resolve_evolve_anything_data_dir", lambda: unrelated_data_dir)
     reason = p.validate_out_dir(tmp_path / "phase1_out")
     assert reason is None
 
@@ -588,3 +1489,383 @@ def test_dedup_one_to_one_consumption_not_shared():
     out = p.dedup_channel_constrained([r1, r2, e1], threshold_ms=100)
     assert len(out) == 2
     assert {c.channel for c in out} == {"response_item"}
+
+
+# ─────────────────────────────────────────────────────────────────
+# 本番ストア保護ガードの欠陥修正（team-lead 指摘・#534）
+# 欠陥1: hashes_after が最後の書込み（report.json）より前に取られる
+# 欠陥2: out_dir 検査がディレクトリにしか掛からず、出力ファイル名の symlink 経由で
+#        本番ファイルへ書込める
+# ─────────────────────────────────────────────────────────────────
+def test_write_json_refuses_symlink_escaping_into_forbidden_root(tmp_path, monkeypatch):
+    """壊す不変条件: 欠陥2（out_dir 内の出力ファイル名 symlink が本番ファイルへ
+    書込むのを拒否する）
+    ／通したい検査経路: _write_json が書込み直前に実体パス（symlink 解決後）を
+    forbidden_out_dir_roots() と照合する。
+
+    修正前は _write_json が path.write_text をそのまま呼ぶだけで実体パスの検査が
+    無く、symlink を辿って victim（本番ファイル役）を上書きしてしまい本テストが
+    落ちる。
+    """
+    victim_dir = tmp_path / "forbidden_root"
+    victim_dir.mkdir()
+    victim = victim_dir / "utterances.db"
+    victim.write_bytes(b"PRISTINE")
+    monkeypatch.setattr(p, "forbidden_out_dir_roots", lambda: [victim_dir])
+
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    evil_link = out_dir / "report.json"
+    evil_link.symlink_to(victim)
+
+    with pytest.raises(p.ProductionPathWriteError):
+        p._write_json(evil_link, {"x": 1}, out_dir=out_dir)
+
+    assert victim.read_bytes() == b"PRISTINE"
+
+
+def test_write_json_allows_normal_path_inside_out_dir(tmp_path, monkeypatch, tmp_path_factory):
+    """陽性対照: 禁止ルートに触れない通常の out_dir 書込みは成功する。
+
+    root conftest.py の autouse 隔離が DATA_DIR=tmp_path を強制するため、
+    item1 導入後は素の tmp_path 配下の out_dir が DATA_DIR 配下と誤認され拒否
+    されてしまう。DATA_DIR を tmp_path と無関係な場所へずらして検査する
+    （test_validate_out_dir_accepts_isolated_tmp_dir と同じ理由）。
+    """
+    unrelated_data_dir = tmp_path_factory.mktemp("unrelated_data_dir")
+    monkeypatch.setattr(p, "resolve_evolve_anything_data_dir", lambda: unrelated_data_dir)
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    p._write_json(out_dir / "report.json", {"x": 1}, out_dir=out_dir)
+    assert json.loads((out_dir / "report.json").read_text(encoding="utf-8")) == {"x": 1}
+
+
+def test_write_json_refuses_escape_outside_out_dir_even_if_not_forbidden_root(tmp_path, monkeypatch):
+    """壊す不変条件: item2（out_dir 内の出力ファイル名が、禁止ルート
+    （~/.claude・~/.codex・repo・DATA_DIR）のいずれでもない out_dir 外の場所への
+    symlink でも拒否される）
+    ／通したい検査経路: _write_json の out_dir 包含チェック（relative_to）。
+    修正前（out_dir 引数が無く禁止ルート照合のみだった版）は、この escape先が
+    禁止ルート allowlist の外なので検査を素通りし本テストが落ちる。
+
+    root conftest.py の autouse 隔離は DATA_DIR=tmp_path を強制するため、
+    ``elsewhere`` を素の tmp_path 配下に置くと（意図せず）禁止ルート照合
+    （item1 の DATA_DIR 検査）でも引っかかってしまい、item2 固有の効果を
+    検査できない。forbidden_out_dir_roots を無関係な場所に固定し、この escape
+    が「禁止ルート照合には掛からないが out_dir 包含チェックでは掛かる」ことを
+    確実にする。
+    """
+    unrelated_root = tmp_path / "unrelated_forbidden_root"
+    unrelated_root.mkdir()
+    monkeypatch.setattr(p, "forbidden_out_dir_roots", lambda: [unrelated_root])
+
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    victim = elsewhere / "victim.json"
+    victim.write_bytes(b"PRISTINE")
+    evil_link = out_dir / "report.json"
+    evil_link.symlink_to(victim)
+
+    with pytest.raises(p.ProductionPathWriteError):
+        p._write_json(evil_link, {"x": 1}, out_dir=out_dir)
+
+    assert victim.read_bytes() == b"PRISTINE"
+
+
+def test_main_write_json_containment_closes_the_defect1_escape_route(tmp_path, monkeypatch):
+    """壊す不変条件: 旧欠陥1（hashes_after が report.json 書込みより前に取られると、
+    symlink 経由の本番汚染が検出漏れになる）の攻撃面が、item2（out_dir 包含チェック）
+    導入により **report.json の書込み自体でブロックされ、そもそも hashes_after
+    取得順序に依存しなくなった** ことを検査する。
+
+    production_store_paths / resolve_evolve_anything_data_dir を意図的に
+    forbidden_out_dir_roots 外（out_dir とも victim とも非重複な第三の場所）へ
+    向け、旧テストが利用していた「禁止ルート照合だけでは symlink を検出でき
+    ない」状況を再現した上で、out_dir 内の report.json という出力ファイル名を
+    経由した symlink が victim（本番ストア役）を指していても、_write_json の
+    out_dir 包含チェックにより書込み前に例外で止まり victim が汚染されないこと
+    を確認する（victim を DATA_DIR 自体の配下に置かないのは、それだと item1 の
+    禁止ルート照合だけで検出できてしまい item2 固有の効果を切り分けられない
+    ため）。
+    ／通したい検査経路: main() 内 _write_json(report.json, out_dir=out_dir) の
+    relative_to(out_dir) 検査。
+    修正前（out_dir 引数の無い版）はこの escape を検出できず、hashes_after が
+    report.json 書込み前に取られていれば ok=True のまま victim が汚染されて
+    返っていた（旧テストが検出していた検出漏れそのもの）。
+    """
+    sessions_root = tmp_path / "sessions"
+    sessions_root.mkdir()
+
+    victim_dir = tmp_path / "victim_store"
+    victim_dir.mkdir()
+    victim = victim_dir / "utterances.db"
+    victim.write_bytes(b"PRISTINE")
+
+    unrelated_data_dir = tmp_path / "unrelated_data_dir"
+    unrelated_data_dir.mkdir()
+
+    monkeypatch.setattr(p, "production_store_paths", lambda: {"utterances_db": victim})
+    monkeypatch.setattr(p, "resolve_evolve_anything_data_dir", lambda: unrelated_data_dir)
+
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    (out_dir / "report.json").symlink_to(victim)
+
+    with pytest.raises(p.ProductionPathWriteError):
+        p.main([
+            "--sessions-root", str(sessions_root),
+            "--base-date", "2026-08-23",
+            "--out-dir", str(out_dir),
+        ])
+
+    assert victim.read_bytes() == b"PRISTINE"
+
+
+def test_main_symlink_into_true_forbidden_root_leaves_victim_untouched(tmp_path, monkeypatch):
+    """壊す不変条件: 欠陥2（main() 実行の end-to-end 経路でも、out_dir 内の
+    出力ファイル名 symlink が forbidden_out_dir_roots() 配下の実ファイルを
+    上書きできない）
+    ／通したい検査経路: main() → _write_json の実体パス検査。
+
+    ``_write_json`` 単体テストと異なり、main() を通しで呼び、production_store_paths /
+    forbidden_out_dir_roots の双方を同じ偽ルート配下に揃えることで、実際の
+    CLI 経路（run_probe→複数ファイル書込→report.json→guard.json）で欠陥2の
+    ガードが機能することを検査する。仕様上「例外で止まる」ことも合格
+    （委譲プロンプトの (a) 要件）なので、例外送出・非0終了のどちらでも
+    victim が変化しないことのみを assert する。
+    """
+    forbidden_root = tmp_path / "forbidden_root"
+    forbidden_root.mkdir()
+    victim = forbidden_root / "utterances.db"
+    victim.write_bytes(b"PRISTINE")
+
+    monkeypatch.setattr(p, "forbidden_out_dir_roots", lambda: [forbidden_root])
+    monkeypatch.setattr(p, "production_store_paths", lambda: {"utterances_db": victim})
+    monkeypatch.setattr(p, "resolve_evolve_anything_data_dir", lambda: forbidden_root)
+
+    sessions_root = tmp_path / "sessions"
+    sessions_root.mkdir()
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    (out_dir / "report.json").symlink_to(victim)
+
+    try:
+        rc = p.main([
+            "--sessions-root", str(sessions_root),
+            "--base-date", "2026-08-23",
+            "--out-dir", str(out_dir),
+        ])
+    except p.ProductionPathWriteError:
+        pass
+    else:
+        assert rc != 0
+
+    assert victim.read_bytes() == b"PRISTINE"
+
+
+def test_main_out_dir_rejection_still_effective(tmp_path):
+    """陽性対照 + 回帰検査: 既存の --out-dir 拒否ガード（禁止ルート直指定）が
+    欠陥1・欠陥2の修正後も引き続き効くこと。"""
+    sessions_root = tmp_path / "sessions"
+    sessions_root.mkdir()
+    repo_root = Path(p.__file__).resolve().parent.parent
+    rc = p.main([
+        "--sessions-root", str(sessions_root),
+        "--base-date", "2026-08-23",
+        "--out-dir", str(repo_root / "scripts" / "pwned_by_test"),
+    ])
+    assert rc != 0
+    assert not (repo_root / "scripts" / "pwned_by_test").exists()
+
+
+def test_main_production_store_guard_ok_true_on_clean_run(tmp_path, monkeypatch):
+    """陽性対照: symlink 攻撃や汚染の無い通常実行では production_store_guard.ok
+    が True のまま、report.json / guard.json の双方が生成されること。"""
+    sessions_root = tmp_path / "sessions"
+    sessions_root.mkdir()
+
+    isolated_store_dir = tmp_path / "isolated_store"
+    monkeypatch.setattr(
+        p, "production_store_paths",
+        lambda: {"utterances_db": isolated_store_dir / "utterances.db"},
+    )
+    monkeypatch.setattr(p, "resolve_evolve_anything_data_dir", lambda: isolated_store_dir)
+
+    out_dir = tmp_path / "out"
+    rc = p.main([
+        "--sessions-root", str(sessions_root),
+        "--base-date", "2026-08-23",
+        "--out-dir", str(out_dir),
+    ])
+
+    assert rc == 0
+    guard = json.loads((out_dir / "guard.json").read_text(encoding="utf-8"))
+    assert guard["ok"] is True
+    assert guard["violations"] == []
+    report = json.loads((out_dir / "report.json").read_text(encoding="utf-8"))
+    assert "counts" in report
+    assert "production_store_guard" not in report
+
+
+# ─────────────────────────────────────────────────────────────────
+# team-lead 追加指摘（外部レビュー #536・item1〜5）
+# ─────────────────────────────────────────────────────────────────
+def test_validate_out_dir_rejects_dynamic_data_dir(tmp_path, monkeypatch):
+    """壊す不変条件: item1（DATA_DIR が CLAUDE_PLUGIN_DATA で ~/.claude 配下以外の
+    任意の場所を指す custom 構成でも、その配下への --out-dir は禁止される）
+    ／通したい検査経路: forbidden_out_dir_roots が resolve_evolve_anything_data_dir()
+    を含めること。
+    修正前（ハードコード3ルートのみ）は custom DATA_DIR がどの禁止ルートにも
+    一致せず reason が None になり本テストが落ちる。
+    """
+    custom_data_dir = tmp_path / "custom_data"
+    custom_data_dir.mkdir()
+    monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(custom_data_dir))
+    reason = p.validate_out_dir(custom_data_dir / "phase1_out")
+    assert reason is not None
+
+
+def test_validate_out_dir_accepts_dir_outside_dynamic_data_dir(tmp_path, monkeypatch):
+    """陽性対照: custom DATA_DIR 構成でも、それと無関係な隔離ディレクトリは拒否
+    されない。"""
+    custom_data_dir = tmp_path / "custom_data"
+    custom_data_dir.mkdir()
+    monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(custom_data_dir))
+    reason = p.validate_out_dir(tmp_path / "isolated_out")
+    assert reason is None
+
+
+def test_out_dir_cannot_be_nested_inside_data_dir_end_to_end(tmp_path, monkeypatch):
+    """壊す不変条件: item3（item1 のガードにより out_dir は DATA_DIR 配下になり
+    得ないため、guard.json を事後 hash 採取後に書いても DATA_DIR の観測範囲を
+    汚染しないという設計上の主張が、main() の実行経路でも実際に成立する）
+    ／通したい検査経路: main() 起動時の validate_out_dir（forbidden_out_dir_roots
+    経由で DATA_DIR を検査）。
+    修正前は DATA_DIR が禁止ルートに含まれないため、この --out-dir はそのまま
+    受理され、DATA_DIR 配下にファイル一式（guard.json 含む）が作成されてしまい
+    本テストが落ちる。
+    """
+    fake_home = tmp_path / "home"
+    sessions_root = fake_home / "sessions"
+    sessions_root.mkdir(parents=True)
+    data_dir = fake_home / "data"
+    data_dir.mkdir()
+    monkeypatch.setattr(p, "resolve_evolve_anything_data_dir", lambda: data_dir)
+    nested_out = data_dir / "phase1_out"
+
+    rc = p.main([
+        "--sessions-root", str(sessions_root),
+        "--base-date", "2026-08-23",
+        "--out-dir", str(nested_out),
+    ])
+
+    assert rc != 0
+    assert not nested_out.exists()
+
+
+def test_snapshot_data_dir_listing_detects_same_size_content_change(tmp_path):
+    """壊す不変条件: item4（同一 byte 数のまま内容だけ書き換えられた変更を
+    size 比較では見逃すが hash 比較なら検出する）
+    ／通したい検査経路: snapshot_data_dir_listing + verify_data_dir_unchanged。
+    修正前（サイズのみ比較）は "AAAA"→"BBBB"（同じ4byte）を差分として検出できず
+    本テストが落ちる。
+    """
+    d = tmp_path / "data"
+    d.mkdir()
+    f = d / "utterances.db"
+    f.write_bytes(b"AAAA")
+    before = p.snapshot_data_dir_listing(d)
+    f.write_bytes(b"BBBB")
+    after = p.snapshot_data_dir_listing(d)
+    ok, violations = p.verify_data_dir_unchanged(before, after)
+    assert ok is False
+    assert "utterances.db" in violations[0]
+
+
+def test_snapshot_data_dir_listing_passes_when_unchanged(tmp_path):
+    """陽性対照: 内容が変化していなければ hash 比較でも合格する。"""
+    d = tmp_path / "data"
+    d.mkdir()
+    f = d / "x.jsonl"
+    f.write_bytes(b"same-content")
+    before = p.snapshot_data_dir_listing(d)
+    after = p.snapshot_data_dir_listing(d)
+    ok, violations = p.verify_data_dir_unchanged(before, after)
+    assert ok is True
+    assert violations == []
+
+
+# ─────────────────────────────────────────────────────────────────
+# item5: 機構除外の独立オラクル（範囲・単調性チェックだけでは検出できない
+# 「同数の別種入替」を検出する）
+# ─────────────────────────────────────────────────────────────────
+def _small_fixture_for_oracle(sessions_root: Path) -> Path:
+    lines = [
+        _session_meta("s1"),
+        _response_user("<recommended_plugins>\n機構発話", ts="2026-08-20T00:00:01.000Z"),
+        _response_user("普通の発話", ts="2026-08-20T00:00:02.000Z"),
+    ]
+    date_dir = sessions_root / "2026" / "08" / "20"
+    date_dir.mkdir(parents=True)
+    return _write(date_dir, "oracle.jsonl", lines)
+
+
+def test_machinery_exclusion_oracle_passes_on_correct_pipeline(tmp_path):
+    """陽性対照: filter_machinery が正しく配線されている通常実行では、独立
+    オラクルと実際の after_machinery_exclusion が一致し例外が出ない。"""
+    _small_fixture_for_oracle(tmp_path)
+    result = p.run_probe(sessions_root=tmp_path, base_date=date(2026, 8, 20), days=1)
+    p.assert_machinery_exclusion_matches_oracle(result)  # 例外が出ないこと自体が検査
+    assert result.counts.after_machinery_exclusion == 1
+
+
+def test_machinery_exclusion_oracle_detects_disabled_filter(tmp_path, monkeypatch):
+    """壊す不変条件: item5（機構除外ステージがパイプラインから外れる＝配線切れ。
+    段階間の非増加関係・絶対値レンジだけでは、除外対象が0件になっても
+    raw>=after_child_exclusion>=after_machinery_exclusion>=after_dedup と
+    レンジ自体は別途破れない限り検出できない）
+    ／通したい検査経路: assert_machinery_exclusion_matches_oracle が
+    normalized_events から独立に再計算した期待値との不一致を検出する。
+    変異④相当（filter_machinery を恒等関数化し検査を無効化する）を run_probe の
+    呼び出し点で直接適用する。
+    """
+    _small_fixture_for_oracle(tmp_path)
+    monkeypatch.setattr(p, "filter_machinery", lambda candidates: list(candidates))
+    result = p.run_probe(sessions_root=tmp_path, base_date=date(2026, 8, 20), days=1)
+    # 配線切れにより機構発話も残ってしまう（本来1件のはずが2件）。
+    assert result.counts.after_machinery_exclusion == 2
+    with pytest.raises(AssertionError):
+        p.assert_machinery_exclusion_matches_oracle(result)
+
+
+def test_machinery_exclusion_oracle_detects_swap_same_count_different_texts(tmp_path):
+    """壊す不変条件: item5 の分散・入替変異（変異③相当）。除外件数
+    （after_machinery_exclusion）はレンジ・非増加関係を満たしたまま、除外対象の
+    中身だけが入れ替わる（＝機構発話が残り、代わりに関係ない通常発話が誤って
+    落とされる）ケースを、独立オラクルの多重集合（Counter）完全一致で検出する
+    （件数だけの突合ではこの入替を見逃す）。
+    ここでは filter_machinery を「機構発話でなく末尾の候補を1件落とす」偽実装に
+    差し替え、除外後件数は正しい（1件）のに中身が入れ替わっていることを示す。
+    """
+    _small_fixture_for_oracle(tmp_path)
+
+    def _wrong_filter(candidates):
+        # 機構マーカーで除外する代わりに、末尾の候補（本来除外されるべきでない
+        # 普通の発話）を1件だけ落とす壊れた実装。
+        return list(candidates)[:-1]
+
+    monkeypatch = pytest.MonkeyPatch()
+    try:
+        monkeypatch.setattr(p, "filter_machinery", _wrong_filter)
+        result = p.run_probe(sessions_root=tmp_path, base_date=date(2026, 8, 20), days=1)
+        # 件数だけ見ればレンジ・非増加関係は満たしうるが、中身は入れ替わっている
+        # （残った候補は「機構発話」であり「普通の発話」が誤って落ちている）。
+        assert result.counts.after_machinery_exclusion == 1
+        surviving_texts = {u["text"] for u in result.utterances}
+        assert "普通の発話" not in surviving_texts  # 壊れた実装の症状を確認
+        with pytest.raises(AssertionError):
+            p.assert_machinery_exclusion_matches_oracle(result)
+    finally:
+        monkeypatch.undo()
