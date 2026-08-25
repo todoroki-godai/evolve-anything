@@ -368,6 +368,26 @@ def format_verify_pending_promoted_reason(
 # --- queue 全体状態ラベル ------------------------------------------------------
 
 
+def format_corrections_read_health_note(
+    corrections_read_health: Optional[Dict[str, Any]],
+) -> Optional[str]:
+    """corrections.jsonl の read health が劣化しているときだけ1行の注記文を返す（#533）。
+
+    ``readable=False``（``OSError`` で読取失敗）または ``malformed_lines > 0``（壊れた行あり）
+    のときのみ非 None を返す。健全（ファイル不在含む＝正常な空在庫）・health 未指定は None。
+    """
+    if not corrections_read_health:
+        return None
+    readable = corrections_read_health.get("readable", True)
+    malformed = int(corrections_read_health.get("malformed_lines", 0) or 0)
+    if readable and malformed <= 0:
+        return None
+    if not readable:
+        err = corrections_read_health.get("error") or "unknown error"
+        return f"corrections.jsonl 読取失敗（{err}）— 反映待ち在庫が過小表示の可能性"
+    return f"corrections.jsonl に壊れた行 {malformed} 件 — 反映待ち在庫が過小表示の可能性"
+
+
 def compute_queue_status(
     *,
     queue: List[Dict[str, Any]],
@@ -375,14 +395,17 @@ def compute_queue_status(
     skipped_dead: List[Dict[str, Any]],
     skipped_phantom: List[Dict[str, Any]],
     unattributed_total: int,
+    corrections_read_health: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, str]:
     """queue result 全体の状態ラベルを決定する（純関数）。
 
     優先順位:
       1. queue が1件以上 → READY
-      2. queue 空だが「素材はあるのに処理できない」ものが存在 → SETUP_REQUIRED
-         （untracked_with_material / skipped_dead / skipped_phantom / unattributed_total のいずれか非空）
-      3. それ以外（本当に閾値未満・素材なし）→ EMPTY
+      2. queue 空だが「素材はあるのに処理できない」ものが存在、または corrections.jsonl の
+         read が劣化している（読取不能・壊れた行あり） → SETUP_REQUIRED
+         （untracked_with_material / skipped_dead / skipped_phantom / unattributed_total /
+         corrections_read_health のいずれか非空）
+      3. それ以外（本当に閾値未満・素材なし・read も健全）→ EMPTY
 
     ``queue_status_reason`` は常に非空の1行で根拠を添える（EMPTY と SETUP_REQUIRED が
     表示だけで見分けられない現状を直すのが目的）。
@@ -391,11 +414,21 @@ def compute_queue_status(
     「処理できない学習素材」として数える（#267 C4, #515）。``build_queue_result`` の dead PJ 分岐は両方ゼロでも
     ``skipped_dead`` に append するため、無条件で数えると素材ゼロの dead PJ だけで
     SETUP_REQUIRED が誤発火する（本当は EMPTY であるべきケース）。
+
+    ``corrections_read_health``（#533）: ``fleet.queue_materials.corrections_read_health`` の
+    返り値をそのまま渡す。劣化しているときは queue が非空でも reason に注記を追記し、queue が
+    空なら EMPTY を主張せず（「本当に0件」と断定できないため）SETUP_REQUIRED に昇格させる
+    （``silence != evaluated``）。
     """
+    read_health_note = format_corrections_read_health_note(corrections_read_health)
+
     if queue:
+        reason = f"待ち PJ {len(queue)} 件"
+        if read_health_note:
+            reason += f" / {read_health_note}"
         return {
             "queue_status": QUEUE_STATUS_READY,
-            "queue_status_reason": f"待ち PJ {len(queue)} 件",
+            "queue_status_reason": reason,
         }
 
     blocking_dead = [
@@ -414,6 +447,8 @@ def compute_queue_status(
         blocked.append(f"skipped_phantom {len(skipped_phantom)} 件")
     if unattributed_total:
         blocked.append(f"未帰属 corrections {unattributed_total} 件")
+    if read_health_note:
+        blocked.append(read_health_note)
 
     if blocked:
         return {

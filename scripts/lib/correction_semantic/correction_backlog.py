@@ -79,29 +79,30 @@ def _format_backlog_item(rec: Dict[str, Any]) -> Dict[str, Any]:
 
 def _read_eligible_backlog_records(
     corrections_path: Optional[Path],
+    *,
+    records: Optional[List[Dict[str, Any]]] = None,
 ) -> List[Dict[str, Any]]:
-    """全 PJ の有効な在庫を1回の store read で返す。"""
-    import json
+    """全 PJ の有効な在庫を1回の store read で返す。
 
-    path = Path(corrections_path) if corrections_path is not None else _default_corrections_path()
-    if not path.exists():
-        return []
-    try:
-        text = path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return []
+    raw read（ファイル不在→空・``OSError``→空・壊れた行→無言 skip）は
+    ``fleet.queue_materials.read_corrections_records_with_health`` を単一ソースとして再利用する
+    （新しい read 経路を発明しない・#533）。読取不能・壊れた行の可視化（read health）は
+    ``fleet.queue_materials.corrections_read_health`` が ``build_queue_result`` 経由で担う。
+
+    ``records``（``build_queue_result`` が既に1回 read 済みのレコード列）を渡すと再 read しない
+    （#538 round2 [Must]1 — probe 時の read と本集計の read が別だと、両者の間にファイルが
+    変化した場合に health と集計結果が食い違うスナップショット不一致が起きる）。
+    """
+    if records is not None:
+        raw = records
+    else:
+        from fleet.queue_materials import read_corrections_records_with_health
+
+        path = Path(corrections_path) if corrections_path is not None else _default_corrections_path()
+        raw, _health = read_corrections_records_with_health(path)
 
     out: List[Dict[str, Any]] = []
-    for line in text.splitlines():
-        s = line.strip()
-        if not s:
-            continue
-        try:
-            rec = json.loads(s)
-        except (json.JSONDecodeError, ValueError):
-            continue
-        if not isinstance(rec, dict):
-            continue
+    for rec in raw:
         if rec.get("reflect_status") != "promoted":
             continue
         if rec.get("invalidated"):
@@ -114,6 +115,8 @@ def _read_eligible_backlog_records(
 def _eligible_backlog_records(
     pj_slug: str,
     corrections_path: Optional[Path],
+    *,
+    records: Optional[List[Dict[str, Any]]] = None,
 ) -> List[Dict[str, Any]]:
     """当該 PJ の有効な在庫（promoted かつ invalidated でない）を timestamp 昇順で返す。
 
@@ -124,7 +127,7 @@ def _eligible_backlog_records(
 
     out = [
         rec
-        for rec in _read_eligible_backlog_records(corrections_path)
+        for rec in _read_eligible_backlog_records(corrections_path, records=records)
         if _pj_slug_match(_correction_slug(rec.get("project_path")), pj_slug)
     ]
 
@@ -135,14 +138,19 @@ def _eligible_backlog_records(
 
 
 def correction_backlog_counts_by_pj(
-    *, corrections_path: Optional[Path] = None
+    *,
+    corrections_path: Optional[Path] = None,
+    records: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, int]:
-    """有効な修正在庫を canonical PJ slug 別に1回の read で集計する（#515）。"""
+    """有効な修正在庫を canonical PJ slug 別に1回の read で集計する（#515）。
+
+    ``records``（既に read 済みのレコード列）を渡すと再 read しない（#538 round2 [Must]1）。
+    """
     from fleet.queue_materials import _correction_slug
     from pj_slug import canonical_pj_slug
 
     counts: Counter[str] = Counter()
-    for rec in _read_eligible_backlog_records(corrections_path):
+    for rec in _read_eligible_backlog_records(corrections_path, records=records):
         slug = canonical_pj_slug(_correction_slug(rec.get("project_path")))
         if slug:
             counts[str(slug)] += 1

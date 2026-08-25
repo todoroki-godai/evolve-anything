@@ -43,7 +43,7 @@ bin/evolve-revert --list   # 柱4（採用のうち戻せる件数）
 
 **新設凍結（#379 Step 1）**: 縮小完了まで新 store / observability section / advisory proposal adapter / weak_signal channel の追加は停止する（削除は許容）。単一ソースは `scripts/lib/shrink_freeze.py`。契約テスト（`test_shrink_freeze.py`）が CI portable suite で blocking 強制、pre-push light は同内容を非ブロッキング advisory として早期警告。store / weak_signal channel の runtime 書込みも `store_write_raw` / `append_signals` の凍結ゲートで reject する。`scaffold_advisory --write` も凍結中は拒否する。
 
-**表示淘汰（#379 Step 2）**: 人間の行動に繋がった実証のない observability section 33 件を audit の表示から外す（**コードは削除しない・builder は `_OBSERVABILITY_BUILDERS` に登録されたまま**）。単一ソースは `shrink_freeze.CULLED_OBSERVABILITY_SECTIONS`。淘汰した事実は `display_cull` の 1 行 meta として必ず surface する（silence != evaluated）。環境変数 `EVOLVE_SHOW_CULLED=1` で一時的に全表示へ戻せる。
+**表示淘汰（#379 Step 2）**: 人間の行動に繋がった実証のない observability section 32 件を audit の表示から外す（**コードは削除しない・builder は `_OBSERVABILITY_BUILDERS` に登録されたまま**）。単一ソースは `shrink_freeze.CULLED_OBSERVABILITY_SECTIONS`。淘汰した事実は `display_cull` の 1 行 meta として必ず surface する（silence != evaluated）。環境変数 `EVOLVE_SHOW_CULLED=1` で一時的に全表示へ戻せる。
 
 ## 4つの柱
 
@@ -105,7 +105,7 @@ bin/evolve-revert --list   # 柱4（採用のうち戻せる件数）
 - subagents/errors 測定バグ修正: subagents.jsonl の agent_type ノイズを writer/reader 二重防御（`is_noise_agent_type` 単一ソース）で遮断 + errors.jsonl の error_type unknown を決定論分類
 - `memory_capability`: memory dir 解決は `resolve_cc_memory_dir` が単一ソース
 - `skill_vuln_scan`: remote_exec/secret_exfil 等を combo 必須で検出
-- `memory_guard`: auto-memory 書込境界の runtime 記憶汚染検出。prompt_injection/secret_exfil を reject（検査失敗は fail-open）。同名エントリの上書きは決定論遷移検証でゲート
+- `memory_guard`: auto-memory 書込境界の runtime 記憶汚染検出。secret_exfil のみ reject、prompt_injection は advisory（reject せず書込は継続・検出結果は可視化）（検査失敗は fail-open）。同名エントリの上書きは決定論遷移検証でゲート
 - `daily`: 毎朝の evolve queue 自動実行。適用は対話で人間承認
 - `icebox_notice`: fail-open で既存ファイル非破壊、閾値未満は無音
 - `memory_hygiene`: 重複残骸は手順提案のみで auto-apply しない

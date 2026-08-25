@@ -457,7 +457,7 @@ def _gather_queue_result(args: argparse.Namespace) -> dict:
         aggregate_subagents_by_project,
     )
     from .project_loader import enumerate_projects
-    from .queue import _correction_slug, build_queue_result, fold_activity_counts
+    from .queue import _build_queue_result_from_snapshot, _correction_slug, fold_activity_counts
     from .queue_state import read_last_evolve
 
     config = fleet_config.load_config()
@@ -497,10 +497,20 @@ def _gather_queue_result(args: argparse.Namespace) -> dict:
     # だが material 母集団の方が広く、material を持つ untracked PJ（例: amamo）が完全沈黙し
     # 真の evolve 候補を取りこぼす。weak は read_unpromoted（reader と同一ソース）、corr は
     # _correction_slug で per-PJ reader と同じ正規化に揃える（名前空間ズレ防止）。
+    # #533: material 母集団の集計（``_collect_material_slugs``）が queue 本体の集計より前に
+    # corrections.jsonl の内容を必要とするため、ここで実ディスク read を1回だけ行い、
+    # private ``_build_queue_result_from_snapshot`` へ ``corr_records``/``corr_read_health``
+    # をそのまま渡す。ディスク read はこの関数全体で1回のまま。
+    from .queue_materials import read_corrections_records_with_health
+
+    corrections_snapshot = read_corrections_records_with_health(corr_path)
+    corr_records = corrections_snapshot.records
+
     material_slugs = _collect_material_slugs(
         weak_signals_path=weak_path if weak_path.exists() else None,
         corrections_path=corr_path,
         correction_slug=_correction_slug,
+        corr_records=corr_records,
     )
     # 実 dir gate: CC が認識する実在 PJ dir（CLAUDE.md/.claude 有）に解決できる slug のみ
     # untracked surface する（phantom/temp slug 除外）。status の新候補検出と同じ discovery。
@@ -508,7 +518,7 @@ def _gather_queue_result(args: argparse.Namespace) -> dict:
     for vp in fleet_config.filter_valid_projects(fleet_config.discover_cc_projects()):
         untracked_dir_map.setdefault(project_name_from_dir(str(vp)), str(vp))
 
-    return build_queue_result(
+    return _build_queue_result_from_snapshot(
         pj_slugs=pj_slugs,
         threshold=args.threshold,
         weak_signals_path=weak_path if weak_path.exists() else None,
@@ -519,6 +529,8 @@ def _gather_queue_result(args: argparse.Namespace) -> dict:
         pj_paths=pj_paths,
         material_slugs=material_slugs,
         untracked_dir_map=untracked_dir_map,
+        corr_records=corrections_snapshot.records,
+        corr_read_health=corrections_snapshot.health,
     )
 
 
@@ -527,6 +539,7 @@ def _collect_material_slugs(
     weak_signals_path: Path | None,
     corrections_path: Path,
     correction_slug,
+    corr_records: list[dict] | None = None,
 ) -> list[str]:
     """weak_signals + corrections に出現する全 pj_slug を集める（重複可・#86 O2）。
 
@@ -534,6 +547,18 @@ def _collect_material_slugs(
     ``queue._correction_slug``（per-PJ reader と同一正規化）で bare slug 化する。空文字は
     除外。dedup は呼び側（``collect_untracked_materials`` が canonical fold 後に行う）。
     読み取り専用・例外は握りつぶして空寄りに倒す（advisory のため落とさない）。
+
+    corrections 側の read は ``fleet.queue_materials.read_corrections_records_with_health``
+    （queue read health の単一ソース）経由にする（#538 round2 [Must]2 — 独自の
+    ``read_text``/``json.loads`` 直読みは ``OSError`` を空文字列に、壊れた行を無言 skip に
+    倒しており、``build_queue_result`` 側の read health probe と食い違う silent-fail 経路
+    だった。health 自体は advisory 集計のため呼び側では使わず、レコードのみ利用する）。
+
+    ``corr_records``（``read_corrections_records_with_health`` が既に返した有効レコード列）を
+    渡すと corrections.jsonl を再 read しない（#538 round3 [Must]4 — ``_gather_queue_result``
+    が material 母集団収集と ``build_queue_result`` の2箇所で別々に read すると、両者の間で
+    ファイルが変化した場合に material 母集団だけ旧 snapshot になる）。未指定時は従来通り
+    ``corrections_path`` から自前で read する（後方互換）。
     """
     slugs: list[str] = []
     try:
@@ -547,24 +572,16 @@ def _collect_material_slugs(
                 slugs.append(s)
     except Exception:
         pass
-    if corrections_path.exists():
-        try:
-            text = corrections_path.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            text = ""
-        for line in text.splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                rec = _json.loads(line)
-            except (ValueError, TypeError):
-                continue
-            if not isinstance(rec, dict):
-                continue
-            s = correction_slug(rec.get("project_path"))
-            if s:
-                slugs.append(s)
+    if corr_records is not None:
+        records = corr_records
+    else:
+        from .queue_materials import read_corrections_records_with_health
+
+        records, _health = read_corrections_records_with_health(corrections_path)
+    for rec in records:
+        s = correction_slug(rec.get("project_path"))
+        if s:
+            slugs.append(s)
     return slugs
 
 

@@ -28,14 +28,17 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .queue_materials import (  # noqa: F401 (再エクスポート含む)
+    CorrectionsSnapshot,
     _aliases_for,
     _canonical_slug,
     _correction_slug,
     bootstrap_consumed_by_pj,
     collect_phantom_materials,
     collect_untracked_materials,
+    corrections_read_health,
     count_unattributed_corrections,
     new_corrections_by_pj,
+    read_corrections_records_with_health,
     weak_content_poor_by_pj,
     weak_machinery_by_pj,
     weak_unprocessed_by_pj,
@@ -189,11 +192,62 @@ def build_queue_result(
     material_slugs: Optional[List[str]] = None,
     untracked_dir_map: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
-    """各 PJ の学習素材を集計し、Phase 1b #80 契約の queue result dict を返す。
+    """公開 API。corrections.jsonl を本物の reader で1回読み、純集計 helper
+    ``_build_queue_result_from_snapshot`` へ委譲する（#533）。
 
-    schema:
+    脅威モデル: このモジュールが守るのは未改変の production 経路（CLI/公開 API が
+    corrections.jsonl を1回 read し、その1つの snapshot から records と health を組で
+    下流へ渡すこと）。テストが module 属性を monkeypatch で差し替える経路は対象外
+    （Python では原理的に防げないため設計の対象にしない）。
+    """
+    corr_records, corr_read_health = read_corrections_records_with_health(corrections_path)
+    return _build_queue_result_from_snapshot(
+        pj_slugs=pj_slugs,
+        threshold=threshold,
+        weak_signals_path=weak_signals_path,
+        corrections_path=corrections_path,
+        last_evolve_map=last_evolve_map,
+        activity_map=activity_map,
+        generated_at=generated_at,
+        pj_paths=pj_paths,
+        material_slugs=material_slugs,
+        untracked_dir_map=untracked_dir_map,
+        corr_records=corr_records,
+        corr_read_health=corr_read_health,
+    )
+
+
+def _build_queue_result_from_snapshot(
+    *,
+    pj_slugs: List[str],
+    threshold: int,
+    weak_signals_path: Optional[Path],
+    corrections_path: Path,
+    last_evolve_map: Dict[str, str],
+    activity_map: Dict[str, Dict[str, int]],
+    generated_at: str,
+    corr_records: List[Dict[str, Any]],
+    corr_read_health: Dict[str, Any],
+    pj_paths: Optional[Dict[str, str]] = None,
+    material_slugs: Optional[List[str]] = None,
+    untracked_dir_map: Optional[Dict[str, str]] = None,
+) -> Dict[str, Any]:
+    """純集計 helper（**I/O を一切行わない**・private）。
+
+    ``corr_records``/``corr_read_health`` は呼び出し側（``build_queue_result`` 本体、または
+    ``fleet.cli._gather_queue_result``）が既に1回だけ実行した read の結果をそのまま渡す契約
+    （#533）。本関数自身は corrections.jsonl を読まない。テストがこの関数を直接呼ぶのは
+    「records/health が一貫して使われる」という内部の整合性契約を検査するためであり、
+    公開 API の契約検査ではない。
+
+    ``corr_records`` は下流で複数回（backlog counts 集計 → PJ ごとの weak+corr 集計）
+    イテレートされるため、呼び出し側が list でなく一度しか iterate できない generator/
+    iterator を渡すと2回目以降が空になり集計が silent に欠落する。呼び出し口の入口で
+    ``list()`` に実体化して防ぐ。
+
+    Phase 1b #80 契約の queue result dict を返す。schema:
       {generated_at, threshold, tracked_total, queue_status, queue_status_reason,
-       skipped_dead, untracked_with_material,
+       skipped_dead, untracked_with_material, corrections_read_health,
        queue: [{pj_slug, project_path, material_count, weak_unprocessed,
        new_corrections, correction_backlog, last_evolve_at, activity_since, reason,
        verify_pending}]}
@@ -227,7 +281,15 @@ def build_queue_result(
 
     #88: 閾値以上 material を持つが実 dir に解決できない untracked slug（temp slug 等）は
     ``collect_phantom_materials`` で ``skipped_phantom`` に分離する（waiting には昇格しない）。
+
+    ``_gather_queue_result``（CLI）は material 母集団収集（``_collect_material_slugs``）でも
+    corrections.jsonl の内容が要るため、本関数呼び出しより前に実ディスク read を1回行い、
+    その結果をそのまま本関数へ渡す（再 read しない）。
     """
+    # corr_records は下流で複数回イテレートされる（backlog counts → PJ ごとの集計）ため、
+    # list に実体化してから使う（一度しか iterate できない generator/iterator を渡されると
+    # 2回目以降が空になり集計が silent に欠落するため・#538 round8）。
+    corr_records = list(corr_records)
     paths = pj_paths or {}
     redirect_map = untracked_dir_map or {}
     materials: List[Dict[str, Any]] = []
@@ -235,7 +297,7 @@ def build_queue_result(
     from correction_semantic.correction_backlog import correction_backlog_counts_by_pj
 
     correction_backlog_counts = correction_backlog_counts_by_pj(
-        corrections_path=corrections_path
+        corrections_path=corrections_path, records=corr_records
     )
     for slug in pj_slugs:
         path = paths.get(slug)
@@ -257,7 +319,7 @@ def build_queue_result(
                             canon, weak_signals_path=weak_signals_path
                         ),
                         "new_corrections": new_corrections_by_pj(
-                            canon, last_evolve_at=last, corrections_path=corrections_path
+                            canon, last_evolve_at=last, records=corr_records
                         ),
                         "correction_backlog": correction_backlog_counts.get(canon, 0),
                         "last_evolve_at": last,
@@ -270,7 +332,7 @@ def build_queue_result(
             d_corr = new_corrections_by_pj(
                 slug,
                 last_evolve_at=last_evolve_map.get(slug),
-                corrections_path=corrections_path,
+                records=corr_records,
             )
             d_backlog = correction_backlog_counts.get(_canonical_slug(slug), 0)
             skipped_dead.append(
@@ -293,7 +355,7 @@ def build_queue_result(
                     slug, weak_signals_path=weak_signals_path
                 ),
                 "new_corrections": new_corrections_by_pj(
-                    slug, last_evolve_at=last, corrections_path=corrections_path
+                    slug, last_evolve_at=last, records=corr_records
                 ),
                 "correction_backlog": correction_backlog_counts.get(
                     _canonical_slug(slug), 0
@@ -326,6 +388,7 @@ def build_queue_result(
             corrections_path=corrections_path,
             dir_map=untracked_dir_map,
             correction_backlog_counts=correction_backlog_counts,
+            corr_records=corr_records,
         )
         phantom = collect_phantom_materials(
             material_slugs=material_slugs,
@@ -335,6 +398,7 @@ def build_queue_result(
             corrections_path=corrections_path,
             dir_map=untracked_dir_map,
             correction_backlog_counts=correction_backlog_counts,
+            corr_records=corr_records,
         )
     else:
         untracked = []
@@ -376,7 +440,7 @@ def build_queue_result(
         datetime.now(timezone.utc) - timedelta(days=_UNATTRIBUTED_WINDOW_DAYS)
     ).isoformat()
     unattributed_corrections = count_unattributed_corrections(
-        corrections_path, since=unattributed_since
+        records=corr_records, since=unattributed_since
     )
 
     # #267 Sprint 1: queue が空のとき「本当に素材が無い」(EMPTY) か「素材はあるのに処理
@@ -389,6 +453,7 @@ def build_queue_result(
         skipped_dead=skipped_dead,
         skipped_phantom=phantom,
         unattributed_total=unattributed_corrections.get("total", 0),
+        corrections_read_health=corr_read_health,
     )
 
     return {
@@ -401,6 +466,9 @@ def build_queue_result(
         "skipped_dead": skipped_dead,
         "untracked_with_material": untracked,
         "skipped_phantom": phantom,
+        # #533: corrections.jsonl の read health（正常な空在庫と読取不能・壊れた行の区別）。
+        # silence != evaluated — 在庫ゼロ表示が「本当に空」か「読めなかった」かを常時 surface する。
+        "corrections_read_health": corr_read_health,
         # #94: bootstrap 消化済み（破棄/TTL 任せ判断済み）で material から除外した weak の透明化。
         "bootstrap_consumed": bootstrap_consumed,
         # #113: content-poor channel（昇格不能）で material から除外した weak の透明化。

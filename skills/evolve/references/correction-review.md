@@ -63,6 +63,7 @@ res = bootstrap_backlog.mark_done(slug, dry_run=dry_run)
 
 - `daily.eligible != True and not daily.correction_backlog`（新規 0 件・在庫 0 件 / error）→ **スキップ**（AskUserQuestion を出さない。「今日の修正確認: 新規なし ✓」を1行表示）
 - **`daily.excluded_machinery_total > 0`（machinery＝委譲メッセージ等の harness 注入除外・#443 PR2-a）→ 上記スキップ／下記 AskUserQuestion のどちらの分岐でも「除外: machinery {excluded_machinery_total} 件（委譲メッセージ等の harness 注入。実際に確認可能な件数には含まれていません）」を必ず1行添える（MUST — silence != evaluated）。** 候補が全件 machinery で `daily.eligible` が `False` になったケースこそ、この1行が無いと利用者には「今日の修正確認: 新規なし ✓」しか見えず除外の事実が完全に隠れる（最重要ケース）。
+- **`daily.rephrase_similarity_dedup_count > 0` → 「rephraseのsimilarity重複により自動的に畳んだ件数: {rephrase_similarity_dedup_count}件（既に確認済みの指摘と同一内容と判定し再提示をスキップしました）」を上記スキップ／下記 AskUserQuestion のどちらの分岐でも必ず1行添える（MUST — silence != evaluated・#543）。**
 - `daily.correction_backlog` が非空 → **在庫3択で確認する（MUST）**。手順は下記「修正在庫の3択（#514）」を参照（`daily.eligible` の真偽に関わらず実施する）。
 - `daily.eligible == True` → `daily.groups`（`correction_backlog` の件数分だけ枠を削った残り・cross-PJ 承認済み一致が先頭、続いて頻度降順 — #462）を1件ずつ**反映先つき4択で確認する（MUST — #475。在庫3択と合わせて最大5問を1バッチで）**。手順は下記「反映先つき4択（#475 §4）」を参照。
 - `daily.remaining > 0` なら「ほか {remaining} グループは次回以降に提示」を1行表示する

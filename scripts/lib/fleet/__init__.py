@@ -136,7 +136,10 @@ from .cli_tokens import (  # noqa: E402, F401
 
 
 # 学習素材ベースの evolve 待ち列挙（#79）は fleet/queue.py + queue_state.py に集約
+# CorrectionsSnapshot（#533/#538）は build_queue_result の公開 signature に現れる型のため、
+# 同じ公開 namespace（`from fleet import X`）から import 可能にする（#538 round5 [Should]1）。
 from .queue import (  # noqa: E402, F401
+    CorrectionsSnapshot,
     build_queue_result,
     collect_phantom_materials,
     collect_untracked_materials,
