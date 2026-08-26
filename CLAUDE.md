@@ -40,6 +40,7 @@ bin/evolve-revert --list   # 柱4（採用のうち戻せる件数）
    投資に見合わないため。使われ始めたら解凍する）
 
 **判断規則**: 新機能・変更・tech-eval 取り込みは、この体験の 1〜4 のどこかを直接強化するものだけ採用する。この流れに登場しないものは icebox（#379 縮小方針）。
+**着手順**: 採用後の先後は [pillars-before-polish.md](.claude/rules/pillars-before-polish.md) に従う。
 
 **新設凍結（#379 Step 1）**: 縮小完了まで新 store / observability section / advisory proposal adapter / weak_signal channel の追加は停止する（削除は許容）。単一ソースは `scripts/lib/shrink_freeze.py`。契約テスト（`test_shrink_freeze.py`）が CI portable suite で blocking 強制、pre-push light は同内容を非ブロッキング advisory として早期警告。store / weak_signal channel の runtime 書込みも `store_write_raw` / `append_signals` の凍結ゲートで reject する。`scaffold_advisory --write` も凍結中は拒否する。
 

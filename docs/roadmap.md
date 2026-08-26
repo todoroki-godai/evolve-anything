@@ -1,5 +1,7 @@
 # Roadmap
 
+> **失効（2026-08-26）**: 以降の本文は履歴として残すが正典ではない。柱の枠組みは 2026-08-04 の #379 決定で再定義された一方、本文の最終更新は 2026-06-19 であり前提が古いため。現在の正典は `CLAUDE.md`「目指すユーザー体験」と `.claude/rules/pillars-before-polish.md`、暫定目標値は issue #567 とする。
+
 evolve-anything の将来計画。現在の実装状況は [README.ja.md](../README.ja.md) を参照。
 
 ---
