@@ -6,7 +6,104 @@ centralizes the places where physical Markdown/script lines become shell candida
 from __future__ import annotations
 
 import re
-from typing import Callable, List, Optional, Tuple
+from typing import Callable, List, Optional, Pattern, Tuple
+
+
+# A remote-exec detector must answer one question consistently: does this command
+# position ultimately launch a shell?  Keep that grammar here and interpolate this
+# exact fragment into every remote_exec pattern.  This is intentionally lexical and
+# conservative; dynamic names ($SHELL, aliases, functions) require runtime knowledge.
+_COMMAND_PATH = r"(?:\.{1,2}/|/(?:[A-Za-z0-9._+-]+/)*)?"
+
+
+def _static_shell_word(word: str) -> str:
+    r"""Return a regex for one statically spelled shell word.
+
+    Shell quote removal and backslash processing make ``b'a'sh`` and ``ba\sh`` the
+    same executable name as ``bash``.  Quotes and escapes are accepted only while
+    spelling an allowlisted static word; variables and other dynamic expansion stay
+    outside this issue's trust boundary.
+    """
+    quote = r"['\"]*"
+    chars = [rf"(?:\\[{re.escape(char)}]|{re.escape(char)})" for char in word]
+    return quote + quote.join(chars) + quote + r"(?![A-Za-z0-9_])"
+
+
+def _static_command(names: Tuple[str, ...]) -> str:
+    return _COMMAND_PATH + "(?:" + "|".join(_static_shell_word(n) for n in names) + ")"
+
+
+_SHELL_COMMAND = _static_command(
+    ("tcsh", "bash", "zsh", "ksh", "dash", "dsh", "ash", "csh", "sh")
+)
+_WRAPPER_COMMAND = _static_command(
+    ("exec", "env", "command", "nohup", "setsid", "time", "builtin", "eval")
+)
+_OPTION = r"(?:--|--?[A-Za-z0-9][A-Za-z0-9_-]*(?:=[^\s|;&()<>]+)?)"
+_ASSIGNMENT = r"(?:[A-Za-z_][A-Za-z0-9_]*=(?:[^\s|;&()<>]+|'[^']*'|\"[^\"]*\"))"
+_WRAPPER_STEP = rf"(?:{_WRAPPER_COMMAND}(?:\s+(?:{_OPTION}|{_ASSIGNMENT}))*\s+)"
+
+# Additional deterministic launchers found while exploring beyond the issue examples.
+# nice consumes an optional priority operand; busybox selects `sh` as an applet; xargs
+# launches its following command for pipeline input.  All still terminate in the same
+# `_SHELL_COMMAND`, so they cannot turn a non-shell consumer into a finding.
+_NICE_STEP = rf"(?:{_static_command(('nice',))}(?:\s+{_OPTION})*(?:\s+-?\d+)?\s+)"
+_BUSYBOX_STEP = rf"(?:{_static_command(('busybox',))}(?:\s+{_OPTION})*\s+)"
+_XARGS_STEP = rf"(?:{_static_command(('xargs',))}(?:\s+{_OPTION})*\s+)"
+_TIMEOUT_STEP = (
+    rf"(?:{_static_command(('timeout',))}(?:\s+{_OPTION})*"
+    rf"\s+\d+(?:\.\d+)?[smhd]?\s+)"
+)
+_SUDO_OPTION_ARG = (
+    r"(?:(?:-u|--user|-g|--group|-h|--host|-C|--close-from|-T|"
+    r"--command-timeout|-R|--chroot|-D|--chdir)\s+[^\s|;&()<>]+)"
+)
+_SUDO_STEP = (
+    rf"(?:{_static_command(('sudo',))}"
+    rf"(?:\s+(?:{_SUDO_OPTION_ARG}|{_OPTION}))*\s+)"
+)
+SHELL_EXEC_SUBJECT = (
+    rf"(?:(?:{_WRAPPER_STEP}|{_SUDO_STEP}|{_NICE_STEP}|{_BUSYBOX_STEP}|"
+    rf"{_XARGS_STEP}|{_TIMEOUT_STEP})*"
+    rf"{_SHELL_COMMAND})"
+)
+
+_REMOTE_LINE_GUARD = r"^(?!\s*echo\s+[\"'][^$`\n]*[\"']\s*$)"
+
+
+def build_remote_exec_patterns() -> List[Tuple[str, Pattern[str]]]:
+    """Build the remote-exec catalog from the shared shell execution subject.
+
+    Every entry deliberately contains ``SHELL_EXEC_SUBJECT`` verbatim.  Fetching or
+    decoding alone remains benign; a finding requires a fetch/decode-to-shell combo.
+    A direct ``echo \"curl ... | sh\"`` literal is explanatory data, while command
+    substitutions/backticks are not suppressed because they execute before ``echo``.
+    """
+    subject = SHELL_EXEC_SUBJECT
+    specs = [
+        (
+            "remote_exec.curl_pipe_sh",
+            rf"{_REMOTE_LINE_GUARD}.*\b(?:curl|wget|fetch)\b[^\n|]*\|\s*{subject}",
+        ),
+        (
+            "remote_exec.base64_pipe_sh",
+            rf"{_REMOTE_LINE_GUARD}.*\bbase64\s+(?:--decode|-d|-D)\b[^\n|]*\|\s*{subject}",
+        ),
+        (
+            "remote_exec.download_and_run",
+            rf"{_REMOTE_LINE_GUARD}.*\b(?:curl|wget)\b[^\n]*\s-o(?:\s+|=)"
+            rf"[^\n]*&&\s*{subject}",
+        ),
+        (
+            "remote_exec.shell_c_command_substitution",
+            rf"{_REMOTE_LINE_GUARD}.*{subject}[^\n]*?\s-c\b[^\n]*?\$\([^)]*\b(?:curl|wget|fetch)\b",
+        ),
+        (
+            "remote_exec.process_substitution",
+            rf"{_REMOTE_LINE_GUARD}.*{subject}(?:\s+{_OPTION})*\s+<\(\s*(?:curl|wget|fetch)\b[^)]*\)",
+        ),
+    ]
+    return [(pattern_id, re.compile(source, re.IGNORECASE)) for pattern_id, source in specs]
 
 
 _TRAILING_PIPE_RE = re.compile(r"\|\s*$")
