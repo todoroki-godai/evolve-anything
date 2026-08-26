@@ -20,7 +20,7 @@
 根拠にする（2026-08-15 codex レビュー）。
 
 ```bash
-bin/evolve-audit --growth  # 戦果ボード = 柱3（指摘率の測定可否・採用件数・除外内訳）
+bin/evolve-audit --growth  # 戦果ボード = 柱1（捕捉率）・柱2（採用件数）・柱3（指摘率の測定可否・除外内訳）
 bin/evolve-revert --list   # 柱4（採用のうち戻せる件数）
 ```
 
