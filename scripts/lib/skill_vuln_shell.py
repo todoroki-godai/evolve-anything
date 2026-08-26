@@ -14,6 +14,7 @@ from typing import Callable, List, Optional, Pattern, Tuple
 # exact fragment into every remote_exec pattern.  This is intentionally lexical and
 # conservative; dynamic names ($SHELL, aliases, functions) require runtime knowledge.
 _COMMAND_PATH = r"(?:\.{1,2}/|/(?:[A-Za-z0-9._+-]+/)*)?"
+_COMMAND_PATH_RELATIVE = r"(?:[A-Za-z0-9._+-]+/)+"
 
 
 def _static_shell_word(word: str) -> str:
@@ -29,19 +30,24 @@ def _static_shell_word(word: str) -> str:
     return quote + quote.join(chars) + quote + r"(?![A-Za-z0-9_])"
 
 
-def _static_command(names: Tuple[str, ...]) -> str:
-    return _COMMAND_PATH + "(?:" + "|".join(_static_shell_word(n) for n in names) + ")"
+def _static_command(names: Tuple[str, ...], path: str = _COMMAND_PATH) -> str:
+    return path + "(?:" + "|".join(_static_shell_word(n) for n in names) + ")"
 
 
 _SHELL_COMMAND = _static_command(
-    ("tcsh", "bash", "zsh", "ksh", "dash", "dsh", "ash", "csh", "sh")
+    ("tcsh", "bash", "zsh", "ksh", "dash", "dsh", "ash", "csh", "sh"),
+    path=rf"(?:{_COMMAND_PATH}|{_COMMAND_PATH_RELATIVE})",
 )
 _WRAPPER_COMMAND = _static_command(
     ("exec", "env", "command", "nohup", "setsid", "time", "builtin", "eval")
 )
 _OPTION = r"(?:--|--?[A-Za-z0-9][A-Za-z0-9_-]*(?:=[^\s|;&()<>]+)?)"
+_OPTION_WITH_OPERAND = r"(?:-a\s+[^\s|;&()<>]+)"
 _ASSIGNMENT = r"(?:[A-Za-z_][A-Za-z0-9_]*=(?:[^\s|;&()<>]+|'[^']*'|\"[^\"]*\"))"
-_WRAPPER_STEP = rf"(?:{_WRAPPER_COMMAND}(?:\s+(?:{_OPTION}|{_ASSIGNMENT}))*\s+)"
+_WRAPPER_STEP = (
+    rf"(?:{_WRAPPER_COMMAND}"
+    rf"(?:\s+(?:{_OPTION_WITH_OPERAND}|{_OPTION}|{_ASSIGNMENT}))*\s+)"
+)
 
 # Additional deterministic launchers found while exploring beyond the issue examples.
 # nice consumes an optional priority operand; busybox selects `sh` as an applet; xargs
@@ -83,7 +89,7 @@ def build_remote_exec_patterns() -> List[Tuple[str, Pattern[str]]]:
     specs = [
         (
             "remote_exec.curl_pipe_sh",
-            rf"{_REMOTE_LINE_GUARD}.*\b(?:curl|wget|fetch)\b[^\n|]*\|\s*{subject}",
+            rf"{_REMOTE_LINE_GUARD}.*\b(?:curl|wget|fetch)\b(?:[^\n|]*\|)+\s*{subject}",
         ),
         (
             "remote_exec.base64_pipe_sh",
