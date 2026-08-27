@@ -185,68 +185,85 @@ def test_four_pillar_scopes_are_structured_and_rendered(monkeypatch):
     assert scopes["withdrawal_candidates"]["slug"] == "proj"
     for scope in scopes.values():
         assert scope["label"] in text
-
-
-def test_gate_open_is_rechecked_from_required_and_current_run(monkeypatch):
+def _board_with_gate(monkeypatch, **gate_fields):
+    """gate だけ差し替えた board を組む（gate 検算テストの共通足場）。"""
     summary = _closed_summary()
-    summary["gate"].update(
-        gate_open=True,
-        display_start_week="2026-W30",
-        required=4,
-        best_run_length=4,
-        current_run_length=1,
-    )
+    summary["gate"].update(**gate_fields)
     monkeypatch.setattr(results_board, "build_correction_rate_summary", lambda **kwargs: summary)
     monkeypatch.setattr(results_board, "load_effective_history", lambda slug: [])
     monkeypatch.setattr(results_board, "load_revert_events", lambda slug: [])
     monkeypatch.setattr(results_board, "_build_capture_recall", lambda: {"measured": False, "reason": "fixture"})
+    return results_board.build_results_board("proj", now=NOW)
 
-    board = results_board.build_results_board("proj", now=NOW)
+
+def test_gate_open_is_rechecked_against_best_run_length(monkeypatch):
+    """`gate_open=True` なのに最長連続週数が足りない不整合を検出して閉じる。"""
+    board = _board_with_gate(
+        monkeypatch,
+        gate_open=True,
+        display_start_week="2026-W30",
+        required=4,
+        best_run_length=1,
+        current_run_length=1,
+    )
     gate = board["correction_rate"]["gate"]
     text = "\n".join(results_board.render_results_board(board))
 
     assert gate["reported_gate_open"] is True
     assert gate["gate_open"] is False
     assert board["measurements"]["correction_rate_gate"]["measured"] is False
-    assert "gate_open と連続週数が不一致" in text
+    assert "gate_open と最長連続週数が不一致" in text
     assert "1/4" in text
 
 
-def test_inverse_gate_mismatch_is_also_not_at_target(monkeypatch):
-    summary = _closed_summary()
-    summary["gate"].update(
+def test_inverse_gate_mismatch_is_also_closed(monkeypatch):
+    """`gate_open=False` なのに最長連続週数が足りている不整合も同じく検出する。"""
+    board = _board_with_gate(
+        monkeypatch,
         gate_open=False,
         display_start_week=None,
         required=4,
-        best_run_length=0,
+        best_run_length=4,
         current_run_length=4,
     )
-    monkeypatch.setattr(results_board, "build_correction_rate_summary", lambda **kwargs: summary)
-    monkeypatch.setattr(results_board, "load_effective_history", lambda slug: [])
-    monkeypatch.setattr(results_board, "load_revert_events", lambda slug: [])
-    monkeypatch.setattr(results_board, "_build_capture_recall", lambda: {"measured": False, "reason": "fixture"})
-
-    board = results_board.build_results_board("proj", now=NOW)
 
     assert board["correction_rate"]["gate"]["gate_open"] is False
     assert board["measurements"]["correction_rate_gate"]["measured"] is False
 
 
+def test_broken_streak_after_a_past_run_stays_open(monkeypatch):
+    """#508 が凍結した系列表示を検算が黙って止めないこと（#568 実装レビューの回帰）。
+
+    `_decide_display_gate` の判定式は `best_run >= k`（`correction_rate.py:551`）で、
+    `current_run_length` は #508 で追加された**点表示専用**（同 `:566-568`「gate_open の
+    判定には使わない」）。過去に4週連続が成立して以降途切れた状態
+    （best=4 / current=1）は**正常な開ゲート**であり、検算に `current_run_length` を
+    使うとこれを「不一致」と誤判定して系列表示を止めてしまう。
+    """
+    board = _board_with_gate(
+        monkeypatch,
+        gate_open=True,
+        display_start_week="2026-W30",
+        required=4,
+        best_run_length=4,
+        current_run_length=1,
+    )
+    text = "\n".join(results_board.render_results_board(board))
+
+    assert board["correction_rate"]["gate"]["gate_open"] is True
+    assert board["measurements"]["correction_rate_gate"]["measured"] is True
+    assert "不一致" not in text
+
+
 def test_normal_data_is_positive_control(monkeypatch):
-    summary = _closed_summary()
-    summary["gate"].update(
+    board = _board_with_gate(
+        monkeypatch,
         gate_open=True,
         display_start_week="2026-W30",
         required=4,
         best_run_length=4,
         current_run_length=4,
     )
-    monkeypatch.setattr(results_board, "build_correction_rate_summary", lambda **kwargs: summary)
-    monkeypatch.setattr(results_board, "load_effective_history", lambda slug: [])
-    monkeypatch.setattr(results_board, "load_revert_events", lambda slug: [])
-    monkeypatch.setattr(results_board, "_build_capture_recall", lambda: {"measured": False, "reason": "fixture"})
-
-    board = results_board.build_results_board("proj", now=NOW)
 
     assert board["correction_rate"]["gate"]["gate_open"] is True
     assert board["measurements"]["correction_rate_gate"]["measured"] is True

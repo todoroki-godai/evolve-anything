@@ -51,7 +51,18 @@ def read_measurement(
 
 
 def validate_correction_gate(summary: Dict[str, Any]) -> tuple[Dict[str, Any], Dict[str, Any]]:
-    """Recheck gate_open using required/current_run_length without trusting the flag."""
+    """Recheck gate_open against its own formula without trusting the flag.
+
+    ⚠️ 検算に使うのは ``best_run_length`` であって ``current_run_length`` ではない。
+    ``correction_rate._decide_display_gate`` の判定式は ``best_run >= k``（``:551``）で、
+    ``current_run_length`` は #508 で追加された**点表示専用**のフィールド（同 ``:566-568``
+    「gate_open の判定には使わない」）。ここで ``current`` を使うと、過去に4週連続が
+    成立して以降途切れた状態（``best_run_length=4`` / ``current_run_length=1``）を
+    「不一致」と誤判定し、#508 round2 [Must] が凍結した系列表示を黙って止めてしまう。
+
+    柱3の**到達判定**（いま4週連続に達しているか）は ``current_run_length`` を見るのが
+    正しいが、それは ``gate_open`` とは別の問いなので別フィールドで扱う（#568 の次段）。
+    """
     normalized = deepcopy(summary)
     gate = normalized.get("gate")
     if not isinstance(gate, dict):
@@ -60,14 +71,14 @@ def validate_correction_gate(summary: Dict[str, Any]) -> tuple[Dict[str, Any], D
             "reason": "gate schema がありません",
             "dropped_lines": 0,
         }
-    if "required" not in gate or "current_run_length" not in gate:
+    if "required" not in gate or "best_run_length" not in gate:
         return normalized, {
             "measured": False,
             "reason": "gate 検算値がありません",
             "dropped_lines": 0,
         }
     required = gate.get("required")
-    current = gate.get("current_run_length")
+    current = gate.get("best_run_length")
     reported = gate.get("gate_open") is True
     valid_numbers = (
         isinstance(required, int)
@@ -91,7 +102,7 @@ def validate_correction_gate(summary: Dict[str, Any]) -> tuple[Dict[str, Any], D
         return normalized, {
             "measured": False,
             "reason": (
-                "gate_open と連続週数が不一致"
+                "gate_open と最長連続週数が不一致"
                 f"（reported={reported}・検算 {current}/{required}週）"
             ),
             "dropped_lines": 0,
