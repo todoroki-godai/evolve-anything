@@ -11,6 +11,11 @@
   評価セットがない環境では数字を推測せず「未測定」と明示する。
 
 ### Fixed
+- **fix(dogfood): Layer 1b の home 固定 marker lock による隔離すり抜けを解消（#576）** —
+  `drain_pending(result_json=...)` の result JSON 読取を marker lock 外へ出し、消費・orphan が
+  どちらも空なら purge 用 marker lock を取得前に skip する。Layer 1b は result JSON を使い
+  accepted/rejected を渡さないため、read-only home でも実 marker に一切触れず完走する。
+  判断ありの日次 drain は従来どおり lock + purge し、判断済み提案のリマインド残留を防ぐ。
 - **fix(queue): corrections.jsonl 読取失敗の在庫ゼロ誤報告と symlink target 消失レースを
   是正（#533）** — 脅威モデル: この修正が守るのは未改変の production 経路（CLI/公開 API が
   corrections.jsonl を1回 read し、その1つの snapshot から records と health を組で下流へ

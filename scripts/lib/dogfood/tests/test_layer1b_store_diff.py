@@ -7,7 +7,8 @@ Layer 1a が「dry-run は何も書かない」方向を検査するのに対し
   (a) DATA_DIR を tmp にコピー
   (b) CLAUDE_PLUGIN_DATA=<コピー先> で `evolve --drain --result-json <result>` を実行
       （--result-json 指定により MARKER_ROOT=home 固定マーカーを読まず result から pending を取る
-        ＝隔離が完全になる。#402/drain_pending の result_json 優先経路）
+        うえ、判断（accepted/rejected）を伴わないため purge も no-op となり、MARKER_ROOT に
+        一切書き込まない。#402/drain_pending の result_json 優先経路）
   (c) コピー側の store 差分で assert:
       - drain サマリに weak_signals_persisted があり dry_run=False
       - weak_signals.jsonl 等の決定論チャネル書込が isolated copy に現れる
