@@ -330,6 +330,42 @@ def test_result_json_with_accept_still_requires_writable_marker(
             slug="testslug", result_json=str(result_path), accepted={pid}
         )
 
+    # 失敗の順序が変わったことを明示的に固定する（#576 実装レビュー [Should]-1）。
+    # 旧実装は最初の marker lock で落ちたので store は無傷だったが、新実装は ingest を
+    # 終えてから purge lock で落ちる。`decision_event_id` の dedup により再実行しても
+    # 記録は一度きりに収束するので実害は有界だが、無言の挙動変化にはしない。
+    assert _store_count() == 1
+
+
+def test_result_json_with_pending_but_no_decisions_leaves_readonly_marker_untouched(
+    result_with_match, readonly_marker_root, monkeypatch, tmp_path
+):
+    """実 gate と同じ「pending 非空・判断なし」でも marker に触れない（#576）。
+
+    pending が空の入力しか通していないと、`purge_ids` の組成に pending 由来の id を
+    混ぜる退行が緑のまま通ってしまう（#576 実装レビュー [Should]-2）。実 Layer 1b の
+    result JSON は未判断提案を含みうるので、そちらを gate 形状として固定する。
+    """
+    source_marker_root = tmp_path / "source-evolve-pending"
+    monkeypatch.setattr(ed, "MARKER_ROOT", source_marker_root)
+    out = ed.emit_decisions(result_with_match, dry_run=True, slug="source-slug")
+    assert out["pending"], "前提: pending 非空の result を作る"
+    monkeypatch.setattr(ed, "MARKER_ROOT", readonly_marker_root)
+    result_path = tmp_path / "result.json"
+    result_path.write_text(
+        json.dumps({"evolve_decisions": out}), encoding="utf-8"
+    )
+    before = list(readonly_marker_root.iterdir())
+
+    summary = ed.drain_pending(
+        slug="testslug", result_json=str(result_path), accepted=None, rejected=None
+    )
+
+    assert summary["accepted"] == []
+    assert summary["rejected"] == []
+    assert summary["deferred"] == [entry["id"] for entry in out["pending"]]
+    assert list(readonly_marker_root.iterdir()) == before
+
 
 def test_result_json_drain_consumes_only_that_runs_entries(
     result_with_match, skill_file, isolated, tmp_path

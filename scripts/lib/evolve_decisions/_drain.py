@@ -74,6 +74,9 @@ def drain_pending(
     # （ingest は skill_quality 採点で秒オーダーになりうるので、握ると同一 slug の emit と
     # SessionStart hook を飢餓させる）。TOCTOU は世代キー（`entry_generation`）で防ぐ。
     # ロック下では公開版でなく `_locked` / `_read_pending_marker_file` を使う（自己 deadlock）。
+    # #576: result_json 分岐は marker を読まないのでロックを取らない（lock 取得自体が
+    # MARKER_ROOT への書込＝read-only home で落ちる）。ロックが要るのは marker 分岐と、
+    # 実際に purge するときだけ。
     orphaned_entries: List[Dict[str, Any]] = []
     if result_json:
         data = json.loads(Path(result_json).read_text(encoding="utf-8"))
