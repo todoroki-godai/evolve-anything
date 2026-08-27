@@ -21,6 +21,7 @@ _LIB = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_LIB))
 
 import evolve_decisions as ed  # noqa: E402
+import evolve_decisions._drain as drain_mod  # noqa: E402
 import optimize_history_store as ohs  # noqa: E402
 
 
@@ -57,6 +58,19 @@ def isolated(monkeypatch, tmp_path):
     monkeypatch.setattr(ed, "QUEUE_ROOT", tmp_path / "evolve_decisions")
     monkeypatch.setattr(ohs, "HISTORY_ROOT", tmp_path / "optimize_history")
     return tmp_path
+
+
+@pytest.fixture
+def readonly_marker_root(monkeypatch, tmp_path, isolated):
+    """実 home を使わず、書込不能な MARKER_ROOT を再現する。"""
+    marker_root = tmp_path / "readonly-evolve-pending"
+    marker_root.mkdir()
+    marker_root.chmod(0o555)
+    monkeypatch.setattr(ed, "MARKER_ROOT", marker_root)
+    try:
+        yield marker_root
+    finally:
+        marker_root.chmod(0o755)
 
 
 def _store_count(slug="testslug"):
@@ -252,6 +266,69 @@ def test_drain_pending_reads_result_json_when_given(result_with_match, skill_fil
     summary = ed.drain_pending(slug="testslug", result_json=str(rj), accepted={pid})
     assert len(summary["accepted"]) == 1
     assert _store_count() == 1
+
+
+def test_readonly_marker_fixture_rejects_writes(readonly_marker_root):
+    """read-only 再現が無効化され、検査が偽緑になるのを防ぐ。"""
+    with pytest.raises(PermissionError):
+        (readonly_marker_root / "probe").write_text("probe", encoding="utf-8")
+
+
+def test_result_json_without_decisions_does_not_touch_readonly_marker(
+    readonly_marker_root, tmp_path
+):
+    """Layer 1b 相当の非判断 drain は home 固定 marker を一切変更しない（#576）。"""
+    result_path = tmp_path / "result.json"
+    result_path.write_text(
+        json.dumps({"evolve_decisions": {"pending": []}}), encoding="utf-8"
+    )
+    before = list(readonly_marker_root.iterdir())
+
+    summary = ed.drain_pending(
+        slug="testslug", result_json=str(result_path), accepted=None, rejected=None
+    )
+
+    assert summary["accepted"] == []
+    assert summary["rejected"] == []
+    assert list(readonly_marker_root.iterdir()) == before
+
+
+def test_result_json_path_never_reads_marker(monkeypatch, isolated, tmp_path):
+    """result JSON 優先契約を marker の内容や可用性から独立に固定する（#576）。"""
+    result_path = tmp_path / "result.json"
+    result_path.write_text(
+        json.dumps({"evolve_decisions": {"pending": []}}), encoding="utf-8"
+    )
+
+    def fail_if_marker_is_read(_slug):
+        raise AssertionError("result_json 経路で marker を読んだ")
+
+    monkeypatch.setattr(drain_mod, "_read_pending_marker_file", fail_if_marker_is_read)
+
+    summary = ed.drain_pending(slug="testslug", result_json=str(result_path))
+
+    assert summary["deferred"] == []
+
+
+def test_result_json_with_accept_still_requires_writable_marker(
+    result_with_match, skill_file, readonly_marker_root, monkeypatch, tmp_path
+):
+    """日次の判断あり経路まで marker lock skip を広げない（#576）。"""
+    source_marker_root = tmp_path / "source-evolve-pending"
+    monkeypatch.setattr(ed, "MARKER_ROOT", source_marker_root)
+    out = ed.emit_decisions(result_with_match, dry_run=True, slug="source-slug")
+    monkeypatch.setattr(ed, "MARKER_ROOT", readonly_marker_root)
+    result_path = tmp_path / "result.json"
+    result_path.write_text(
+        json.dumps({"evolve_decisions": out}), encoding="utf-8"
+    )
+    skill_file.write_text(_AFTER, encoding="utf-8")
+    pid = out["pending"][0]["id"]
+
+    with pytest.raises(PermissionError):
+        ed.drain_pending(
+            slug="testslug", result_json=str(result_path), accepted={pid}
+        )
 
 
 def test_result_json_drain_consumes_only_that_runs_entries(
