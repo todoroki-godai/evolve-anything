@@ -56,6 +56,7 @@ from correction_semantic.judge_runner import (  # noqa: E402
 )
 from pj_slug import canonical_pj_slug as _canonical_pj_slug  # noqa: E402
 from pj_slug import pj_slug_fast as _pj_slug_fast  # noqa: E402
+from measurement_result import MeasuredDict, metadata as _measurement_metadata  # noqa: E402
 
 # D の値（§2.2）: 実測（週最大1,566件 > 週上限1,400件）から初期値として設定した**仮の運用値**。
 # 100%表示ゲートがあるため D の誤差は誤った率でなく「未測定週の増加」として現れる（安全側）。
@@ -112,7 +113,7 @@ def _parse_iso(raw: Any) -> Optional[datetime]:
 # ─────────────────────────────────────────────────────────────────
 # 生データ収集（production 既定は3ストアを read-only で読む）
 # ─────────────────────────────────────────────────────────────────
-def collect_raw_data() -> Dict[str, List[Dict[str, Any]]]:
+def collect_raw_data() -> Dict[str, Any]:
     """3ストアを read-only で読む（production 既定経路）。
 
     utterances は dialogue のみ・sidechain（``/subagents/``）除外済み
@@ -123,10 +124,18 @@ def collect_raw_data() -> Dict[str, List[Dict[str, Any]]]:
     from utterance_archive.query import query_utterances_all_projects
     from weak_signals.store import read_signals
 
+    utterances = query_utterances_all_projects(source_kinds=("dialogue",))
+    judged = read_judged_records()
+    weak_signals = read_signals()
     return {
-        "utterances": query_utterances_all_projects(source_kinds=("dialogue",)),
-        "judged": read_judged_records(),
-        "weak_signals": read_signals(),
+        "utterances": utterances,
+        "judged": judged,
+        "weak_signals": weak_signals,
+        "_measurement_health": {
+            "utterances": _measurement_metadata(utterances),
+            "judged": _measurement_metadata(judged),
+            "weak_signals": _measurement_metadata(weak_signals),
+        },
     }
 
 
@@ -212,6 +221,12 @@ def compute_weekly_correction_rate(
     """
     _now = now or datetime.now(timezone.utc)
     raw = raw if raw is not None else collect_raw_data()
+    source_health = raw.get("_measurement_health", {}) or {}
+    source_failure_reasons = [
+        f"{name}: {health.get('reason') or '読取失敗'}"
+        for name, health in source_health.items()
+        if not (health or {}).get("measured", True)
+    ]
 
     raw_utterances = raw.get("utterances", []) or []
     utterances_no_home, excluded_home_dir_total = _split_home_dir_utterances(raw_utterances)
@@ -229,6 +244,7 @@ def compute_weekly_correction_rate(
     raw["utterances"] = filtered_utterances
 
     diagnostics: Dict[str, Any] = {
+        "measurement_source_health": source_health,
         # #466: 分母から除外した件数（judge の母集団と揃えるため・silence != evaluated）。
         "excluded_home_dir_total": excluded_home_dir_total,
         "excluded_untracked_total": excluded_untracked_total,
@@ -346,7 +362,7 @@ def compute_weekly_correction_rate(
         judged_count = len(judged_keys)
         judged_key_set = set(judged_keys)
 
-        failure_reasons: List[str] = []
+        failure_reasons: List[str] = list(source_failure_reasons)
         tp_keys: List[str] = []
         top3_source: List[Dict[str, Any]] = []
         for key in population_keys:
@@ -644,10 +660,25 @@ def build_correction_rate_summary(
         if latest else None
     )
 
-    return {
+    summary = {
         "gate": gate,
         "displayed_weeks": displayed,
         "latest_coverage": latest_coverage,
         "diagnostics": result["diagnostics"],
         "generated_at": result["generated_at"],
     }
+    source_health = result["diagnostics"].get("measurement_source_health", {}) or {}
+    failures = [
+        f"{name}: {health.get('reason') or '読取失敗'}"
+        for name, health in source_health.items()
+        if not (health or {}).get("measured", True)
+    ]
+    return MeasuredDict(
+        summary,
+        measured=not failures,
+        reason="; ".join(failures) or None,
+        dropped_lines=sum(
+            int((health or {}).get("dropped_lines", 0))
+            for health in source_health.values()
+        ),
+    )

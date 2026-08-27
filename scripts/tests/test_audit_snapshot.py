@@ -262,13 +262,28 @@ def test_run_audit_growth_surfaces_measurement_failure_through_recommended_actio
     proj = _isolate_env(tmp_path, monkeypatch)
     import audit as _audit
     import results_board
+    from correction_semantic import store as correction_store
     from audit import report as report_mod
+    from weak_signals import store as weak_store
 
     monkeypatch.setattr(
-        results_board,
-        "build_correction_rate_summary",
-        lambda **kwargs: (_ for _ in ()).throw(PermissionError("rate denied")),
+        weak_store, "read_signals",
+        lambda: weak_store._read_one(proj / "denied-weak-signals.jsonl"),
     )
+    monkeypatch.setattr(
+        correction_store, "read_judged_records",
+        lambda: correction_store._read_jsonl(proj / "denied-judged.jsonl"),
+    )
+    for path in (proj / "denied-weak-signals.jsonl", proj / "denied-judged.jsonl"):
+        path.touch()
+    real_open = open
+
+    def _deny_store_reads(path, *args, **kwargs):
+        if Path(path).name.startswith("denied-"):
+            raise PermissionError(13, "rate denied", path)
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.open", _deny_store_reads)
     monkeypatch.setattr(results_board, "load_effective_history", lambda slug: [])
     monkeypatch.setattr(results_board, "load_revert_events", lambda slug: [])
     monkeypatch.setattr(
@@ -292,6 +307,8 @@ def test_run_audit_growth_surfaces_measurement_failure_through_recommended_actio
         str(proj), skip_rescore=True, growth=True, dry_run=True
     )
 
-    assert "指摘率: 測定不能（読取失敗: PermissionError）" in output
+    assert "指摘率: 測定不能" in output
+    assert "weak_signals.store._read_one" in output
+    assert "rate denied" in output
     assert called["recommended_actions"] is True
     assert "要対応（実行コマンドあり）" in output

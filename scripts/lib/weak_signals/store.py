@@ -26,6 +26,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from measurement_result import MeasuredList, measurement_failure_reason
 # #46 read 層拡張: union read は共有モジュール（correction_semantic.store と単一ソース）。
 from store_read_union import iter_read_store_paths as _iter_read_store_paths  # noqa: E402
 
@@ -91,8 +92,9 @@ def default_store_path(base: Optional[Path] = None) -> Path:
 def _read_one(store: Path) -> List[Dict[str, Any]]:
     """単一 weak_signals.jsonl を読む（ファイル無し → 空リスト）。"""
     if not store.exists():
-        return []
+        return MeasuredList()
     out: List[Dict[str, Any]] = []
+    dropped_lines = 0
     try:
         with open(store, "r", encoding="utf-8", errors="replace") as f:
             for line in f:
@@ -100,12 +102,25 @@ def _read_one(store: Path) -> List[Dict[str, Any]]:
                 if not line:
                     continue
                 try:
-                    out.append(json.loads(line))
+                    record = json.loads(line)
+                    if not isinstance(record, dict):
+                        dropped_lines += 1
+                        continue
+                    out.append(record)
                 except (json.JSONDecodeError, ValueError):
-                    continue
-    except OSError:
-        return []
-    return out
+                    dropped_lines += 1
+    except OSError as exc:
+        return MeasuredList(
+            measured=False,
+            reason=measurement_failure_reason("weak_signals.store._read_one", store, exc),
+        )
+    reason = f"破損 JSONL を {dropped_lines} 行スキップ" if dropped_lines else None
+    return MeasuredList(
+        out,
+        measured=not (dropped_lines and not out),
+        reason=reason,
+        dropped_lines=dropped_lines,
+    )
 
 
 def read_signals(path: Optional[Path] = None) -> List[Dict[str, Any]]:
@@ -119,15 +134,28 @@ def read_signals(path: Optional[Path] = None) -> List[Dict[str, Any]]:
         return _read_one(Path(path))
     out: List[Dict[str, Any]] = []
     seen: set = set()
+    measured = True
+    dropped_lines = 0
+    reasons: List[str] = []
     for p in _iter_read_store_paths(STORE_NAME):
-        for r in _read_one(p):
+        batch = _read_one(p)
+        measured = measured and bool(batch.measured)
+        dropped_lines += batch.dropped_lines
+        if batch.reason:
+            reasons.append(batch.reason)
+        for r in batch:
             k = r.get("signal_key")
             if k and k in seen:
                 continue
             if k:
                 seen.add(k)
             out.append(r)
-    return out
+    return MeasuredList(
+        out,
+        measured=measured,
+        reason="; ".join(dict.fromkeys(reasons)) or None,
+        dropped_lines=dropped_lines,
+    )
 
 
 def existing_signal_keys(path: Optional[Path] = None) -> set:

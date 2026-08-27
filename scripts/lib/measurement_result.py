@@ -5,6 +5,7 @@ derived while reading and carried to the renderer.
 """
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, Optional
 
 
@@ -25,6 +26,23 @@ class MeasuredList(list):
         self.dropped_lines = dropped_lines
 
 
+class MeasuredDict(dict):
+    """A dict-compatible aggregate carrying the same read-time metadata."""
+
+    def __init__(
+        self,
+        values: Optional[Dict[str, Any]] = None,
+        *,
+        measured: bool = True,
+        reason: Optional[str] = None,
+        dropped_lines: int = 0,
+    ) -> None:
+        super().__init__(values or {})
+        self.measured = measured
+        self.reason = reason
+        self.dropped_lines = dropped_lines
+
+
 def metadata(value: Any) -> Dict[str, Any]:
     """Extract the common measured/reason/dropped_lines contract from a value."""
     return {
@@ -34,8 +52,29 @@ def metadata(value: Any) -> Dict[str, Any]:
     }
 
 
+def _safe_text(value: Any) -> str:
+    """Render diagnostic text without exposing the user's home directory."""
+    text = str(value)
+    home = str(Path.home())
+    if home and text.startswith(home):
+        return "~" + text[len(home):]
+    return text.replace(home + "/", "~/") if home else text
+
+
+def measurement_failure_reason(
+    reader_name: str, path: Any, exc: BaseException
+) -> str:
+    """Build an actionable, home-safe reader failure reason."""
+    resolved_path = path if path is not None else getattr(exc, "filename", None)
+    return (
+        f"読取失敗: {type(exc).__name__}"
+        f"（reader={reader_name} / path={_safe_text(resolved_path or '(不明)')}"
+        f" / detail={_safe_text(exc)}）"
+    )
+
+
 def read_measurement(
-    reader: Callable[[], Any], *, fallback: Any
+    reader: Callable[[], Any], *, fallback: Any, reader_name: Optional[str] = None
 ) -> tuple[Any, Dict[str, Any]]:
     """Fail-open reader wrapper that never turns an exception into a silent zero."""
     try:
@@ -43,7 +82,9 @@ def read_measurement(
     except Exception as exc:
         return fallback, {
             "measured": False,
-            "reason": f"読取失敗: {type(exc).__name__}",
+            "reason": measurement_failure_reason(
+                reader_name or getattr(reader, "__qualname__", repr(reader)), None, exc
+            ),
             "dropped_lines": 0,
         }
     return value, metadata(value)
@@ -118,8 +159,11 @@ def pillar_scopes(slug: str) -> Dict[str, Dict[str, Any]]:
     project = {"kind": "project", "slug": slug, "label": f"当PJ: {slug}"}
     return {
         "capture_recall": {
-            "kind": "plugin_bundled_eval_set",
-            "label": "プラグイン同梱評価セット",
+            "kind": "local_untracked_eval_set",
+            "label": (
+                "ローカル評価セット（git 管理外・環境依存。共有 checkout にのみ存在し、"
+                "worktree・他マシン・fresh clone では測定不能）"
+            ),
         },
         "accepted_improvements": dict(project),
         "correction_rate": {"kind": "all_projects", "label": "全PJ合算"},
@@ -137,12 +181,18 @@ def collect_board_measurements(
 ) -> tuple[Dict[str, Any], Any, Any, Dict[str, Dict[str, Any]], Dict[str, Dict[str, Any]]]:
     """Read all board sources fail-open and keep each source's health separate."""
     correction, correction_health = read_measurement(
-        correction_reader, fallback=correction_fallback
+        correction_reader,
+        fallback=correction_fallback,
+        reader_name="correction_rate.build_correction_rate_summary",
     )
     # ⚠️ correction は verbatim のまま返す（上の docstring 参照）。
     gate_health = validate_correction_gate(correction)
-    history, history_health = read_measurement(history_reader, fallback=[])
-    reverts, revert_health = read_measurement(revert_reader, fallback=[])
+    history, history_health = read_measurement(
+        history_reader, fallback=[], reader_name="optimize_history_store.load_effective_history"
+    )
+    reverts, revert_health = read_measurement(
+        revert_reader, fallback=[], reader_name="optimize_history_store.load_revert_events"
+    )
     return (
         correction,
         [] if history is None else history,

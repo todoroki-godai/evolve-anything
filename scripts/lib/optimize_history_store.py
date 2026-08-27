@@ -80,7 +80,11 @@ def _read_jsonl(path: Path) -> List[Dict[str, Any]]:
         if not line:
             continue
         try:
-            records.append(json.loads(line))
+            record = json.loads(line)
+            if not isinstance(record, dict):
+                dropped_lines += 1
+                continue
+            records.append(record)
         except json.JSONDecodeError:
             dropped_lines += 1
     reason = f"破損 JSONL を {dropped_lines} 行スキップ" if dropped_lines else None

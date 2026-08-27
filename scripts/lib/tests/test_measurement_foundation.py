@@ -11,8 +11,12 @@ if str(_LIB) not in sys.path:
 
 import evolve_revert_listing
 import evolve_revert_cli
+import correction_rate
+from correction_semantic import store as correction_store
+import measurement_result
 import optimize_history_store
 import results_board
+from weak_signals import store as weak_store
 
 
 NOW = datetime(2026, 8, 24, tzinfo=timezone.utc)
@@ -84,6 +88,158 @@ def test_large_partial_corruption_reports_exact_dropped_count(tmp_path):
     assert len(records) == 1
     assert records.dropped_lines == 10_000
     assert records.reason == "破損 JSONL を 10000 行スキップ"
+
+
+def test_non_object_jsonl_rows_are_counted_as_corrupt(tmp_path):
+    path = tmp_path / "mixed.jsonl"
+    path.write_text(
+        'null\n[]\n"text"\n42\ntrue\n{"id":"ok"}\n', encoding="utf-8"
+    )
+
+    records = optimize_history_store._read_jsonl(path)
+
+    assert records == [{"id": "ok"}]
+    assert records.measured is True
+    assert records.dropped_lines == 5
+    assert records.reason == "破損 JSONL を 5 行スキップ"
+
+
+def test_reader_failure_reason_has_name_safe_path_and_message(monkeypatch):
+    private_path = Path.home() / "secret" / "weak_signals.jsonl"
+
+    def _reader():
+        raise PermissionError(13, "access denied", private_path)
+
+    _, health = measurement_result.read_measurement(
+        _reader, fallback=[], reader_name="weak_signals.store.read_signals"
+    )
+
+    assert health["measured"] is False
+    assert "weak_signals.store.read_signals" in health["reason"]
+    assert "~/secret/weak_signals.jsonl" in health["reason"]
+    assert str(Path.home()) not in health["reason"]
+    assert "access denied" in health["reason"]
+
+
+def test_read_measurement_extracts_metadata_before_any_list_normalization():
+    value = measurement_result.MeasuredList(
+        [], measured=False, reason="source unavailable", dropped_lines=3
+    )
+
+    returned, health = measurement_result.read_measurement(
+        lambda: value, fallback=[], reader_name="fixture.reader"
+    )
+
+    assert returned is value
+    assert health == {
+        "measured": False,
+        "reason": "source unavailable",
+        "dropped_lines": 3,
+    }
+
+
+def test_plain_list_reader_remains_a_healthy_positive_control():
+    value = [{"id": "ok"}]
+
+    returned, health = measurement_result.read_measurement(
+        lambda: value, fallback=[], reader_name="fixture.healthy_reader"
+    )
+
+    assert returned is value
+    assert health == {"measured": True, "reason": None, "dropped_lines": 0}
+
+
+def test_store_readers_return_unmeasured_lists_on_permission_error(tmp_path, monkeypatch):
+    path = tmp_path / "denied.jsonl"
+    path.touch()
+
+    def _denied(*args, **kwargs):
+        raise PermissionError(13, "permission denied", path)
+
+    monkeypatch.setattr("builtins.open", _denied)
+
+    weak = weak_store._read_one(path)
+    judged = correction_store._read_jsonl(path)
+
+    for records, reader_name in (
+        (weak, "weak_signals.store._read_one"),
+        (judged, "correction_semantic.store._read_jsonl"),
+    ):
+        assert records == []
+        assert records.measured is False
+        assert reader_name in records.reason
+        assert records.dropped_lines == 0
+
+
+def test_mixed_source_health_uses_and_not_or(tmp_path, monkeypatch):
+    good = tmp_path / "good.jsonl"
+    denied = tmp_path / "denied.jsonl"
+    good.write_text('{"signal_key":"ok"}\n', encoding="utf-8")
+    denied.touch()
+    monkeypatch.setattr(weak_store, "_iter_read_store_paths", lambda name: [good, denied])
+    real_open = open
+
+    def _selective_open(path, *args, **kwargs):
+        if Path(path) == denied:
+            raise PermissionError(13, "permission denied", denied)
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.open", _selective_open)
+
+    records = weak_store.read_signals()
+
+    assert records == [{"signal_key": "ok"}]
+    assert records.measured is False
+    assert "weak_signals.store._read_one" in records.reason
+
+
+def test_judged_mixed_source_health_uses_and_not_or(tmp_path, monkeypatch):
+    good = tmp_path / "good.jsonl"
+    denied = tmp_path / "denied.jsonl"
+    good.write_text('{"key":"a:1"}\n', encoding="utf-8")
+    denied.touch()
+    monkeypatch.setattr(
+        correction_store, "_iter_read_store_paths", lambda name: [denied, good]
+    )
+    real_open = open
+
+    def _selective_open(path, *args, **kwargs):
+        if Path(path) == denied:
+            raise PermissionError(13, "permission denied", denied)
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.open", _selective_open)
+
+    records = correction_store.read_judged_records()
+
+    assert records == [{"key": "a:1"}]
+    assert records.measured is False
+    assert "correction_semantic.store._read_jsonl" in records.reason
+
+
+def test_source_health_marks_week_unmeasured():
+    raw = {
+        "utterances": [{
+            "source_path": "/tmp/a.jsonl", "line_no": 1,
+            "timestamp": "2026-08-03T00:00:00Z", "ingested_at": "2026-08-03T00:00:00Z",
+            "pj_slug": "proj",
+        }],
+        "judged": [{"key": "/tmp/a.jsonl:1", "judged_at": "2026-08-04T00:00:00Z"}],
+        "weak_signals": [],
+        "_measurement_health": {
+            "weak_signals": {"measured": False, "reason": "weak source denied", "dropped_lines": 0},
+            "judged": {"measured": True, "reason": None, "dropped_lines": 0},
+            "utterances": {"measured": True, "reason": None, "dropped_lines": 0},
+        },
+    }
+
+    result = correction_rate.compute_weekly_correction_rate(
+        now=NOW, raw=raw, tracked_projects=["proj"]
+    )
+
+    assert result["weeks"][0]["measured"] is False
+    assert result["weeks"][0]["rate"] is None
+    assert "weak_signals: weak source denied" in result["weeks"][0]["failure_reasons"]
 
 
 def test_results_board_reader_failures_are_distinct_and_rendered(monkeypatch):
@@ -175,7 +331,11 @@ def test_four_pillar_scopes_are_structured_and_rendered(monkeypatch):
     scopes = board["measurement_scopes"]
     text = "\n".join(results_board.render_results_board(board))
 
-    assert scopes["capture_recall"]["kind"] == "plugin_bundled_eval_set"
+    assert scopes["capture_recall"]["kind"] == "local_untracked_eval_set"
+    assert scopes["capture_recall"]["label"] == (
+        "ローカル評価セット（git 管理外・環境依存。共有 checkout にのみ存在し、"
+        "worktree・他マシン・fresh clone では測定不能）"
+    )
     assert scopes["accepted_improvements"] == {
         "kind": "project",
         "slug": "proj",
