@@ -28,6 +28,14 @@ from optimize_history_store import load_effective_history, load_revert_events
 from correction_rate import build_correction_rate_summary, GATE_CONSECUTIVE_WEEKS
 from correction_semantic.prompt import CATEGORY_ENUM, CATEGORY_LABELS_JA
 from evolve_revert import REASON_LABELS, compute_revert_availability
+from measurement_result import (
+    collect_board_measurements,
+    pillar_scopes,
+    render_decisions_health,
+    render_rate_health,
+    render_revert_health,
+    render_scope,
+)
 import rl_common.detection as correction_detection
 
 _WINDOW_DAYS = 30
@@ -278,34 +286,28 @@ def build_results_board(slug: str, now: Optional[datetime] = None) -> Dict[str, 
     prev_window_start = _now - timedelta(days=_WINDOW_DAYS * 2)
 
     # ── 指摘率（ADR-054 §7.2.1 柱3(a)）: 3ストア read 時 join の週次集計 ──────
-    try:
-        correction_rate = build_correction_rate_summary(now=_now)
-    except Exception:
-        correction_rate = dict(_EMPTY_CORRECTION_RATE)
-        correction_rate["generated_at"] = _now.isoformat()
+    correction_rate, history, revert_events, scopes, measurements = collect_board_measurements(
+        slug,
+        correction_reader=lambda: build_correction_rate_summary(now=_now),
+        history_reader=lambda: load_effective_history(slug),
+        revert_reader=lambda: load_revert_events(slug),
+        correction_fallback={**_EMPTY_CORRECTION_RATE, "generated_at": _now.isoformat()},
+    )
     capture_recall = _build_capture_recall()
 
     # ── 採用した改善: 直近30日の optimize_history ─────────────────
     # #402 段階4: revert 済み accept を判断母集団から除外した effective view を読む
     # （raw のままだと revert イベントが history[-10:] に混入し本物の decision を
     # 押し出す・S1）。
-    try:
-        history = load_effective_history(slug) or []
-    except Exception:
-        history = []
-
     # withdrawal candidate の「戻し済み」表示用（S4）。effective view は revert 済み
     # accept を既に除外しているため、このボードで reverted=True になることは構造上
     # 無いが、fold の内部実装に依存せず load_revert_events 経由で判定する契約にする
     # （results_board で individual fold 実装をしない・設計正典 §3）。
-    try:
-        reverted_ids = {
-            e.get("reverted_entry_id")
-            for e in (load_revert_events(slug) or [])
-            if e.get("reverted_entry_id") is not None
-        }
-    except Exception:
-        reverted_ids = set()
+    reverted_ids = {
+        e.get("reverted_entry_id")
+        for e in revert_events
+        if e.get("reverted_entry_id") is not None
+    }
 
     recent_history = [
         h for h in history if _in_window(h, window_start, _now, inclusive_end=True)
@@ -363,6 +365,8 @@ def build_results_board(slug: str, now: Optional[datetime] = None) -> Dict[str, 
         "generated_at": _now.isoformat(),
         "correction_rate": correction_rate,
         "capture_recall": capture_recall,
+        "measurement_scopes": scopes,
+        "measurements": measurements,
         "decisions": {
             "accepted": len(buckets["accepted"]),
             "rejected": len(buckets["rejected"]),
@@ -597,6 +601,8 @@ def render_results_board(board: Dict[str, Any]) -> List[str]:
     decisions = board["decisions"]
 
     lines = ["## 🏆 戦果ボード", ""]
+    scopes = board.get("measurement_scopes") or pillar_scopes(board.get("slug", "(unknown)"))
+    measurements = board.get("measurements") or {}
 
     capture = board.get("capture_recall") or {"measured": False, "reason": "評価セットなし"}
     if capture.get("measured"):
@@ -612,15 +618,15 @@ def render_results_board(board: Dict[str, Any]) -> List[str]:
         )
     else:
         lines.append(f"**L1捕捉率: 未測定（{capture.get('reason', '評価セットなし')}）**")
+    lines.append(render_scope(scopes, "capture_recall"))
     lines.append("")
 
+    lines.extend(render_rate_health(measurements))
+    lines.append(render_scope(scopes, "correction_rate"))
     lines.extend(_render_correction_rate(board.get("correction_rate") or _EMPTY_CORRECTION_RATE))
 
-    lines.append(
-        f"採用した改善（直近30日）: accepted {decisions['accepted']} 件 / "
-        f"rejected {decisions['rejected']} 件 / pending {decisions['pending']} 件 / "
-        f"excluded {decisions['excluded']} 件"
-    )
+    lines.extend(render_decisions_health(decisions, measurements))
+    lines.append(render_scope(scopes, "accepted_improvements"))
     # ADR-054 §2.6-7: excluded の理由内訳を画面に出す（テスト汚染/legacy無効化が
     # どちらもどこにも見えない状態を解消する）。
     excluded_reasons = board.get("excluded_reasons") or {}
@@ -659,5 +665,9 @@ def render_results_board(board: Dict[str, Any]) -> List[str]:
                 if label:
                     lines.append(f"  {label}")
         lines.append("")
+
+    lines.extend(render_revert_health(measurements))
+    lines.append(render_scope(scopes, "withdrawal_candidates"))
+    lines.append("")
 
     return lines

@@ -11,6 +11,12 @@
   評価セットがない環境では数字を推測せず「未測定」と明示する。
 
 ### Fixed
+- **fix(audit): 戦果ボードの測定不能・測定スコープ・指摘率 gate 検算を明示（#568）** —
+  correction rate / optimize history / revert event の読取例外を 0 件へ丸めず、理由つきの
+  `measured=false` として `evolve-audit --growth` / `evolve-revert --list`（JSON を含む）へ
+  surface する。JSONL の破損行は fail-open で読み続けつつ脱落行数を表示し、全行破損は
+  測定不能とする。4柱にはプラグイン同梱評価セット・当PJ・全PJ合算の scope を構造化して
+  併記し、指摘率 gate は `required` と `current_run_length` で再検算して不一致を到達扱いにしない。
 - **fix(dogfood): Layer 1b の home 固定 marker lock による隔離すり抜けを解消（#576）** —
   `drain_pending(result_json=...)` の result JSON 読取を marker lock 外へ出し、消費・orphan が
   どちらも空なら purge 用 marker lock を取得前に skip する。Layer 1b は result JSON を使い
