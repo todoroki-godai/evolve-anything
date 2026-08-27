@@ -502,7 +502,10 @@ def _render_correction_rate_point(gate: Dict[str, Any], correction_rate: Dict[st
     return lines
 
 
-def _render_correction_rate(correction_rate: Dict[str, Any]) -> List[str]:
+def _render_correction_rate(
+    correction_rate: Dict[str, Any],
+    gate_health: Optional[Dict[str, Any]] = None,
+) -> List[str]:
     """指摘率セクション（ADR-054 §7.2.1 柱3(a)）の markdown ブロックを生成する。
 
     表示開始ゲート（§2.9・k=``GATE_CONSECUTIVE_WEEKS`` 週連続で全量判定確定週が揃うまで
@@ -517,6 +520,15 @@ def _render_correction_rate(correction_rate: Dict[str, Any]) -> List[str]:
     1つも無ければ注記自体を出さない（silence でなく、内訳が単に無いだけ）。
     """
     gate = correction_rate.get("gate") or {}
+    # #568 T3: gate_open を鵜呑みにせず、検算に通った場合だけ系列表示を許す。
+    # 検算は `measurement_result.validate_correction_gate` が行い、summary 自体は
+    # verbatim のまま（board["correction_rate"] の pass-through 契約を壊さない）。
+    # gate_health が None の呼び出し（既存テスト等）は従来どおり gate_open に従う。
+    gate_open_effective = (
+        gate.get("gate_open") is True
+        if gate_health is None
+        else gate_health.get("gate_open_effective") is True
+    )
     required = gate.get("required", GATE_CONSECUTIVE_WEEKS)
     lines: List[str] = []
 
@@ -527,11 +539,11 @@ def _render_correction_rate(correction_rate: Dict[str, Any]) -> List[str]:
     # I7(d): PJ 別内訳が空なら点表示そのものを行わない（状態(i)へフォールバック）。
     # 既存の閉ゲート分岐・開ゲート分岐はこの下で一字も変えない。
     point_week = gate.get("point_week")
-    if not gate.get("gate_open") and point_week and (point_week.get("pj_breakdown") or {}):
+    if not gate_open_effective and point_week and (point_week.get("pj_breakdown") or {}):
         lines.extend(_render_correction_rate_point(gate, correction_rate))
         return lines
 
-    if not gate.get("gate_open"):
+    if not gate_open_effective:
         latest = correction_rate.get("latest_coverage")
         if latest:
             headline = (
@@ -623,7 +635,12 @@ def render_results_board(board: Dict[str, Any]) -> List[str]:
 
     lines.extend(render_rate_health(measurements))
     lines.append(render_scope(scopes, "correction_rate"))
-    lines.extend(_render_correction_rate(board.get("correction_rate") or _EMPTY_CORRECTION_RATE))
+    lines.extend(
+        _render_correction_rate(
+            board.get("correction_rate") or _EMPTY_CORRECTION_RATE,
+            measurements.get("correction_rate_gate"),
+        )
+    )
 
     lines.extend(render_decisions_health(decisions, measurements))
     lines.append(render_scope(scopes, "accepted_improvements"))

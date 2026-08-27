@@ -193,12 +193,12 @@ def _board_with_gate(monkeypatch, **gate_fields):
     monkeypatch.setattr(results_board, "load_effective_history", lambda slug: [])
     monkeypatch.setattr(results_board, "load_revert_events", lambda slug: [])
     monkeypatch.setattr(results_board, "_build_capture_recall", lambda: {"measured": False, "reason": "fixture"})
-    return results_board.build_results_board("proj", now=NOW)
+    return summary, results_board.build_results_board("proj", now=NOW)
 
 
 def test_gate_open_is_rechecked_against_best_run_length(monkeypatch):
-    """`gate_open=True` なのに最長連続週数が足りない不整合を検出して閉じる。"""
-    board = _board_with_gate(
+    """`gate_open=True` なのに最長連続週数が足りない不整合を検出して系列表示を止める。"""
+    summary, board = _board_with_gate(
         monkeypatch,
         gate_open=True,
         display_start_week="2026-W30",
@@ -206,19 +206,25 @@ def test_gate_open_is_rechecked_against_best_run_length(monkeypatch):
         best_run_length=1,
         current_run_length=1,
     )
-    gate = board["correction_rate"]["gate"]
+    health = board["measurements"]["correction_rate_gate"]
     text = "\n".join(results_board.render_results_board(board))
 
-    assert gate["reported_gate_open"] is True
-    assert gate["gate_open"] is False
-    assert board["measurements"]["correction_rate_gate"]["measured"] is False
+    assert health["reported_gate_open"] is True
+    assert health["gate_open_effective"] is False
+    assert health["measured"] is False
     assert "gate_open と最長連続週数が不一致" in text
     assert "1/4" in text
+    # 検算結果が**表示分岐にも配線されている**こと。health の1行だけを出して系列を
+    # そのまま描いてしまうと、不整合を報告しながら不整合な系列を見せることになる。
+    assert "全量判定の確定週が 4 週連続で揃うまで系列は表示しません。" in text
+    # 検算結果は summary を書き換えず health 側だけに載る（pass-through 契約）。
+    assert board["correction_rate"] == summary
+    assert "reported_gate_open" not in board["correction_rate"]["gate"]
 
 
 def test_inverse_gate_mismatch_is_also_closed(monkeypatch):
     """`gate_open=False` なのに最長連続週数が足りている不整合も同じく検出する。"""
-    board = _board_with_gate(
+    _summary, board = _board_with_gate(
         monkeypatch,
         gate_open=False,
         display_start_week=None,
@@ -226,9 +232,10 @@ def test_inverse_gate_mismatch_is_also_closed(monkeypatch):
         best_run_length=4,
         current_run_length=4,
     )
+    health = board["measurements"]["correction_rate_gate"]
 
-    assert board["correction_rate"]["gate"]["gate_open"] is False
-    assert board["measurements"]["correction_rate_gate"]["measured"] is False
+    assert health["gate_open_effective"] is False
+    assert health["measured"] is False
 
 
 def test_broken_streak_after_a_past_run_stays_open(monkeypatch):
@@ -240,7 +247,7 @@ def test_broken_streak_after_a_past_run_stays_open(monkeypatch):
     （best=4 / current=1）は**正常な開ゲート**であり、検算に `current_run_length` を
     使うとこれを「不一致」と誤判定して系列表示を止めてしまう。
     """
-    board = _board_with_gate(
+    _summary, board = _board_with_gate(
         monkeypatch,
         gate_open=True,
         display_start_week="2026-W30",
@@ -248,15 +255,16 @@ def test_broken_streak_after_a_past_run_stays_open(monkeypatch):
         best_run_length=4,
         current_run_length=1,
     )
+    health = board["measurements"]["correction_rate_gate"]
     text = "\n".join(results_board.render_results_board(board))
 
-    assert board["correction_rate"]["gate"]["gate_open"] is True
-    assert board["measurements"]["correction_rate_gate"]["measured"] is True
+    assert health["gate_open_effective"] is True
+    assert health["measured"] is True
     assert "不一致" not in text
 
 
 def test_normal_data_is_positive_control(monkeypatch):
-    board = _board_with_gate(
+    _summary, board = _board_with_gate(
         monkeypatch,
         gate_open=True,
         display_start_week="2026-W30",
@@ -264,6 +272,7 @@ def test_normal_data_is_positive_control(monkeypatch):
         best_run_length=4,
         current_run_length=4,
     )
+    health = board["measurements"]["correction_rate_gate"]
 
-    assert board["correction_rate"]["gate"]["gate_open"] is True
-    assert board["measurements"]["correction_rate_gate"]["measured"] is True
+    assert health["gate_open_effective"] is True
+    assert health["measured"] is True

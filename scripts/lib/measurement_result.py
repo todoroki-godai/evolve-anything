@@ -5,7 +5,6 @@ derived while reading and carried to the renderer.
 """
 from __future__ import annotations
 
-from copy import deepcopy
 from typing import Any, Callable, Dict, Iterable, Optional
 
 
@@ -50,8 +49,14 @@ def read_measurement(
     return value, metadata(value)
 
 
-def validate_correction_gate(summary: Dict[str, Any]) -> tuple[Dict[str, Any], Dict[str, Any]]:
+def validate_correction_gate(summary: Dict[str, Any]) -> Dict[str, Any]:
     """Recheck gate_open against its own formula without trusting the flag.
+
+    ⚠️ **``summary`` を書き換えてはならない。** ``build_results_board`` は
+    ``build_correction_rate_summary`` の返り値を verbatim で ``board["correction_rate"]``
+    へ載せる契約で、``test_results_board.py::test_summary_is_passed_through_verbatim``
+    が固定している。検算結果は返り値の health dict だけに載せ、表示側が
+    ``gate_open_effective`` を見て系列表示の可否を決める。
 
     ⚠️ 検算に使うのは ``best_run_length`` であって ``current_run_length`` ではない。
     ``correction_rate._decide_display_gate`` の判定式は ``best_run >= k``（``:551``）で、
@@ -63,52 +68,49 @@ def validate_correction_gate(summary: Dict[str, Any]) -> tuple[Dict[str, Any], D
     柱3の**到達判定**（いま4週連続に達しているか）は ``current_run_length`` を見るのが
     正しいが、それは ``gate_open`` とは別の問いなので別フィールドで扱う（#568 の次段）。
     """
-    normalized = deepcopy(summary)
-    gate = normalized.get("gate")
+    gate = (summary or {}).get("gate")
+
+    def _fail(reason: str) -> Dict[str, Any]:
+        return {
+            "measured": False,
+            "reason": reason,
+            "dropped_lines": 0,
+            "reported_gate_open": bool(isinstance(gate, dict) and gate.get("gate_open") is True),
+            "gate_open_effective": False,
+        }
+
     if not isinstance(gate, dict):
-        return normalized, {
-            "measured": False,
-            "reason": "gate schema がありません",
-            "dropped_lines": 0,
-        }
+        return _fail("gate schema がありません")
     if "required" not in gate or "best_run_length" not in gate:
-        return normalized, {
-            "measured": False,
-            "reason": "gate 検算値がありません",
-            "dropped_lines": 0,
-        }
+        return _fail("gate 検算値がありません")
+
     required = gate.get("required")
-    current = gate.get("best_run_length")
+    best_run = gate.get("best_run_length")
     reported = gate.get("gate_open") is True
     valid_numbers = (
         isinstance(required, int)
         and not isinstance(required, bool)
         and required > 0
-        and isinstance(current, int)
-        and not isinstance(current, bool)
-        and current >= 0
+        and isinstance(best_run, int)
+        and not isinstance(best_run, bool)
+        and best_run >= 0
     )
-    recomputed = valid_numbers and current >= required
-    gate["reported_gate_open"] = reported
     if not valid_numbers:
-        gate["gate_open"] = False
-        return normalized, {
-            "measured": False,
-            "reason": "gate 検算値が不正です",
-            "dropped_lines": 0,
-        }
+        return _fail("gate 検算値が不正です")
+
+    recomputed = best_run >= required
     if reported != recomputed:
-        gate["gate_open"] = False
-        return normalized, {
-            "measured": False,
-            "reason": (
-                "gate_open と最長連続週数が不一致"
-                f"（reported={reported}・検算 {current}/{required}週）"
-            ),
-            "dropped_lines": 0,
-        }
-    gate["gate_open"] = recomputed
-    return normalized, {"measured": True, "reason": None, "dropped_lines": 0}
+        return _fail(
+            "gate_open と最長連続週数が不一致"
+            f"（reported={reported}・検算 {best_run}/{required}週）"
+        )
+    return {
+        "measured": True,
+        "reason": None,
+        "dropped_lines": 0,
+        "reported_gate_open": reported,
+        "gate_open_effective": recomputed,
+    }
 
 
 def pillar_scopes(slug: str) -> Dict[str, Dict[str, Any]]:
@@ -137,7 +139,8 @@ def collect_board_measurements(
     correction, correction_health = read_measurement(
         correction_reader, fallback=correction_fallback
     )
-    correction, gate_health = validate_correction_gate(correction)
+    # ⚠️ correction は verbatim のまま返す（上の docstring 参照）。
+    gate_health = validate_correction_gate(correction)
     history, history_health = read_measurement(history_reader, fallback=[])
     reverts, revert_health = read_measurement(revert_reader, fallback=[])
     return (
