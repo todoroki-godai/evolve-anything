@@ -142,3 +142,23 @@ def test_skill_md_choice3_maps_to_already_reflected_weak_not_promote():
     assert "--already-reflected-weak" in segment
     assert 'decision="already_reflected"' in segment
     assert 'decision="promoted"' not in segment
+
+
+def test_proposal_protocol_docs_require_recommendation_field():
+    """提案詳細プロトコルの必須提示項目に「推奨」が含まれること（4 点提示）。
+
+    SKILL.md 側の MUST one-liner と references/proposal-protocol.md の詳細が
+    どちらか片方だけ 3 点提示へ戻ると赤くなる（片側 fix の desync 防止）。
+    """
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[3]
+    skill = (root / "skills/evolve/SKILL.md").read_text(encoding="utf-8")
+    protocol = (root / "skills/evolve/references/proposal-protocol.md").read_text(
+        encoding="utf-8"
+    )
+    for name, text in (("SKILL.md", skill), ("proposal-protocol.md", protocol)):
+        assert "次の4点" in text or "4 点提示" in text, f"{name}: 4 点提示の宣言が無い"
+        assert "**推奨**" in text, f"{name}: 推奨の項目定義が無い"
+        assert "推奨なし" in text, f"{name}: 推せない場合の書き方が無い"
+        assert "3 点提示" not in text and "次の3点" not in text, f"{name}: 旧 3 点提示が残存"

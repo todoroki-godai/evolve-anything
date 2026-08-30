@@ -1343,3 +1343,18 @@ def test_seen_filter_drops_cross_pj_when_only_confirmed_key_is_read():
     # 残存キーからは cross_pj が消えている。
     x_after = [g for g in after if g["signal_keys"] == ["kx-plain"]][0]
     assert pr._remaining_cross_pj(x_after) == []
+
+
+def test_build_proposal_prompt_requires_recommendation_per_item():
+    """朝の4択は判断材料だけでなく「推奨（どれを選ぶべきか＋理由1行）」を必ず添えさせる。
+
+    材料（記録される内容・背景）は答えではない。推奨行の指示が digest から消えると、
+    受け取った assistant は材料だけ並べて判断をユーザーへ丸投げする（grill-with-docs
+    の tech-eval で検出したギャップ）。
+    """
+    groups = [_group(["k1"], rep="rep")]
+    msg = pd.build_proposal_prompt(groups, "pj-a")
+    assert "推奨" in msg
+    # 推せない場合の逃げ道（空欄禁止）まで指示に含まれていること。
+    assert "推奨なし" in msg
+    assert "丸投げしない" in msg
