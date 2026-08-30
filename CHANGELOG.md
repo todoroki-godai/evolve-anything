@@ -8,7 +8,10 @@
   必ず添える。推せる材料が無い場合は `推奨なし: <理由>` と書き、空欄・省略は禁止。契約文は
   `proposal_digest.RECOMMENDATION_INSTRUCTION` を単一ソースとし、SessionStart の
   `additionalContext` へ到達することと SKILL.md / proposal-protocol.md との同期を契約テストで
-  固定する（片側だけ旧3点提示へ戻す・配線をすり替える・語句を残して打ち消す、のいずれも赤）。
+  固定する（片側だけ旧3点提示へ戻す・配線をすり替える・merge 側で契約文を除去する・
+  全PJ横断レーンだけ契約を落とす、のいずれも赤）。指示文書側の正準句も
+  `RECOMMENDATION_DOC_CLAUSE` を単一ソースとし完全一致で突合する。意味矛盾の検出
+  （別の場所に打ち消し文を足す）は契約テストの責務外と明記した。
 - **queue が休眠 PJ の反映待ち correction 在庫を表示** — `reflect_status=promoted` の有効在庫を
   PJ 別に read-time 集計し、通常 material が閾値未満でも在庫が1件以上あれば queue の末尾へ
   含める。`material_count` の既存意味と順位は維持し、`BACKLOG` 列で別表示する（#515）。

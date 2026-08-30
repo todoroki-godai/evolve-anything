@@ -1358,6 +1358,17 @@ def test_build_proposal_prompt_requires_recommendation_per_item():
     # 語だけ残して意味を反転させる書き換えを通さないため（codex レビュー [Should]）。
     assert pd.RECOMMENDATION_INSTRUCTION in msg
     assert "推奨なし" in pd.RECOMMENDATION_INSTRUCTION
-    # 契約文を打ち消す後段の但し書きが混入していないこと。
-    for bad in pd.RECOMMENDATION_CONTRADICTIONS:
-        assert bad not in msg, f"推奨契約を打ち消す文言が混入: {bad}"
+
+
+def test_build_proposal_prompt_carries_recommendation_for_global_lane():
+    """#582 round2 [Must]: global レーン（keys_by_pj を持つ group）でも契約文が届くこと。
+
+    per-PJ 経路だけを検査していると「keys_by_pj がある group には契約文を出さない」
+    変異が緑のまま通る（全PJ横断の指摘だけ推奨なしになる）。
+    """
+    g = _group(["k1"], rep="rep")
+    g.pop("signal_keys", None)
+    g["keys_by_pj"] = {"pj-b": ["k1"]}
+    msg = pd.build_proposal_prompt([g], "pj-a", project_paths={"pj-b": "/tmp/pj-b"})
+    assert pd.RECOMMENDATION_INSTRUCTION in msg
+    assert "--pj pj-b" in msg
