@@ -837,12 +837,23 @@ class TestBuildQueueResult:
             "weak_machinery",
             "unattributed_corrections",
             "corrections_read_health",
+            "weak_signals_read_health",
         }
         assert result["unattributed_corrections"] == {"total": 0, "by_source": {}}
         assert result["corrections_read_health"] == {
             "readable": True,
             "error": None,
             "malformed_lines": 0,
+        }
+        assert result["weak_signals_read_health"] == {
+            "sources": [
+                {
+                    "path": str(ws),
+                    "readable": True,
+                    "error": None,
+                    "malformed_lines": 0,
+                }
+            ]
         }
         assert result["generated_at"] == "2026-06-25T09:00:00Z"
         assert result["threshold"] == 3
@@ -931,6 +942,28 @@ class TestBuildQueueResult:
         assert result["queue_status"] == "SETUP_REQUIRED"
         assert "corrections.jsonl" in result["queue_status_reason"]
         assert result["corrections_read_health"]["malformed_lines"] == 1
+
+    def test_degraded_weak_signals_read_does_not_claim_empty(self, tmp_path):
+        """#539: weak_signals の部分破損を待ち0件の EMPTY 断定に紛れ込ませない。"""
+        ws = tmp_path / "weak_signals.jsonl"
+        ws.write_text("{not valid json\n", encoding="utf-8")
+        corr = tmp_path / "corrections.jsonl"
+        corr.write_text("", encoding="utf-8")
+
+        result = fq.build_queue_result(
+            pj_slugs=["quiet"],
+            threshold=3,
+            weak_signals_path=ws,
+            corrections_path=corr,
+            last_evolve_map={},
+            activity_map={},
+            generated_at="2026-06-25T09:00:00Z",
+        )
+
+        assert result["queue"] == []
+        assert result["queue_status"] == "SETUP_REQUIRED"
+        assert "weak_signals.jsonl" in result["queue_status_reason"]
+        assert result["weak_signals_read_health"]["sources"][0]["malformed_lines"] == 1
 
     def test_degraded_corrections_read_note_appended_when_queue_ready(self, tmp_path):
         """#533: queue が非空（READY）でも劣化注記は reason に残る（無音にしない）。"""
@@ -1040,6 +1073,52 @@ class TestBuildQueueResult:
 
         assert len(calls) == 1, f"corrections.jsonl was read {len(calls)} times, expected 1"
         assert {item["pj_slug"] for item in result["queue"]} == {"alpha", "beta", "gamma"}
+
+    def test_weak_signals_read_exactly_once_across_all_queue_collectors(
+        self, tmp_path, monkeypatch
+    ):
+        """#539: health と全 weak 集計が同じ1回の snapshot を使う。"""
+        ws = tmp_path / "weak_signals.jsonl"
+        ws.write_text(
+            "".join(
+                json.dumps(_ws(slug, key=f"{slug}-{i}")) + "\n"
+                for slug in ("alpha", "beta", "delta", "epsilon")
+                for i in range(2)
+            ),
+            encoding="utf-8",
+        )
+        corr = tmp_path / "corrections.jsonl"
+        corr.write_text("", encoding="utf-8")
+        delta_dir = tmp_path / "delta"
+        delta_dir.mkdir()
+
+        from weak_signals import store as weak_store
+
+        real_reader = weak_store.read_signals
+        calls = []
+
+        def _counting_reader(path=None):
+            calls.append(path)
+            return real_reader(path)
+
+        monkeypatch.setattr(weak_store, "read_signals", _counting_reader)
+
+        result = fq.build_queue_result(
+            pj_slugs=["alpha", "beta"],
+            threshold=1,
+            weak_signals_path=ws,
+            corrections_path=corr,
+            last_evolve_map={},
+            activity_map={},
+            generated_at="2026-06-25T09:00:00Z",
+            material_slugs=["alpha", "beta", "delta", "epsilon"],
+            untracked_dir_map={"delta": str(delta_dir)},
+        )
+
+        assert calls == [ws]
+        assert {item["pj_slug"] for item in result["queue"]} == {"alpha", "beta"}
+        assert result["untracked_with_material"][0]["pj_slug"] == "delta"
+        assert result["skipped_phantom"][0]["pj_slug"] == "epsilon"
 
     def test_corrections_jsonl_read_exactly_once_including_untracked_and_phantom(
         self, tmp_path, monkeypatch
@@ -1238,6 +1317,8 @@ class TestBuildQueueResultFromSnapshotPrivateHelper:
                 {"project_path": "sentinel-pj", "timestamp": "2026-06-01T00:00:00+00:00"}
             ],
             corr_read_health=sentinel_health,
+            weak_records=[],
+            weak_read_health={"sources": []},
         )
         assert result["corrections_read_health"] == sentinel_health
         assert [item["pj_slug"] for item in result["queue"]] == ["sentinel-pj"]
@@ -1267,6 +1348,8 @@ class TestBuildQueueResultFromSnapshotPrivateHelper:
             generated_at="2026-06-25T09:00:00Z",
             corr_records=[{"project_path": "alpha", "timestamp": "2026-06-01T00:00:00+00:00"}],
             corr_read_health={"readable": True, "error": None, "malformed_lines": 0},
+            weak_records=[],
+            weak_read_health={"sources": []},
         )
         assert result["queue"][0]["new_corrections"] == 1
 
@@ -1310,6 +1393,8 @@ class TestBuildQueueResultFromSnapshotPrivateHelper:
                 _corr("epsilon", "2026-06-01T00:00:00+00:00"),
             ],
             corr_read_health={"readable": True, "error": None, "malformed_lines": 0},
+            weak_records=[],
+            weak_read_health={"sources": []},
         )
         untracked = {u["pj_slug"]: u for u in result["untracked_with_material"]}
         phantom = {p["pj_slug"]: p for p in result["skipped_phantom"]}
@@ -1348,6 +1433,8 @@ class TestBuildQueueResultFromSnapshotPrivateHelper:
             generated_at="2026-06-25T09:00:00Z",
             corr_records=_records_gen(),
             corr_read_health={"readable": True, "error": None, "malformed_lines": 0},
+            weak_records=[],
+            weak_read_health={"sources": []},
         )
         assert [item["pj_slug"] for item in result["queue"]] == ["alpha"]
         assert result["queue"][0]["new_corrections"] == 1
@@ -1452,6 +1539,7 @@ class TestQueueCli:
             "error": None,
             "malformed_lines": 0,
         }
+        assert data["weak_signals_read_health"]["sources"][0]["readable"] is True
 
     def test_json_flag_surfaces_degraded_corrections_read_health(self, tmp_path, monkeypatch, capsys):
         """#538 round2 [Must]5 変更1: 劣化状態でも corrections_read_health が JSON に残ること。"""
@@ -1480,6 +1568,36 @@ class TestQueueCli:
         data = json.loads(capsys.readouterr().out)
         assert data["corrections_read_health"]["readable"] is True
         assert data["corrections_read_health"]["malformed_lines"] == 1
+        assert data["queue_status"] == "SETUP_REQUIRED"
+
+    def test_json_flag_surfaces_degraded_weak_signals_read_health(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """#539: --json でも weak_signals の部分破損を構造化して残す。"""
+        ws = tmp_path / "weak_signals.jsonl"
+        ws.write_text("{not valid json\n", encoding="utf-8")
+        corr = tmp_path / "corrections.jsonl"
+        corr.write_text("", encoding="utf-8")
+
+        from fleet import cli as fcli
+
+        monkeypatch.setattr(
+            fcli,
+            "_gather_queue_result",
+            lambda args: fq.build_queue_result(
+                pj_slugs=["quiet"],
+                threshold=args.threshold,
+                weak_signals_path=ws,
+                corrections_path=corr,
+                last_evolve_map={},
+                activity_map={},
+                generated_at="2026-06-25T09:00:00Z",
+            ),
+        )
+
+        assert fcli.main(["queue", "--json", "--threshold", "3"]) == 0
+        data = json.loads(capsys.readouterr().out)
+        assert data["weak_signals_read_health"]["sources"][0]["malformed_lines"] == 1
         assert data["queue_status"] == "SETUP_REQUIRED"
 
     def test_non_json_output_stays_silent_when_healthy(self, tmp_path, monkeypatch, capsys):
@@ -2658,6 +2776,54 @@ class TestFormatQueueTableCorrectionsReadHealth:
             )
         )
         assert "corrections.jsonl に壊れた行 4 件" in out
+
+
+class TestFormatQueueTableWeakSignalsReadHealth:
+    """#539: weak_signals の劣化だけを人間向け footer に出す。"""
+
+    def test_healthy_emits_no_footer(self):
+        out = format_queue_table(
+            {
+                **_result(queue=[]),
+                "weak_signals_read_health": {
+                    "sources": [
+                        {
+                            "path": "/data/weak_signals.jsonl",
+                            "readable": True,
+                            "error": None,
+                            "malformed_lines": 0,
+                        }
+                    ]
+                },
+            }
+        )
+        assert "weak_signals.jsonl 読取失敗" not in out
+        assert "weak_signals.jsonl に壊れた行" not in out
+
+    def test_mixed_union_degradation_emits_source_details(self):
+        out = format_queue_table(
+            {
+                **_result(queue=[]),
+                "weak_signals_read_health": {
+                    "sources": [
+                        {
+                            "path": "/canonical/weak_signals.jsonl",
+                            "readable": True,
+                            "error": None,
+                            "malformed_lines": 2,
+                        },
+                        {
+                            "path": "/legacy/weak_signals.jsonl",
+                            "readable": False,
+                            "error": "Permission denied",
+                            "malformed_lines": 0,
+                        },
+                    ]
+                },
+            }
+        )
+        assert "/canonical/weak_signals.jsonl に壊れた行 2 件" in out
+        assert "/legacy/weak_signals.jsonl 読取失敗: Permission denied" in out
 
 
 # --- build_queue_result 統合テスト（#267 Phase 5・実ストア E2E）--------------

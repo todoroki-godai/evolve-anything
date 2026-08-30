@@ -61,6 +61,7 @@ def _scoped_kept_signals(
     *,
     weak_signals_path: Optional[Path],
     marker_base: Optional[Path],
+    weak_records: Optional[List[Dict[str, Any]]] = None,
 ) -> List[Dict[str, Any]]:
     """pj_slug scope + actionable 除外を通した未処理 weak レコードを返す（共有 helper）。
 
@@ -78,7 +79,7 @@ def _scoped_kept_signals(
     from correction_semantic.promote import filter_actionable
     from weak_signals.store import read_signals
 
-    recs = read_signals(weak_signals_path)
+    recs = weak_records if weak_records is not None else read_signals(weak_signals_path)
     aliases = _aliases_for(pj_slug)
     scoped = [r for r in recs if r.get("pj_slug") in aliases]
     return filter_actionable(scoped, pj_slug, marker_base=marker_base)
@@ -89,6 +90,7 @@ def weak_unprocessed_by_pj(
     *,
     weak_signals_path: Optional[Path] = None,
     marker_base: Optional[Path] = None,
+    weak_records: Optional[List[Dict[str, Any]]] = None,
 ) -> int:
     """pj_slug の未処理 **content-rich** weak 件数を返す（material 計数用・#113）。
 
@@ -109,7 +111,10 @@ def weak_unprocessed_by_pj(
     from correction_semantic.review_channels import REVIEW_CHANNELS
 
     kept = _scoped_kept_signals(
-        pj_slug, weak_signals_path=weak_signals_path, marker_base=marker_base
+        pj_slug,
+        weak_signals_path=weak_signals_path,
+        marker_base=marker_base,
+        weak_records=weak_records,
     )
     return sum(1 for r in kept if r.get("channel") in REVIEW_CHANNELS)
 
@@ -119,6 +124,7 @@ def weak_content_poor_by_pj(
     *,
     weak_signals_path: Optional[Path] = None,
     marker_base: Optional[Path] = None,
+    weak_records: Optional[List[Dict[str, Any]]] = None,
 ) -> int:
     """material から除外した content-poor（``REVIEW_CHANNELS`` 外）weak 件数を返す（#113）。
 
@@ -129,7 +135,10 @@ def weak_content_poor_by_pj(
     from correction_semantic.review_channels import REVIEW_CHANNELS
 
     kept = _scoped_kept_signals(
-        pj_slug, weak_signals_path=weak_signals_path, marker_base=marker_base
+        pj_slug,
+        weak_signals_path=weak_signals_path,
+        marker_base=marker_base,
+        weak_records=weak_records,
     )
     return sum(1 for r in kept if r.get("channel") not in REVIEW_CHANNELS)
 
@@ -139,6 +148,7 @@ def weak_machinery_by_pj(
     *,
     weak_signals_path: Optional[Path] = None,
     marker_base: Optional[Path] = None,
+    weak_records: Optional[List[Dict[str, Any]]] = None,
 ) -> int:
     """machinery（委譲メッセージ等の harness 注入）を理由に material から除外した weak 件数（#443 PR2-a）。
 
@@ -153,7 +163,7 @@ def weak_machinery_by_pj(
     from correction_semantic.review_channels import REVIEW_CHANNELS
     from weak_signals.store import read_signals
 
-    recs = read_signals(weak_signals_path)
+    recs = weak_records if weak_records is not None else read_signals(weak_signals_path)
     aliases = _aliases_for(pj_slug)
     scoped = [r for r in recs if r.get("pj_slug") in aliases]
     stats = machinery_exclusion_stats(scoped, pj_slug, marker_base=marker_base)
@@ -167,6 +177,7 @@ def bootstrap_consumed_by_pj(
     *,
     weak_signals_path: Optional[Path] = None,
     marker_base: Optional[Path] = None,
+    weak_records: Optional[List[Dict[str, Any]]] = None,
 ) -> int:
     """bootstrap 消化済み（marker 以前 detected）で material から除外した weak 件数（#94）。
 
@@ -186,7 +197,7 @@ def bootstrap_consumed_by_pj(
     from correction_semantic.promote import filter_actionable
     from weak_signals.store import read_signals
 
-    recs = read_signals(weak_signals_path)
+    recs = weak_records if weak_records is not None else read_signals(weak_signals_path)
     aliases = _aliases_for(pj_slug)
     scoped = [r for r in recs if r.get("pj_slug") in aliases]
     without_bootstrap = filter_actionable(scoped, None)
@@ -507,6 +518,7 @@ def collect_untracked_materials(
     dir_map: Dict[str, str],
     correction_backlog_counts: Optional[Dict[str, int]] = None,
     corr_records: Optional[List[Dict[str, Any]]] = None,
+    weak_records: Optional[List[Dict[str, Any]]] = None,
 ) -> List[Dict[str, Any]]:
     """material（weak/corr）を持つが queue 母集団（tracked）に居ない PJ を advisory 列挙する（#86）。
 
@@ -562,7 +574,9 @@ def collect_untracked_materials(
 
     out: List[Dict[str, Any]] = []
     for slug in candidates:
-        weak = weak_unprocessed_by_pj(slug, weak_signals_path=weak_signals_path)
+        weak = weak_unprocessed_by_pj(
+            slug, weak_signals_path=weak_signals_path, weak_records=weak_records
+        )
         corr = new_corrections_by_pj(slug, last_evolve_at=None, records=records)
         count = weak + corr
         backlog = int(backlog_counts.get(slug, 0) or 0)
@@ -592,6 +606,7 @@ def collect_phantom_materials(
     dir_map: Dict[str, str],
     correction_backlog_counts: Optional[Dict[str, int]] = None,
     corr_records: Optional[List[Dict[str, Any]]] = None,
+    weak_records: Optional[List[Dict[str, Any]]] = None,
 ) -> List[Dict[str, Any]]:
     """閾値以上 material または修正在庫を持ち、実 dir に解決できない slug を列挙する（#88/#515）。
 
@@ -638,7 +653,9 @@ def collect_phantom_materials(
 
     out: List[Dict[str, Any]] = []
     for slug in candidates:
-        weak = weak_unprocessed_by_pj(slug, weak_signals_path=weak_signals_path)
+        weak = weak_unprocessed_by_pj(
+            slug, weak_signals_path=weak_signals_path, weak_records=weak_records
+        )
         corr = new_corrections_by_pj(slug, last_evolve_at=None, records=records)
         count = weak + corr
         backlog = int(backlog_counts.get(slug, 0) or 0)

@@ -164,6 +164,44 @@ def test_read_signals_keeps_keyless_records(tmp_path, monkeypatch) -> None:
     assert len(ws_store.read_signals()) == 2
 
 
+def test_read_signals_keeps_health_separate_for_each_union_source(
+    tmp_path, monkeypatch
+) -> None:
+    """#539: canonical が健全でも legacy の読取失敗を aggregate で無音にしない。"""
+    canonical = tmp_path / "evolve-anything"
+    legacy = tmp_path / "rl-anything"
+    canonical_record = _write_signal(
+        canonical / "weak_signals.jsonl", CUR_SLUG, line_no=31
+    )
+    denied = legacy / "weak_signals.jsonl"
+    denied.parent.mkdir(parents=True)
+    denied.touch()
+    _patch_union(monkeypatch, [canonical, legacy])
+    real_open = open
+
+    def _selective_open(path, *args, **kwargs):
+        if Path(path) == denied:
+            raise PermissionError(13, "legacy denied", denied)
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.open", _selective_open)
+
+    recs = ws_store.read_signals()
+
+    assert recs == [canonical_record]
+    sources = recs.read_health["sources"]
+    assert sources[0] == {
+        "path": str(canonical / "weak_signals.jsonl"),
+        "readable": True,
+        "error": None,
+        "malformed_lines": 0,
+    }
+    assert sources[1]["path"] == str(denied)
+    assert sources[1]["readable"] is False
+    assert "legacy denied" in sources[1]["error"]
+    assert sources[1]["malformed_lines"] == 0
+
+
 # ── 既読 union（flooding 防止の要） ────────────────────────────────────
 
 

@@ -388,6 +388,25 @@ def format_corrections_read_health_note(
     return f"corrections.jsonl に壊れた行 {malformed} 件 — 反映待ち在庫が過小表示の可能性"
 
 
+def _format_weak_signals_read_health_notes(
+    weak_signals_read_health: Optional[Dict[str, Any]],
+) -> List[str]:
+    """劣化した weak_signals union source ごとの注記を返す（#539）。"""
+    notes: List[str] = []
+    for source in (weak_signals_read_health or {}).get("sources", []):
+        readable = source.get("readable", True)
+        malformed = int(source.get("malformed_lines", 0) or 0)
+        if readable and malformed <= 0:
+            continue
+        path = source.get("path") or "weak_signals.jsonl"
+        if not readable:
+            err = source.get("error") or "unknown error"
+            notes.append(f"{path} 読取失敗（{err}）— weak 在庫が過小表示の可能性")
+        if malformed:
+            notes.append(f"{path} に壊れた行 {malformed} 件 — weak 在庫が過小表示の可能性")
+    return notes
+
+
 def compute_queue_status(
     *,
     queue: List[Dict[str, Any]],
@@ -396,6 +415,7 @@ def compute_queue_status(
     skipped_phantom: List[Dict[str, Any]],
     unattributed_total: int,
     corrections_read_health: Optional[Dict[str, Any]] = None,
+    weak_signals_read_health: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, str]:
     """queue result 全体の状態ラベルを決定する（純関数）。
 
@@ -421,11 +441,16 @@ def compute_queue_status(
     （``silence != evaluated``）。
     """
     read_health_note = format_corrections_read_health_note(corrections_read_health)
+    weak_read_health_notes = _format_weak_signals_read_health_notes(
+        weak_signals_read_health
+    )
 
     if queue:
         reason = f"待ち PJ {len(queue)} 件"
         if read_health_note:
             reason += f" / {read_health_note}"
+        if weak_read_health_notes:
+            reason += " / " + " / ".join(weak_read_health_notes)
         return {
             "queue_status": QUEUE_STATUS_READY,
             "queue_status_reason": reason,
@@ -449,6 +474,7 @@ def compute_queue_status(
         blocked.append(f"未帰属 corrections {unattributed_total} 件")
     if read_health_note:
         blocked.append(read_health_note)
+    blocked.extend(weak_read_health_notes)
 
     if blocked:
         return {
