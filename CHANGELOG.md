@@ -20,6 +20,13 @@
   評価セットがない環境では数字を推測せず「未測定」と明示する。
 
 ### Fixed
+- **docs(rules): 柱2の分母を「照合済みの反映」へ確定（#567）** — 柱2は
+  `corrections.jsonl` の `reflect_status="applied"`（実ファイルの行一致を照合したもの）だけを
+  当PJ slug・直近30日で数えると `report-by-four-pillars.md` に明記する。提案の accept
+  （戦果ボードの「採用した改善」）と、照合の無い申告（`promoted` / `already_reflected`）は
+  柱2に数えない。skill / hook / pitfall / memory への反映は測定手段が無いため
+  `not_measured` と明示し続ける（穴を塞ぐには新記録が必要で #379 新設凍結に抵触するため塞がない）。
+  裁定の正典は issue #567 のコメント（2026-08-30）。
 - **fix(audit): 戦果ボードの測定不能・測定スコープ・指摘率 gate 検算を明示（#568）** —
   correction rate / optimize history / revert event の読取例外を 0 件へ丸めず、理由つきの
   `measured=false` として `evolve-audit --growth` / `evolve-revert --list`（JSON を含む）へ
