@@ -20,6 +20,13 @@
   評価セットがない環境では数字を推測せず「未測定」と明示する。
 
 ### Fixed
+- **docs(rules): 柱2は現在の記録では測定できないと明記（#567 / #587）** —
+  `report-by-four-pillars.md` の測定手段から柱2の数値を外し、`not_measured` と書く規定にする。
+  戦果ボードの「採用した改善」（提案の accept）と、照合の無い申告
+  （`correction_review_seen.jsonl` の `promoted` / `already_reflected`）はいずれも柱2に流用しない。
+  測れない理由6件（反映日時が残らない／反映先種別が残らない／照合が修正本文と結びついていない／
+  二重計上規則が無い／無効化済みが残る／旧レコードが照合なしで applied）を codex 2巡で確認し、
+  測定の作り直しは #587 へ切り出した（族2巡打ち切り・裁定②）。
 - **fix(audit): 戦果ボードの測定不能・測定スコープ・指摘率 gate 検算を明示（#568）** —
   correction rate / optimize history / revert event の読取例外を 0 件へ丸めず、理由つきの
   `measured=false` として `evolve-audit --growth` / `evolve-revert --list`（JSON を含む）へ
