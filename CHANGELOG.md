@@ -20,6 +20,15 @@
   評価セットがない環境では数字を推測せず「未測定」と明示する。
 
 ### Fixed
+- **fix(reflect): `update_reflect_status` の index 空間ずれで別レコードが書き換わる不具合を修正（#588）** —
+  `load_corrections` は空行・壊れた JSON 行を捨てた**配列の index** を返すが、
+  `update_reflect_status` は物理行番号で照合していたため、空行1つで全体が1つずれ、
+  指定と別の correction が更新される事故があった（さらに対象行が壊れている/空のときは
+  黙って何もせず成功を返していた）。`update_reflect_status` を `load_corrections` と同じ
+  「空行・壊れた JSON 行はレコードとして数えない」index 空間で照合するよう修正し、
+  指定 index に対応するレコードが見つからない場合は成功を返さず `"not_found"` を返すように
+  変更した（呼び出し側の契約は互換維持）。TDD +4件（空行/壊れた行での誤更新の陰性試験2件・
+  存在しない index の陰性試験1件・陽性対照1件）。
 - **docs(rules): 柱2は現在の記録では測定できないと明記（#567 / #587）** —
   `report-by-four-pillars.md` の測定手段から柱2の数値を外し、`not_measured` と書く規定にする。
   戦果ボードの「採用した改善」（提案の accept）と、照合の無い申告

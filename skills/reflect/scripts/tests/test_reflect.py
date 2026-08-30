@@ -558,6 +558,95 @@ class TestUpdateReflectStatus:
         assert updated[0]["reflect_status"] == "promoted"
 
 
+# --- Test: update_reflect_status の index 空間ずれ (#588) ---
+#
+# load_corrections は空行・壊れた JSON 行を「捨てた配列」の index を返すが、
+# 呼び出し側（reflect.py の --apply/--skip 等）は load_corrections の戻り値配列に
+# enumerate した index を update_reflect_status へ渡す契約になっている。
+# update_reflect_status がこの index 空間と一致しないと、指定と別のレコードが
+# 書き換わる（issue #588）。
+
+class TestUpdateReflectStatusIndexAlignment:
+    def test_blank_line_does_not_shift_target(self, tmp_path):
+        """(a) 陰性試験: 空行があっても load_corrections の index と一致した
+        レコードだけが更新される（別レコードが書き換わらない）。"""
+        filepath = tmp_path / "corrections.jsonl"
+        filepath.write_text(
+            "\n"
+            + json.dumps({"id": "A", "reflect_status": "promoted"}, ensure_ascii=False) + "\n"
+            + json.dumps({"id": "B", "reflect_status": "promoted"}, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        records = reflect.load_corrections(filepath)
+        assert [r["id"] for r in records] == ["A", "B"]
+
+        # B（load_corrections の index=1）を指定する
+        result = reflect.update_reflect_status(filepath, [1], "skipped")
+
+        updated = reflect.load_corrections(filepath)
+        by_id = {r["id"]: r["reflect_status"] for r in updated}
+        assert by_id["B"] == "skipped", "指定した B が更新されるべき"
+        assert by_id["A"] == "promoted", "A は無関係なので変わらないべき"
+        assert result["status"] == "skipped"
+
+    def test_malformed_json_line_does_not_shift_target(self, tmp_path):
+        """(b) 陰性試験: 壊れた JSON 行があっても、対象は load_corrections の
+        index と一致したレコードだけが更新される。"""
+        filepath = tmp_path / "corrections.jsonl"
+        filepath.write_text(
+            json.dumps({"id": "A", "reflect_status": "promoted"}, ensure_ascii=False) + "\n"
+            + "invalid json\n"
+            + json.dumps({"id": "B", "reflect_status": "promoted"}, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        records = reflect.load_corrections(filepath)
+        assert [r["id"] for r in records] == ["A", "B"]
+
+        # B（load_corrections の index=1）を指定する
+        result = reflect.update_reflect_status(filepath, [1], "skipped")
+
+        updated = reflect.load_corrections(filepath)
+        by_id = {r["id"]: r["reflect_status"] for r in updated}
+        assert by_id["B"] == "skipped", "指定した B が更新されるべき"
+        assert by_id["A"] == "promoted", "A は無関係なので変わらないべき"
+        assert result["status"] == "skipped"
+        # 壊れた行はそのまま温存される（別レコードとして誤変換しない）
+        lines = filepath.read_text(encoding="utf-8").splitlines()
+        assert "invalid json" in lines
+
+    def test_out_of_range_index_does_not_report_success(self, tmp_path):
+        """(c) 陰性試験: 対象を同定できない（存在しない index）ときは
+        成功 (status==指定した status) を返さない。"""
+        corrections = [_make_correction(message="msg0")]
+        filepath = _write_corrections(tmp_path, corrections)
+
+        result = reflect.update_reflect_status(filepath, [5], "skipped")
+
+        assert result["status"] != "skipped", (
+            "存在しない index を指定したのに成功扱い(status=='skipped')を返してはいけない"
+        )
+        updated = reflect.load_corrections(filepath)
+        assert updated[0]["reflect_status"] == "pending", "誰も更新されないべき"
+
+    def test_positive_control_normal_file_still_updates(self, tmp_path):
+        """陽性対照: 空行・壊れた行が無い正常な corrections.jsonl では
+        従来どおり指定したレコードだけが更新される。"""
+        corrections = [
+            _make_correction(message="msg0"),
+            _make_correction(message="msg1"),
+            _make_correction(message="msg2"),
+        ]
+        filepath = _write_corrections(tmp_path, corrections)
+
+        result = reflect.update_reflect_status(filepath, [1], "skipped")
+
+        updated = reflect.load_corrections(filepath)
+        assert updated[0]["reflect_status"] == "pending"
+        assert updated[1]["reflect_status"] == "skipped"
+        assert updated[2]["reflect_status"] == "pending"
+        assert result["status"] == "skipped"
+
+
 # --- Test: build_output ---
 
 class TestBuildOutput:

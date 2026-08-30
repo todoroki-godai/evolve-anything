@@ -618,14 +618,19 @@ def update_reflect_status(
 
     Args:
         filepath: corrections.jsonl のパス。
-        indices: 更新対象の行インデックス（0始まり、全レコード中の位置）。
+        indices: 更新対象のインデックス（0始まり）。**load_corrections が返す配列の
+            index と同じ空間**（空行・壊れた JSON 行は数えない）。物理行番号ではない
+            （#588 — 以前は物理行番号で照合しており、空行1つで全体が1つずれ、
+            指定と別のレコードが書き換わっていた）。
         status: 新しい reflect_status 値。
         target_path: status="applied" のときのみ必須。反映先ファイルのパス。
         draft_line: status="applied" のときのみ必須。起草行の全文（照合用）。
 
     Returns:
-        {"status": "applied" | "apply_unverified" | <status>, "target": str | None,
-         "reason": str | None}
+        {"status": "applied" | "apply_unverified" | "not_found" | <status>,
+         "target": str | None, "reason": str | None}
+        indices の一部/全部に対応するレコードが見つからない場合（#588 blocking (c)）、
+        黙って成功を返さず "not_found" を返す。見つかった分のみ書き込む。
     """
     if status == "applied":
         if target_path is None or draft_line is None:
@@ -647,19 +652,42 @@ def update_reflect_status(
     lines = filepath.read_text(encoding="utf-8").splitlines()
     index_set = set(indices)
 
+    # load_corrections と同じ index 空間で照合する: 空行・壊れた JSON 行は
+    # レコードとして数えない（record_idx をインクリメントしない）。
     updated_lines = []
-    for i, line in enumerate(lines):
-        if i in index_set and line.strip():
-            try:
-                record = json.loads(line)
-                record["reflect_status"] = status
-                updated_lines.append(json.dumps(record, ensure_ascii=False))
-            except json.JSONDecodeError:
-                updated_lines.append(line)
+    matched_indices: set[int] = set()
+    record_idx = 0
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            updated_lines.append(line)
+            continue
+        try:
+            record = json.loads(stripped)
+        except json.JSONDecodeError:
+            updated_lines.append(line)
+            continue
+
+        if record_idx in index_set:
+            record["reflect_status"] = status
+            updated_lines.append(json.dumps(record, ensure_ascii=False))
+            matched_indices.add(record_idx)
         else:
             updated_lines.append(line)
+        record_idx += 1
 
     filepath.write_text("\n".join(updated_lines) + "\n", encoding="utf-8")
+
+    missing = index_set - matched_indices
+    if missing:
+        return {
+            "status": "not_found",
+            "target": target_path,
+            "reason": (
+                "指定インデックスに対応するレコードが見つかりません "
+                f"(index: {sorted(missing)})"
+            ),
+        }
     return {"status": status, "target": target_path, "reason": None}
 
 
