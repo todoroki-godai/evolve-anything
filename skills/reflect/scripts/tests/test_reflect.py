@@ -473,6 +473,33 @@ class TestLoadCorrections:
 # --- Test: update_reflect_status ---
 
 class TestUpdateReflectStatus:
+    def test_logical_index_reidentifies_physical_line_past_blank_and_malformed_rows(
+        self, tmp_path
+    ):
+        """#588: filtered index must not be reused as a physical JSONL line number."""
+        first = _make_correction(
+            message="first", session_id="sess-first", timestamp="2026-08-16T00:00:00Z"
+        )
+        target = _make_correction(
+            message="target", session_id="sess-target", timestamp="2026-08-17T00:00:00Z"
+        )
+        filepath = tmp_path / "corrections.jsonl"
+        filepath.write_text(
+            json.dumps(first, ensure_ascii=False)
+            + "\n\n{broken json\n"
+            + json.dumps(target, ensure_ascii=False)
+            + "\n",
+            encoding="utf-8",
+        )
+
+        reflect.update_reflect_status(filepath, [1], "skipped")
+
+        physical_lines = filepath.read_text(encoding="utf-8").splitlines()
+        assert physical_lines[1] == ""
+        assert physical_lines[2] == "{broken json"
+        assert json.loads(physical_lines[0])["reflect_status"] == "pending"
+        assert json.loads(physical_lines[3])["reflect_status"] == "skipped"
+
     def test_update_specific_indices(self, tmp_path):
         """指定インデックスのみ更新する（"applied" 以外の status には target_path/draft_line 不要）。"""
         corrections = [
@@ -629,6 +656,43 @@ class TestCLI:
 # --- Test: --apply CLI (#475 §6.1) ---
 
 class TestApplyCLI:
+    def test_apply_reidentifies_target_after_blank_physical_line(self, tmp_path, capsys):
+        """#588: CLI may report applied only after updating the matching source ID."""
+        other = _make_correction(
+            message="other", reflect_status="pending", session_id="sess0",
+            timestamp="2026-08-16T00:00:00Z",
+        )
+        corr = _make_correction(
+            message="target", reflect_status="promoted", session_id="sess1",
+            timestamp="2026-08-17T00:00:00Z",
+        )
+        filepath = tmp_path / "corrections.jsonl"
+        filepath.write_text(
+            json.dumps(other, ensure_ascii=False) + "\n\n"
+            + json.dumps(corr, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        target = tmp_path / "rule.md"
+        target.write_text("- 起草した行\n", encoding="utf-8")
+        draft_line_file = tmp_path / "draft.txt"
+        draft_line_file.write_text("起草した行", encoding="utf-8")
+        source_id = reflect.make_source_correction_id("sess1", "2026-08-17T00:00:00Z")
+
+        with mock.patch("sys.argv", [
+            "reflect.py", "--apply", source_id,
+            "--target-path", str(target),
+            "--draft-line-file", str(draft_line_file),
+            "--corrections-file", str(filepath),
+        ]):
+            reflect.main()
+
+        output = json.loads(capsys.readouterr().out)
+        assert output["status"] == "applied"
+        physical_lines = filepath.read_text(encoding="utf-8").splitlines()
+        assert json.loads(physical_lines[0])["reflect_status"] == "pending"
+        assert physical_lines[1] == ""
+        assert json.loads(physical_lines[2])["reflect_status"] == "applied"
+
     def test_apply_marks_applied_when_line_matches(self, tmp_path, capsys):
         """反映先ファイルに該当行が実在すれば applied を書く。"""
         corr = _make_correction(reflect_status="promoted", session_id="sess1", timestamp="2026-08-17T00:00:00Z")

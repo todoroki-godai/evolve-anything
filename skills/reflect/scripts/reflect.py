@@ -21,6 +21,7 @@ sys.path.insert(0, str(PLUGIN_ROOT / "scripts" / "lib"))
 
 from memory_temporal import make_source_correction_id
 from reflect_apply_match import check_line_applied
+from reflect_status_store import update_status_at_logical_indices
 from reflect_utils import (
     read_all_memory_entries,
     read_auto_memory,
@@ -644,22 +645,7 @@ def update_reflect_status(
     if not filepath.exists() or not indices:
         return {"status": status, "target": target_path, "reason": None}
 
-    lines = filepath.read_text(encoding="utf-8").splitlines()
-    index_set = set(indices)
-
-    updated_lines = []
-    for i, line in enumerate(lines):
-        if i in index_set and line.strip():
-            try:
-                record = json.loads(line)
-                record["reflect_status"] = status
-                updated_lines.append(json.dumps(record, ensure_ascii=False))
-            except json.JSONDecodeError:
-                updated_lines.append(line)
-        else:
-            updated_lines.append(line)
-
-    filepath.write_text("\n".join(updated_lines) + "\n", encoding="utf-8")
+    update_status_at_logical_indices(filepath, indices, status)
     return {"status": status, "target": target_path, "reason": None}
 
 
