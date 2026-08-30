@@ -81,6 +81,27 @@ def _set_project_dir(tmp_path, monkeypatch, name="myproj") -> str:
     return proj.name  # = 期待される pj_slug
 
 
+def test_additional_context_carries_recommendation_contract(tmp_path, monkeypatch):
+    """#582: 「推奨を添える」契約が、実際の SessionStart 配線（hookSpecificOutput の
+    additionalContext）まで到達すること。
+
+    build_proposal_prompt を直接叩くテストだけでは、collector 側が別 builder や旧本文へ
+    差し替わっても緑のままになる（codex レビュー [Must]）。ここは実 hook 出力で固定する。
+    """
+    from lib.daily import proposal_digest as _pd
+
+    source = _install_env(tmp_path, monkeypatch)
+    slug = _set_project_dir(tmp_path, monkeypatch)
+    _write_queue(source, {"per_pj": {slug: [_group(["k1"])]}, "global": []})
+
+    output = restore_state._build_session_proposal_output()
+    assert output is not None
+    msg = output["hookSpecificOutput"]["additionalContext"]
+    assert _pd.RECOMMENDATION_INSTRUCTION in msg
+    for bad in _pd.RECOMMENDATION_CONTRADICTIONS:
+        assert bad not in msg, f"推奨契約を打ち消す文言が混入: {bad}"
+
+
 def test_build_fires_with_proposals_for_this_pj(tmp_path, monkeypatch):
     source = _install_env(tmp_path, monkeypatch)
     slug = _set_project_dir(tmp_path, monkeypatch)

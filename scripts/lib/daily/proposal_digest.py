@@ -615,6 +615,27 @@ def _material_lines(g: Dict[str, Any]) -> List[str]:
     return lines
 
 
+#582: 提案の必須提示項目「推奨」の契約文。SKILL.md / references/proposal-protocol.md の
+# MUST one-liner と同じ要求をこの1定数に集約し、SessionStart の additionalContext へ
+# 到達させる。**文言を変えるときは3箇所すべてを同時に変える**（片側 desync は
+# test_reflect_choice_docs_sync / test_restore_state_session_proposals が赤にする）。
+RECOMMENDATION_INSTRUCTION = (
+    "各案は判断材料（記録される内容・背景）を提示したうえで、**推奨（4択のどれを選ぶ"
+    "べきかと理由を1行）を必ず添える**こと。材料だけ並べて判断を丸投げしない。"
+    "推せるだけの材料が無いときは「推奨なし: <理由>」と書く（空欄・省略は禁止）。"
+)
+
+# 推奨契約を語句だけ残して反転・骨抜きにする書き方を弾く（codex レビュー [Should]）。
+# 契約文の後段で「ただし推奨は表示しない」等を足しても検査が通ってしまうのを防ぐ。
+RECOMMENDATION_CONTRADICTIONS = (
+    "推奨は表示しない",
+    "推奨は省略",
+    "推奨は任意",
+    "推奨は書ける場合",
+    "推奨を添えなくてよい",
+)
+
+
 def _reflect_choice_lines(
     q_reflect_cmd: str,
     keys: str,
@@ -702,9 +723,7 @@ def build_proposal_prompt(
         "直後に、以下を AskUserQuestion で1件ずつ確認してください（はい/いいえの二択ではなく"
         "下記の4択）。ユーザーの依頼より先に割り込まないこと。ユーザーが提示を断ったら"
         "その場では再提示しないこと。",
-        "各案は判断材料（記録される内容・背景）を提示したうえで、**推奨（4択のどれを選ぶ"
-        "べきかと理由を1行）を必ず添える**こと。材料だけ並べて判断を丸投げしない。"
-        "推せるだけの材料が無いときは「推奨なし: <理由>」と書く（空欄・省略は禁止）。",
+        RECOMMENDATION_INSTRUCTION,
     ]
     for g in groups:
         # #412 round2 [Must]D-4: all_representatives（成分内の全 group の代表文）があれば

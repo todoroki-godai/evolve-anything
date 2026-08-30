@@ -1354,7 +1354,10 @@ def test_build_proposal_prompt_requires_recommendation_per_item():
     """
     groups = [_group(["k1"], rep="rep")]
     msg = pd.build_proposal_prompt(groups, "pj-a")
-    assert "推奨" in msg
-    # 推せない場合の逃げ道（空欄禁止）まで指示に含まれていること。
-    assert "推奨なし" in msg
-    assert "丸投げしない" in msg
+    # 語句の存在ではなく契約文そのもの（共有定数）の完全一致を要求する。
+    # 語だけ残して意味を反転させる書き換えを通さないため（codex レビュー [Should]）。
+    assert pd.RECOMMENDATION_INSTRUCTION in msg
+    assert "推奨なし" in pd.RECOMMENDATION_INSTRUCTION
+    # 契約文を打ち消す後段の但し書きが混入していないこと。
+    for bad in pd.RECOMMENDATION_CONTRADICTIONS:
+        assert bad not in msg, f"推奨契約を打ち消す文言が混入: {bad}"
