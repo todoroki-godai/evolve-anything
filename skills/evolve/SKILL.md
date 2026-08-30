@@ -90,11 +90,12 @@ evolve の手順は Step 0.5〜11 と長く、**書き込み操作ごとに dry-
 ## 提案詳細プロトコル（全 AskUserQuestion 共通）
 
 evolve が「やりますか？」と尋ねる前に、ユーザーが Yes/No を判断できる材料を提示する共通ルール。
-**AskUserQuestion を出す前に per-item で次の3点を必ず提示する（MUST）:**
+**AskUserQuestion を出す前に per-item で次の4点を必ず提示する（MUST）:**
 
 - **対象**: 具体名（`skill-name` / `path/to/file.py:42` / ルール名）。「N件」だけに丸めない
 - **根拠**: 閾値・metric・evidence の**実値**（例: `content_lines=62 < 80`, `confidence=0.90`）
 - **変更内容**: before → after か diff の1行要約（例: `effort: (なし) → low`）
+- **推奨**: どの選択肢を選ぶべきかと理由を1行。判断材料が足りず推せないときは `推奨なし: <理由>` と書く（**空欄・省略は MUST NOT**）
 
 per-item 展開は最大 10 件、超過は「他 M 件（全件: <コマンド>）」と誘導する。
 **`options` は最大 4 件（MUST NOT）**: 5 件以上は1問にまとめず、方式 A（1件ずつ3択）か方式 B（4件グループ分割）で進む。

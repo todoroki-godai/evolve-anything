@@ -142,3 +142,30 @@ def test_skill_md_choice3_maps_to_already_reflected_weak_not_promote():
     assert "--already-reflected-weak" in segment
     assert 'decision="already_reflected"' in segment
     assert 'decision="promoted"' not in segment
+
+
+def test_proposal_protocol_docs_require_recommendation_field():
+    """#582 round2 [Must]: 2文書の必須項目宣言が、正準句と**完全一致**で揃っていること。
+
+    「どこかに『推奨』の語がある」検査だと、片方の節に別定義を足しても緑のまま通る。
+    正準句（`proposal_digest.RECOMMENDATION_DOC_CLAUSE`）を単一ソースにし、
+    3箇所（定数・SKILL.md・proposal-protocol.md）の同期をここで固定する。
+
+    なお「別の場所に意味を反転させる文が足されていないか」の意味判定は本テストの
+    責務外（正準指示の配送までを決定論で固定し、内容の妥当性は評価と運用観測が担う）。
+    """
+    import sys
+    from pathlib import Path as _Path
+
+    root = _Path(__file__).resolve().parents[3]
+    sys.path.insert(0, str(root / "scripts"))
+    from lib.daily import proposal_digest as pd
+
+    clause = pd.RECOMMENDATION_DOC_CLAUSE
+    assert "推奨なし" in clause and "MUST NOT" in clause, "正準句が推奨契約の体を成していない"
+
+    for name in ("skills/evolve/SKILL.md", "skills/evolve/references/proposal-protocol.md"):
+        text = (root / name).read_text(encoding="utf-8")
+        assert clause in text, f"{name}: 正準句と完全一致する行が無い（片側 desync）"
+        assert "次の4点" in text or "4 点提示" in text, f"{name}: 4 点提示の宣言が無い"
+        assert "3 点提示" not in text and "次の3点" not in text, f"{name}: 旧 3 点提示が残存"
