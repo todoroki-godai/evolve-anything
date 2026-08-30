@@ -5,6 +5,8 @@
 """
 from __future__ import annotations
 
+import builtins
+import json
 import sys
 from pathlib import Path
 
@@ -58,6 +60,87 @@ def test_append_then_read_roundtrip(tmp_path: Path) -> None:
     assert len(recs) == 2
     assert {r["channel"] for r in recs} == {"rephrase", "esc_interrupt"}
     assert all(r["promoted"] is False for r in recs)
+
+
+def test_missing_store_is_healthy_empty_with_read_health(tmp_path: Path) -> None:
+    """#539: 未作成は読取失敗でなく、正常な空在庫として区別できる。"""
+    store = tmp_path / "missing.jsonl"
+
+    recs = read_signals(store)
+
+    assert isinstance(recs, list)
+    assert recs == []
+    assert recs.read_health == {
+        "sources": [
+            {
+                "path": str(store),
+                "readable": True,
+                "error": None,
+                "malformed_lines": 0,
+            }
+        ]
+    }
+
+
+def test_healthy_empty_store_has_no_degradation(tmp_path: Path) -> None:
+    """#539 陽性対照: 実在する空ファイルも健全な空在庫。"""
+    store = tmp_path / "empty.jsonl"
+    store.write_text("", encoding="utf-8")
+
+    recs = read_signals(store)
+
+    assert recs == []
+    assert recs.read_health["sources"][0] == {
+        "path": str(store),
+        "readable": True,
+        "error": None,
+        "malformed_lines": 0,
+    }
+
+
+def test_permission_error_is_unreadable_not_healthy_empty(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """#539: OSError を空在庫へ丸めず source health に残す。"""
+    store = tmp_path / "denied.jsonl"
+    store.touch()
+    real_open = builtins.open
+
+    def _denied(path, *args, **kwargs):
+        if Path(path) == store:
+            raise PermissionError(13, "permission denied", store)
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", _denied)
+
+    recs = read_signals(store)
+
+    assert recs == []
+    source = recs.read_health["sources"][0]
+    assert source["path"] == str(store)
+    assert source["readable"] is False
+    assert "permission denied" in source["error"]
+    assert source["malformed_lines"] == 0
+
+
+def test_partial_corruption_keeps_valid_records_and_reports_bad_rows(tmp_path: Path) -> None:
+    """#539: valid 行を返しつつ、破損行を無言 skip しない。"""
+    store = tmp_path / "partial.jsonl"
+    valid = _sig(line_no=11).to_record()
+    store.write_text(
+        json.dumps(valid, ensure_ascii=False) + "\n{not json\n[]\n",
+        encoding="utf-8",
+    )
+
+    recs = read_signals(store)
+
+    assert recs == [valid]
+    assert recs.read_health["sources"][0] == {
+        "path": str(store),
+        "readable": True,
+        "error": None,
+        "malformed_lines": 2,
+    }
 
 
 def test_weak_signal_defaults_expired_fields() -> None:
