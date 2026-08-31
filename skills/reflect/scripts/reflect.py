@@ -618,14 +618,33 @@ def update_reflect_status(
 
     Args:
         filepath: corrections.jsonl のパス。
-        indices: 更新対象の行インデックス（0始まり、全レコード中の位置）。
+        indices: 更新対象のインデックス（0始まり）。**load_corrections が返す配列の
+            index と同じ空間**（空行・壊れた JSON 行は数えない）。物理行番号ではない
+            （#588 — 以前は物理行番号で照合しており、空行1つで全体が1つずれ、
+            指定と別のレコードが書き換わっていた）。
         status: 新しい reflect_status 値。
         target_path: status="applied" のときのみ必須。反映先ファイルのパス。
         draft_line: status="applied" のときのみ必須。起草行の全文（照合用）。
 
     Returns:
-        {"status": "applied" | "apply_unverified" | <status>, "target": str | None,
-         "reason": str | None}
+        {"status": "applied" | "apply_unverified" | "not_found" | <status>,
+         "target": str | None, "reason": str | None}
+        indices の一部/全部に対応するレコードが見つからない場合（#588 blocking (c)）、
+        黙って成功を返さず "not_found" を返す。見つかった分のみ書き込む。
+        非空の indices を渡されたのに filepath 自体が存在しない場合も "not_found"。
+        indices が空のときだけは「更新すべきものが無い」no-op 成功として <status> を返す。
+
+        **呼出側の契約**: "not_found" は失敗である。CLI は非0終了させ、
+        後続処理（revert 記録等）へ進めてはならない（#588 [Must]）。
+
+    既知の限界（#587 で根治する。本 issue のスコープ外）:
+        - index は「呼出側が読んだスナップショットの位置」であり、更新時に同じ
+          correction であることを identity で再確認していない。読取後に有効レコードが
+          挿入・削除されると別 correction を更新して成功を返す。
+        - 全文置換のため、追記 writer（persistence の flock）と協調しない。読取後に
+          追記された行が消える／2つの status 更新が後勝ちで巻き戻る。
+        どちらも「レコードを書き換える」という現在の記録方式そのものに由来する。
+        追記イベント行 + source_correction_id + read 時 fold へ変える #587 が受け皿。
     """
     if status == "applied":
         if target_path is None or draft_line is None:
@@ -641,25 +660,61 @@ def update_reflect_status(
                 "reason": match["reason"],
             }
 
-    if not filepath.exists() or not indices:
+    if not indices:
+        # 更新対象の指定が無い＝更新すべきものが無いので no-op 成功。
+        # 「指定したのに見つからない」(not_found) とは区別する。
         return {"status": status, "target": target_path, "reason": None}
+
+    if not filepath.exists():
+        # #588: 非空の indices を渡されたのに corrections ファイルが無い＝同定不能。
+        # 呼出側が対象を検索した直後・更新前に手編集や別プロセスの置換でファイルが
+        # 消えると以前は要求 status を成功として返し、--apply は revert 記録まで
+        # 進んでいた。黙って成功にしない（完成条件 (c)）。
+        return {
+            "status": "not_found",
+            "target": target_path,
+            "reason": f"corrections ファイルが存在しません: {filepath}",
+        }
 
     lines = filepath.read_text(encoding="utf-8").splitlines()
     index_set = set(indices)
 
+    # load_corrections と同じ index 空間で照合する: 空行・壊れた JSON 行は
+    # レコードとして数えない（record_idx をインクリメントしない）。
     updated_lines = []
-    for i, line in enumerate(lines):
-        if i in index_set and line.strip():
-            try:
-                record = json.loads(line)
-                record["reflect_status"] = status
-                updated_lines.append(json.dumps(record, ensure_ascii=False))
-            except json.JSONDecodeError:
-                updated_lines.append(line)
+    matched_indices: set[int] = set()
+    record_idx = 0
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            updated_lines.append(line)
+            continue
+        try:
+            record = json.loads(stripped)
+        except json.JSONDecodeError:
+            updated_lines.append(line)
+            continue
+
+        if record_idx in index_set:
+            record["reflect_status"] = status
+            updated_lines.append(json.dumps(record, ensure_ascii=False))
+            matched_indices.add(record_idx)
         else:
             updated_lines.append(line)
+        record_idx += 1
 
     filepath.write_text("\n".join(updated_lines) + "\n", encoding="utf-8")
+
+    missing = index_set - matched_indices
+    if missing:
+        return {
+            "status": "not_found",
+            "target": target_path,
+            "reason": (
+                "指定インデックスに対応するレコードが見つかりません "
+                f"(index: {sorted(missing)})"
+            ),
+        }
     return {"status": status, "target": target_path, "reason": None}
 
 
@@ -1258,6 +1313,11 @@ def main():
             "source_correction_id": args.apply,
             **result,
         }, ensure_ascii=False, indent=2))
+        # #588 [Must]: 検索時の not_found は sys.exit(1) なのに、検索後の競合で
+        # 更新側が not_found を返した場合だけ exit 0 になっていた。同じ事象が
+        # 発生タイミングだけで shell 上の成功/失敗に分かれるのを止める。
+        if result.get("status") == "not_found":
+            sys.exit(1)
         return
 
     # --skip: 指定 correction を skipped にする（#514・修正在庫の『もう出さない』）。
@@ -1301,6 +1361,9 @@ def main():
             "source_correction_id": args.skip,
             **result,
         }, ensure_ascii=False, indent=2))
+        # #588 [Must]: --apply と同じく、更新側の not_found も非0終了へ統一する。
+        if result.get("status") == "not_found":
+            sys.exit(1)
         return
 
     # --promote-episodic: 指定 session_id + timestamp の correction を episodic に昇格
@@ -1351,8 +1414,21 @@ def main():
             i for i, r in enumerate(all_records)
             if r.get("reflect_status", "pending") in ("pending", "promoted")
         ]
+        # #588 [Must]: 以前は戻り値を捨てて "skipped_all" を無条件で出していたため、
+        # 読取後の並行変更で更新側が not_found を返しても成功表示になっていた。
+        update_result = None
         if not args.dry_run:
-            update_reflect_status(corrections_file, pending_indices, "skipped")
+            update_result = update_reflect_status(
+                corrections_file, pending_indices, "skipped"
+            )
+        if update_result is not None and update_result.get("status") == "not_found":
+            print(json.dumps({
+                "status": "not_found",
+                "count": len(pending_indices),
+                "dry_run": args.dry_run,
+                "reason": update_result.get("reason"),
+            }, ensure_ascii=False, indent=2))
+            sys.exit(1)
         print(json.dumps({
             "status": "skipped_all",
             "count": len(pending_indices),
