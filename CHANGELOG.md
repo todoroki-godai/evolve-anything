@@ -20,6 +20,15 @@
   評価セットがない環境では数字を推測せず「未測定」と明示する。
 
 ### Fixed
+- **fix(reflect): corrections status 更新の論理 index 整合性を修復（#588）** — blank・壊れた
+  JSON・非 object JSON を除外する有効レコード述語を reader/writer で共有し、物理行ではなく
+  要求された論理 ordinal の1件だけを更新する。同じ `source_correction_id` の pending/applied
+  ペアを `--skip` しても applied を巻き戻さず、ファイル欠落や範囲外で更新件数が要求数に
+  届かない場合は成功を返さず `error` として可視化する。
+- **fix(weak_signals): 読取失敗を正常な空在庫と区別（#539）** — canonical/legacy source ごとの
+  `readable` / `error` / `malformed_lines` を同一 read snapshot に保持し、dedup・queue 集計・
+  人間向け表示・JSON 出力へ伝播する。全 source が健全な場合だけ measured とし、読取不能や
+  部分破損を在庫0件へ丸めない。
 - **docs(rules): 柱2は現在の記録では測定できないと明記（#567 / #587）** —
   `report-by-four-pillars.md` の測定手段から柱2の数値を外し、`not_measured` と書く規定にする。
   戦果ボードの「採用した改善」（提案の accept）と、照合の無い申告

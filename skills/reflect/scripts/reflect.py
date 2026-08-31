@@ -21,7 +21,10 @@ sys.path.insert(0, str(PLUGIN_ROOT / "scripts" / "lib"))
 
 from memory_temporal import make_source_correction_id
 from reflect_apply_match import check_line_applied
-from reflect_status_store import update_status_at_logical_indices
+from reflect_status_store import (
+    is_valid_correction_record,
+    update_status_at_logical_indices,
+)
 from reflect_utils import (
     read_all_memory_entries,
     read_auto_memory,
@@ -119,9 +122,11 @@ def load_corrections(filepath: Path = CORRECTIONS_FILE) -> list[dict]:
         if not line:
             continue
         try:
-            records.append(json.loads(line))
+            record = json.loads(line)
         except json.JSONDecodeError:
             continue
+        if is_valid_correction_record(record):
+            records.append(record)
     return records
 
 
@@ -642,10 +647,19 @@ def update_reflect_status(
                 "reason": match["reason"],
             }
 
-    if not filepath.exists() or not indices:
+    if not indices:
         return {"status": status, "target": target_path, "reason": None}
 
-    update_status_at_logical_indices(filepath, indices, status)
+    updated = update_status_at_logical_indices(filepath, indices, status)
+    if updated != len(indices):
+        return {
+            "status": "error",
+            "target": target_path,
+            "reason": (
+                "reflect_status update count mismatch: "
+                f"expected {len(indices)}, updated {updated}"
+            ),
+        }
     return {"status": status, "target": target_path, "reason": None}
 
 

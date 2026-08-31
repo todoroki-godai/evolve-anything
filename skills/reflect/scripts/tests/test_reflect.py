@@ -469,6 +469,29 @@ class TestLoadCorrections:
         result = reflect.load_corrections(filepath)
         assert len(result) == 2
 
+    def test_non_dict_json_is_not_a_valid_correction_record(self, tmp_path):
+        """Reader/writer 共通契約: correction は JSON object に限る。"""
+        filepath = tmp_path / "corrections.jsonl"
+        first = _make_correction(message="first")
+        second = _make_correction(message="second")
+        filepath.write_text(
+            "\n".join([
+                json.dumps(first, ensure_ascii=False),
+                json.dumps(["not", "a", "correction"]),
+                json.dumps(second, ensure_ascii=False),
+            ]) + "\n",
+            encoding="utf-8",
+        )
+
+        loaded = reflect.load_corrections(filepath)
+        assert [record["message"] for record in loaded] == ["first", "second"]
+
+        result = reflect.update_reflect_status(filepath, [1], "skipped")
+        assert result["status"] == "skipped"
+        physical_lines = filepath.read_text(encoding="utf-8").splitlines()
+        assert json.loads(physical_lines[1]) == ["not", "a", "correction"]
+        assert json.loads(physical_lines[2])["reflect_status"] == "skipped"
+
 
 # --- Test: update_reflect_status ---
 
@@ -521,6 +544,22 @@ class TestUpdateReflectStatus:
         filepath = _write_corrections(tmp_path, corrections)
         result = reflect.update_reflect_status(filepath, [0], "skipped")
         assert result["status"] == "skipped"
+
+    def test_missing_file_is_update_error(self, tmp_path):
+        result = reflect.update_reflect_status(
+            tmp_path / "missing.jsonl", [0], "skipped",
+        )
+
+        assert result["status"] == "error"
+        assert result["reason"] == "reflect_status update count mismatch: expected 1, updated 0"
+
+    def test_out_of_range_index_is_update_error(self, tmp_path):
+        filepath = _write_corrections(tmp_path, [_make_correction()])
+
+        result = reflect.update_reflect_status(filepath, [1], "skipped")
+
+        assert result["status"] == "error"
+        assert result["reason"] == "reflect_status update count mismatch: expected 1, updated 0"
 
     def test_applied_without_target_path_raises(self, tmp_path):
         """#475 §6.1 関数契約: status="applied" は target_path/draft_line が必須。"""
@@ -833,6 +872,69 @@ class TestSkipCLI:
         assert output["status"] == "already_applied"
         updated = reflect.load_corrections(filepath)
         assert updated[0]["reflect_status"] == "applied"
+
+    def test_skip_duplicate_id_updates_only_requested_pending_ordinal(
+        self, tmp_path, capsys,
+    ):
+        """#588: first-match guard must not let a duplicate applied row roll back."""
+        identity = {
+            "session_id": "duplicate-session",
+            "timestamp": "2026-08-30T00:00:00Z",
+        }
+        pending = _make_correction(
+            message="pending duplicate", reflect_status="pending", **identity,
+        )
+        applied = _make_correction(
+            message="applied duplicate", reflect_status="applied", **identity,
+        )
+        filepath = _write_corrections(tmp_path, [pending, applied])
+        source_id = reflect.make_source_correction_id(
+            identity["session_id"], identity["timestamp"],
+        )
+
+        with mock.patch("sys.argv", [
+            "reflect.py", "--skip", source_id,
+            "--corrections-file", str(filepath),
+        ]):
+            reflect.main()
+
+        output = json.loads(capsys.readouterr().out)
+        updated = reflect.load_corrections(filepath)
+        assert output["status"] == "skipped"
+        assert updated[0]["message"] == "pending duplicate"
+        assert updated[0]["reflect_status"] == "skipped"
+        assert updated[1]["message"] == "applied duplicate"
+        assert updated[1]["reflect_status"] == "applied"
+
+    def test_skip_distinct_id_keeps_unselected_applied_record(
+        self, tmp_path, capsys,
+    ):
+        """陽性対照: 正常な一意 ID では対象だけを更新して誤検出しない。"""
+        pending = _make_correction(
+            reflect_status="pending",
+            session_id="selected-session",
+            timestamp="2026-08-30T00:00:00Z",
+        )
+        applied = _make_correction(
+            reflect_status="applied",
+            session_id="other-session",
+            timestamp="2026-08-30T00:00:01Z",
+        )
+        filepath = _write_corrections(tmp_path, [pending, applied])
+        source_id = reflect.make_source_correction_id(
+            pending["session_id"], pending["timestamp"],
+        )
+
+        with mock.patch("sys.argv", [
+            "reflect.py", "--skip", source_id,
+            "--corrections-file", str(filepath),
+        ]):
+            reflect.main()
+
+        output = json.loads(capsys.readouterr().out)
+        updated = reflect.load_corrections(filepath)
+        assert output["status"] == "skipped"
+        assert [record["reflect_status"] for record in updated] == ["skipped", "applied"]
 
     def test_skip_dry_run_writes_nothing(self, tmp_path, capsys):
         """--dry-run では一切書かない（--apply と同じゲート貫通規約）。"""
