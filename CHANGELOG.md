@@ -20,6 +20,10 @@
   評価セットがない環境では数字を推測せず「未測定」と明示する。
 
 ### Fixed
+- **fix(weak_signals): 読取失敗を正常な空在庫と区別（#539）** — canonical/legacy source ごとの
+  `readable` / `error` / `malformed_lines` を同一 read snapshot に保持し、dedup・queue 集計・
+  人間向け表示・JSON 出力へ伝播する。全 source が健全な場合だけ measured とし、読取不能や
+  部分破損を在庫0件へ丸めない。
 - **fix(reflect): `update_reflect_status` の index 空間ずれで別レコードが書き換わる不具合を修正（#588）** —
   `load_corrections` は空行・壊れた JSON 行を捨てた**配列の index** を返すが、
   `update_reflect_status` は物理行番号で照合していたため、空行1つで全体が1つずれ、
