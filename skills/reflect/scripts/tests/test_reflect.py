@@ -622,9 +622,56 @@ class TestUpdateReflectStatusIndexAlignment:
 
         result = reflect.update_reflect_status(filepath, [5], "skipped")
 
-        assert result["status"] != "skipped", (
-            "存在しない index を指定したのに成功扱い(status=='skipped')を返してはいけない"
+        # #588 [Must]: != "skipped" だけでは戻り値契約を固定できない
+        # （誤って "apply_unverified" を返す実装でも緑になってしまう）。
+        assert result["status"] == "not_found", (
+            "存在しない index を指定したら not_found を返すべき"
         )
+        assert "5" in (result["reason"] or ""), (
+            "reason に見つからなかった index が含まれるべき"
+        )
+        updated = reflect.load_corrections(filepath)
+        assert updated[0]["reflect_status"] == "pending", "誰も更新されないべき"
+
+    def test_missing_file_with_indices_does_not_report_success(self, tmp_path):
+        """(c) 陰性試験: 非空 index を渡した時点で対象ファイルが消えていても
+        成功を返さない（検索後・更新前にファイルが消える経路）。"""
+        filepath = tmp_path / "corrections.jsonl"
+        assert not filepath.exists()
+
+        result = reflect.update_reflect_status(filepath, [0], "skipped")
+
+        assert result["status"] == "not_found", (
+            "対象ファイルが存在しないのに成功扱いを返してはいけない"
+        )
+        assert result["reason"], "理由が付くべき"
+
+    def test_missing_file_with_indices_does_not_report_applied(self, tmp_path):
+        """(c) 陰性試験: applied 経路でも同じ。反映先の行照合に通っても、
+        corrections ファイルが無ければ applied を返さない（revert 記録へ進めない）。"""
+        target = tmp_path / "rules.md"
+        target.write_text("- 起草した行\n", encoding="utf-8")
+        filepath = tmp_path / "corrections.jsonl"
+        assert not filepath.exists()
+
+        result = reflect.update_reflect_status(
+            filepath, [0], "applied",
+            target_path=str(target), draft_line="- 起草した行",
+        )
+
+        assert result["status"] == "not_found", (
+            "corrections ファイルが無いのに applied を返してはいけない"
+        )
+
+    def test_empty_indices_is_noop_success(self, tmp_path):
+        """陽性対照: indices が空なら『更新すべきものが無い』no-op 成功。
+        not_found（指定したのに見つからない）と混同しない。"""
+        corrections = [_make_correction(message="msg0")]
+        filepath = _write_corrections(tmp_path, corrections)
+
+        result = reflect.update_reflect_status(filepath, [], "skipped")
+
+        assert result["status"] == "skipped"
         updated = reflect.load_corrections(filepath)
         assert updated[0]["reflect_status"] == "pending", "誰も更新されないべき"
 
@@ -645,6 +692,74 @@ class TestUpdateReflectStatusIndexAlignment:
         assert updated[1]["reflect_status"] == "skipped"
         assert updated[2]["reflect_status"] == "pending"
         assert result["status"] == "skipped"
+
+
+# --- Test: not_found 契約が CLI 呼出側まで貫通するか (#588) ---
+#
+# update_reflect_status が返す "not_found" は失敗である。呼出側が戻り値を捨てたり
+# exit 0 のまま返したりすると、自動呼出側が成功扱いで先へ進む。
+
+def _vanishing_update(monkeypatch, filepath):
+    """検索後・更新前に corrections ファイルが消える競合を再現する。
+
+    update_reflect_status 本体は差し替えず、呼ばれる直前にファイルを消すだけ。
+    したがって返る not_found は実装が実際に判定したもの。
+    """
+    original = reflect.update_reflect_status
+
+    def _wrapper(fp, indices, status, **kwargs):
+        if filepath.exists():
+            filepath.unlink()
+        return original(fp, indices, status, **kwargs)
+
+    monkeypatch.setattr(reflect, "update_reflect_status", _wrapper)
+
+
+class TestNotFoundContractReachesCLI:
+    def test_skip_exits_nonzero_on_not_found(self, tmp_path, monkeypatch):
+        """陰性試験: --skip の更新側 not_found は非0終了になる
+        （検索時の not_found が exit 1 なのに更新時だけ exit 0 だった）。"""
+        corrections = [_make_correction(session_id="s1", timestamp="2026-08-31T00:00:00+00:00")]
+        filepath = _write_corrections(tmp_path, corrections)
+        cid = reflect.make_source_correction_id("s1", "2026-08-31T00:00:00+00:00")
+        _vanishing_update(monkeypatch, filepath)
+
+        with mock.patch("sys.argv", [
+            "reflect.py", "--skip", cid, "--corrections-file", str(filepath),
+        ]):
+            with pytest.raises(SystemExit) as exc:
+                reflect.main()
+        assert exc.value.code != 0, "更新側の not_found は非0終了にすべき"
+
+    def test_skip_all_reports_not_found(self, tmp_path, monkeypatch, capsys):
+        """陰性試験: --skip-all は戻り値を捨てず、not_found を成功表示しない。"""
+        corrections = [_make_correction(reflect_status="pending")]
+        filepath = _write_corrections(tmp_path, corrections)
+        _vanishing_update(monkeypatch, filepath)
+
+        with mock.patch("sys.argv", [
+            "reflect.py", "--skip-all", "--corrections-file", str(filepath),
+        ]):
+            with pytest.raises(SystemExit) as exc:
+                reflect.main()
+        assert exc.value.code != 0, "not_found なら非0終了にすべき"
+        out = capsys.readouterr().out
+        assert "skipped_all" not in out, "失敗したのに成功表示を出してはいけない"
+        assert "not_found" in out
+
+    def test_skip_all_positive_control_still_succeeds(self, tmp_path, capsys):
+        """陽性対照: 正常時の --skip-all は従来どおり成功表示で正常終了する。"""
+        corrections = [_make_correction(reflect_status="pending")]
+        filepath = _write_corrections(tmp_path, corrections)
+
+        with mock.patch("sys.argv", [
+            "reflect.py", "--skip-all", "--corrections-file", str(filepath),
+        ]):
+            reflect.main()
+
+        out = capsys.readouterr().out
+        assert "skipped_all" in out
+        assert reflect.load_corrections(filepath)[0]["reflect_status"] == "skipped"
 
 
 # --- Test: build_output ---
