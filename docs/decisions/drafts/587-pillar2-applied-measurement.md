@@ -253,6 +253,70 @@ CLI は `"conflict"` を `"not_found"` と同じく非0終了として扱う（�
 イベント行を追加する（基底レコードの更新と同じ書き戻しに含める。§2.1 で述べたとおり
 「片方だけ成功」を避けるため）。
 
+### 2.5 `reflect_target_kind` の分類ロジック（移設）
+
+分類ロジックは `reflect.py:476-517` の `_rule_scope_identity` を
+**`scripts/lib/reflect_apply_match.py` へ `classify_target_kind(target_path) -> str` として移設**し、
+`reflect.py` 側は薄いラッパー（`_rule_scope_identity` は `classify_target_kind` の呼び出し +
+既存の `repo_id`/`relative_path` 構築だけ残す）にする。移設理由: 現状 `_rule_scope_identity` は
+revert 記録用にしか使われておらず、`reflect_apply_match.py` の外からは呼べない私有関数。
+「target 種別の判定」は「反映先ファイルをどう解釈するか」という関心事で
+`reflect_apply_match.py`（`check_line_applied`/`_normalize_bullet`/`_normalize_plain` — 起草行
+正規化の既存単一ソース・`reflect_apply_match.py:38-46`）が既に持つ役割と同じ層なので、
+2箇所独立実装（skill 側と柱2集計側）を避けるために1箇所へ寄せる
+（`design-before-fanout.md` と同じ理由づけ）。戻り値の値域は
+`"global_rule" | "project_rule" | "other"`（`_rule_scope_identity` が `None` を返す場合は
+`"other"` に正規化する）。
+
+### 2.6 malformed 行（JSON として parse できない行）の扱いを統一する
+
+**設計中に指摘を受けて追加**（本 issue の記録モデルの一部として決める。実装対象は
+`corrections.jsonl` の read/write のみ。`weak_signals/ttl.py` の修正はしない＝§6 参照）。
+
+**現状（file:line）**:
+- `reflect.py:687-696`（`update_reflect_status` の commit ループ）は、行が空、または
+  `json.loads` が例外を出す行を**そのまま `updated_lines` へ温存**する（レコードとしては
+  数えないが、ファイルからは消さない）。#588 で既にこの挙動になっている
+- `scripts/lib/weak_signals/ttl.py:82-96`（`_rewrite`）は `read_signals` が返した
+  **parse 成功レコードのみ**を書き戻す。`read_signals`（`scripts/lib/weak_signals/store.py:126-` /
+  `_read_one`）は parse 失敗行を戻り値に含めず `dropped_lines` としてカウントするだけなので、
+  `mark_expired` が書き戻すたびに malformed 行は**結果的に物理削除**される
+  （並行セッション #539 レビューで [Should] 指摘済み・`weak_signals/` 配下のため本設計では触らない）
+
+**本設計の決定（`corrections.jsonl` に適用する）: 温存（reflect.py の既存慣習を踏襲する）**。
+
+理由:
+1. `corrections.jsonl` は本設計が拡張する対象そのものであり、**同じファイルの中で
+   温存と削除が混在する**（`update_reflect_status` は温存するのに、新設する
+   §2.2 の commit ロジックだけ削除に倒す）と、round 0 完成条件②「指定した correction を
+   更新したという報告が事実であること」の逆側の懸念——**指定していない副作用（他行の消失）が
+   黙って起きる**——を新たに作り込むことになる。既存慣習と揃えるのが最小の変更
+2. `persist-progress-incrementally.md`: 「実体は 在る／無い の2値でなく不完全という
+   第三の状態がある」。`json.loads` に失敗する行は、①本当に破損したデータ
+   ②書込み処理が中断され途中で切れた行（§2.2 の commit や `store_write` の
+   `write_text`/`append_jsonl` は atomic ではあるが、`corrections.jsonl` を触る
+   3つの経路（§1.1）のうち `invalidate_idiom_corrections` は `os.replace` による
+   原子的 rename、`update_reflect_status`（新）も同様に `write_text` 一括書込みなので
+   OS レベルの原子性はあるが、**プロセスが `write_text` の途中で kill される可能性は
+   ゼロではない**）の、どちらかを外部から区別できない。**削除を選ぶと②を「なかったこと」に
+   してしまう可能性を否定できない**。温存すればこのリスクを取らずに済む
+3. **「温存し続けると壊れた行が永久に溜まる」問題への回答**: 新規リスクではない
+   （既に `update_reflect_status` が2026-08-31 時点で同じ挙動を持つ・#588）。
+   本設計はこれを悪化させない（±0）。恒久的な掃除（人間レビュー付きの隔離・削除）は
+   本 issue のスコープ外とし、必要になった時点で別 issue として起票する
+   （round 0 blocking (a)〜(h) のいずれにも malformed 行の蓄積は含まれていない）
+4. **reader と writer で述語を単一ソース化する**: `fold_corrections`（§3）の
+   `isinstance(rec, dict)` チェック（§3.1）と、§2.2 commit 段階の
+   「`json.loads` 成功かつ dict」判定は、**同じヘルパー関数
+   `reflect_fold.parse_record_line(line: str) -> dict | None`** を通す
+   （成功すれば dict、失敗すれば `None` を返し、呼出側は `None` のとき「行をそのまま
+   温存する」（write 側）か「レコードとして数えない」（read 側）かをそれぞれ選ぶが、
+   **「parse できるか」の判定自体は1箇所**にする）。現行 `reflect.py:111-124`
+   `load_corrections` と `reflect.py:692-696` の commit ループは、それぞれ独立に
+   `try: json.loads(...) except JSONDecodeError` を書いており（**述語が2箇所に
+   重複**している事実を設計中に発見）、実装1巡でこの重複を `parse_record_line` へ
+   一本化することも完了条件に含める
+
 ## 3. read 時 fold の擬似コード
 
 新規共有モジュール **`scripts/lib/reflect_fold.py`** を作る（`results_board.py` にも
@@ -528,6 +592,10 @@ ordinal 安定性の前提が崩れ、§2.2 のハッシュ再確認が `conflic
 - **`#379` 新設凍結の解除**: 本設計は既存 store（`corrections.jsonl`）への追記のみ
 - **`results_board.py` の既存4軸表示の並び替え**: 表示順は変えない
 - **`reflect_status` の意味論の再定義**: §2.1 の設計判断により既存値の意味は変えない
+- **`scripts/lib/weak_signals/ttl.py` の malformed 行削除を直す**: §2.6 で
+  `corrections.jsonl` 側の malformed 行の扱い（温存）を決めたが、`weak_signals/` 配下は
+  別セッションの担当範囲であり本設計では**触らない**。§2.6 の決定は `corrections.jsonl` に
+  限定した記録モデルの一部であり、`weak_signals.jsonl` へ遡及適用しない
 - **`prune/corrections.py` の decay 削除を tombstone 方式へ変える**: §4.2 で述べた通り
   リスクは実質的に低く（decay 90日 > 測定窓30日）、§2.2 のハッシュ再確認が安全側の
   fail-closed を保証するため、prune 自体の改修は別 issue とする
