@@ -200,7 +200,10 @@ def build_queue_result(
     下流へ渡すこと）。テストが module 属性を monkeypatch で差し替える経路は対象外
     （Python では原理的に防げないため設計の対象にしない）。
     """
+    from weak_signals.store import read_signals
+
     corr_records, corr_read_health = read_corrections_records_with_health(corrections_path)
+    weak_records = read_signals(weak_signals_path)
     return _build_queue_result_from_snapshot(
         pj_slugs=pj_slugs,
         threshold=threshold,
@@ -214,6 +217,8 @@ def build_queue_result(
         untracked_dir_map=untracked_dir_map,
         corr_records=corr_records,
         corr_read_health=corr_read_health,
+        weak_records=weak_records,
+        weak_read_health=weak_records.read_health,
     )
 
 
@@ -228,15 +233,18 @@ def _build_queue_result_from_snapshot(
     generated_at: str,
     corr_records: List[Dict[str, Any]],
     corr_read_health: Dict[str, Any],
+    weak_records: List[Dict[str, Any]],
+    weak_read_health: Dict[str, Any],
     pj_paths: Optional[Dict[str, str]] = None,
     material_slugs: Optional[List[str]] = None,
     untracked_dir_map: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
     """純集計 helper（**I/O を一切行わない**・private）。
 
-    ``corr_records``/``corr_read_health`` は呼び出し側（``build_queue_result`` 本体、または
-    ``fleet.cli._gather_queue_result``）が既に1回だけ実行した read の結果をそのまま渡す契約
-    （#533）。本関数自身は corrections.jsonl を読まない。テストがこの関数を直接呼ぶのは
+    ``corr_records``/``corr_read_health`` と ``weak_records``/``weak_read_health`` は呼び出し側
+    （``build_queue_result`` 本体、または ``fleet.cli._gather_queue_result``）が各 store を
+    既に1回だけ read した結果をそのまま渡す契約（#533/#539）。本関数自身は store を読まない。
+    テストがこの関数を直接呼ぶのは
     「records/health が一貫して使われる」という内部の整合性契約を検査するためであり、
     公開 API の契約検査ではない。
 
@@ -248,6 +256,7 @@ def _build_queue_result_from_snapshot(
     Phase 1b #80 契約の queue result dict を返す。schema:
       {generated_at, threshold, tracked_total, queue_status, queue_status_reason,
        skipped_dead, untracked_with_material, corrections_read_health,
+       weak_signals_read_health,
        queue: [{pj_slug, project_path, material_count, weak_unprocessed,
        new_corrections, correction_backlog, last_evolve_at, activity_since, reason,
        verify_pending}]}
@@ -316,7 +325,9 @@ def _build_queue_result_from_snapshot(
                         "pj_slug": canon,
                         "project_path": live,
                         "weak_unprocessed": weak_unprocessed_by_pj(
-                            canon, weak_signals_path=weak_signals_path
+                            canon,
+                            weak_signals_path=weak_signals_path,
+                            weak_records=weak_records,
                         ),
                         "new_corrections": new_corrections_by_pj(
                             canon, last_evolve_at=last, records=corr_records
@@ -328,7 +339,11 @@ def _build_queue_result_from_snapshot(
                 )
                 continue
             # #87 ②: 真の dead でも material 数を添えて透明化する。
-            d_weak = weak_unprocessed_by_pj(slug, weak_signals_path=weak_signals_path)
+            d_weak = weak_unprocessed_by_pj(
+                slug,
+                weak_signals_path=weak_signals_path,
+                weak_records=weak_records,
+            )
             d_corr = new_corrections_by_pj(
                 slug,
                 last_evolve_at=last_evolve_map.get(slug),
@@ -352,7 +367,9 @@ def _build_queue_result_from_snapshot(
                 "pj_slug": slug,
                 "project_path": path,
                 "weak_unprocessed": weak_unprocessed_by_pj(
-                    slug, weak_signals_path=weak_signals_path
+                    slug,
+                    weak_signals_path=weak_signals_path,
+                    weak_records=weak_records,
                 ),
                 "new_corrections": new_corrections_by_pj(
                     slug, last_evolve_at=last, records=corr_records
@@ -389,6 +406,7 @@ def _build_queue_result_from_snapshot(
             dir_map=untracked_dir_map,
             correction_backlog_counts=correction_backlog_counts,
             corr_records=corr_records,
+            weak_records=weak_records,
         )
         phantom = collect_phantom_materials(
             material_slugs=material_slugs,
@@ -399,6 +417,7 @@ def _build_queue_result_from_snapshot(
             dir_map=untracked_dir_map,
             correction_backlog_counts=correction_backlog_counts,
             corr_records=corr_records,
+            weak_records=weak_records,
         )
     else:
         untracked = []
@@ -412,7 +431,9 @@ def _build_queue_result_from_snapshot(
     )
     bootstrap_consumed: List[Dict[str, Any]] = []
     for s in consumed_slugs:
-        c = bootstrap_consumed_by_pj(s, weak_signals_path=weak_signals_path)
+        c = bootstrap_consumed_by_pj(
+            s, weak_signals_path=weak_signals_path, weak_records=weak_records
+        )
         if c > 0:
             bootstrap_consumed.append({"pj_slug": s, "consumed": c})
 
@@ -421,7 +442,9 @@ def _build_queue_result_from_snapshot(
     # 落とすと「なぜ WEAK が生検出より少ないか」が不明になる（silent truncation 禁止）。poor>0 のみ。
     weak_content_poor: List[Dict[str, Any]] = []
     for s in consumed_slugs:
-        p = weak_content_poor_by_pj(s, weak_signals_path=weak_signals_path)
+        p = weak_content_poor_by_pj(
+            s, weak_signals_path=weak_signals_path, weak_records=weak_records
+        )
         if p > 0:
             weak_content_poor.append({"pj_slug": s, "content_poor": p})
 
@@ -430,7 +453,9 @@ def _build_queue_result_from_snapshot(
     # 側と二重計上しない（weak_machinery_by_pj が単一ソース）。machinery>0 の PJ のみ。
     weak_machinery: List[Dict[str, Any]] = []
     for s in consumed_slugs:
-        m = weak_machinery_by_pj(s, weak_signals_path=weak_signals_path)
+        m = weak_machinery_by_pj(
+            s, weak_signals_path=weak_signals_path, weak_records=weak_records
+        )
         if m > 0:
             weak_machinery.append({"pj_slug": s, "machinery": m})
 
@@ -454,6 +479,7 @@ def _build_queue_result_from_snapshot(
         skipped_phantom=phantom,
         unattributed_total=unattributed_corrections.get("total", 0),
         corrections_read_health=corr_read_health,
+        weak_signals_read_health=weak_read_health,
     )
 
     return {
@@ -469,6 +495,8 @@ def _build_queue_result_from_snapshot(
         # #533: corrections.jsonl の read health（正常な空在庫と読取不能・壊れた行の区別）。
         # silence != evaluated — 在庫ゼロ表示が「本当に空」か「読めなかった」かを常時 surface する。
         "corrections_read_health": corr_read_health,
+        # #539: canonical + legacy 各 source の weak_signals read health。
+        "weak_signals_read_health": weak_read_health,
         # #94: bootstrap 消化済み（破棄/TTL 任せ判断済み）で material から除外した weak の透明化。
         "bootstrap_consumed": bootstrap_consumed,
         # #113: content-poor channel（昇格不能）で material から除外した weak の透明化。

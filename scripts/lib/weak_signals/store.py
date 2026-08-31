@@ -21,7 +21,9 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import asdict, dataclass, field
+import os
+import stat as _stat
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -31,6 +33,14 @@ from measurement_result import MeasuredList, measurement_failure_reason
 from store_read_union import iter_read_store_paths as _iter_read_store_paths  # noqa: E402
 
 STORE_NAME = "weak_signals.jsonl"
+
+
+class WeakSignalRecords(MeasuredList):
+    """list 互換の weak_signal レコード列 + union source 別 read-health。"""
+
+    def __init__(self, values=(), *, read_health, **kwargs) -> None:
+        super().__init__(values, **kwargs)
+        self.read_health = read_health
 
 
 @dataclass
@@ -90,45 +100,118 @@ def default_store_path(base: Optional[Path] = None) -> Path:
 
 
 def _read_one(store: Path) -> List[Dict[str, Any]]:
-    """単一 weak_signals.jsonl を読む（ファイル無し → 空リスト）。"""
-    if not store.exists():
-        return MeasuredList()
-    out: List[Dict[str, Any]] = []
-    dropped_lines = 0
+    """単一 weak_signals.jsonl を records + source read-health として1回読む。"""
+    store = Path(store)
+    health: Dict[str, Any] = {
+        "path": str(store),
+        "readable": True,
+        "error": None,
+        "malformed_lines": 0,
+    }
+
+    def _result(
+        values=(), *, measured: bool = True, reason: Optional[str] = None
+    ) -> WeakSignalRecords:
+        return WeakSignalRecords(
+            values,
+            measured=measured,
+            reason=reason,
+            dropped_lines=health["malformed_lines"],
+            read_health={"sources": [health]},
+        )
+
     try:
-        with open(store, "r", encoding="utf-8", errors="replace") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    record = json.loads(line)
-                    if not isinstance(record, dict):
-                        dropped_lines += 1
-                        continue
-                    out.append(record)
-                except (json.JSONDecodeError, ValueError):
-                    dropped_lines += 1
+        st = store.lstat()
+    except FileNotFoundError:
+        return _result()
     except OSError as exc:
-        return MeasuredList(
+        health["readable"] = False
+        health["error"] = str(exc)
+        return _result(
             measured=False,
             reason=measurement_failure_reason("weak_signals.store._read_one", store, exc),
         )
-    reason = f"破損 JSONL を {dropped_lines} 行スキップ" if dropped_lines else None
-    return MeasuredList(
+
+    was_symlink = _stat.S_ISLNK(st.st_mode)
+    if was_symlink:
+        try:
+            store.stat()
+        except FileNotFoundError:
+            error = f"dangling symlink: {store} -> {os.readlink(store)}"
+            health["readable"] = False
+            health["error"] = error
+            return _result(measured=False, reason=error)
+        except OSError as exc:
+            health["readable"] = False
+            health["error"] = str(exc)
+            return _result(
+                measured=False,
+                reason=measurement_failure_reason(
+                    "weak_signals.store._read_one", store, exc
+                ),
+            )
+
+    out: List[Dict[str, Any]] = []
+    try:
+        with open(store, "rb") as f:
+            raw_bytes = f.read()
+    except FileNotFoundError as exc:
+        if not was_symlink:
+            return _result()
+        try:
+            store.lstat()
+        except FileNotFoundError:
+            return _result()
+        except OSError as lstat_exc:
+            exc = lstat_exc
+        health["readable"] = False
+        health["error"] = str(exc)
+        return _result(
+            measured=False,
+            reason=measurement_failure_reason("weak_signals.store._read_one", store, exc),
+        )
+    except OSError as exc:
+        health["readable"] = False
+        health["error"] = str(exc)
+        return _result(
+            measured=False,
+            reason=measurement_failure_reason("weak_signals.store._read_one", store, exc),
+        )
+
+    for raw_line in raw_bytes.split(b"\n"):
+        line_bytes = raw_line.strip()
+        if not line_bytes:
+            continue
+        try:
+            line = line_bytes.decode("utf-8")
+            record = json.loads(line)
+        except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
+            health["malformed_lines"] += 1
+            continue
+        if not isinstance(record, dict):
+            health["malformed_lines"] += 1
+            continue
+        out.append(record)
+
+    malformed = health["malformed_lines"]
+    reason = f"破損 JSONL を {malformed} 行スキップ" if malformed else None
+    return WeakSignalRecords(
         out,
-        measured=not (dropped_lines and not out),
+        measured=not (malformed and not out),
         reason=reason,
-        dropped_lines=dropped_lines,
+        dropped_lines=malformed,
+        read_health={"sources": [health]},
     )
 
 
 def read_signals(path: Optional[Path] = None) -> List[Dict[str, Any]]:
-    """既存の weak_signals レコードを読む（ファイル無し → 空リスト）。
+    """既存レコードを list 互換 result + source 別 ``read_health`` で返す。
 
     path 未指定（production 既定）は #46 read 層拡張で canonical + legacy を union read し、
     ``signal_key`` で dedup する（canonical 先頭勝ち）。signal_key 欠落レコードは dedup できない
-    ので全件残す（取りこぼし防止）。明示 path 指定時はそのファイルのみ（hermetic）。
+    ので全件残す（取りこぼし防止）。各 source の health は dedup 前の同じ物理 read から
+    ``readable`` / ``error`` / ``malformed_lines`` として保持する（#539）。明示 path 指定時は
+    そのファイルのみ（hermetic）。ファイル不在は readable な正常空在庫。
     """
     if path is not None:
         return _read_one(Path(path))
@@ -137,10 +220,12 @@ def read_signals(path: Optional[Path] = None) -> List[Dict[str, Any]]:
     measured = True
     dropped_lines = 0
     reasons: List[str] = []
+    source_health: List[Dict[str, Any]] = []
     for p in _iter_read_store_paths(STORE_NAME):
         batch = _read_one(p)
         measured = measured and bool(batch.measured)
         dropped_lines += batch.dropped_lines
+        source_health.extend(batch.read_health["sources"])
         if batch.reason:
             reasons.append(batch.reason)
         for r in batch:
@@ -150,11 +235,12 @@ def read_signals(path: Optional[Path] = None) -> List[Dict[str, Any]]:
             if k:
                 seen.add(k)
             out.append(r)
-    return MeasuredList(
+    return WeakSignalRecords(
         out,
         measured=measured,
         reason="; ".join(dict.fromkeys(reasons)) or None,
         dropped_lines=dropped_lines,
+        read_health={"sources": source_health},
     )
 
 
