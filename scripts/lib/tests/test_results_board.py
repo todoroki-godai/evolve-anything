@@ -486,6 +486,76 @@ class TestBuildResultsBoardCorrectionRate:
         assert board["correction_rate"]["displayed_weeks"] == []
 
 
+class TestBuildResultsBoardPillar2:
+    def test_missing_project_root_renders_unmeasured_with_unsupported_targets(
+        self, stub_history, stub_correction_rate
+    ):
+        stub_history([])
+        stub_correction_rate(_closed_gate_summary())
+
+        board = results_board.build_results_board("evolve-anything", now=_NOW)
+        text = "\n".join(results_board.render_results_board(board))
+
+        assert (
+            "**実際に反映された改善（直近30日）: 測定不能"
+            "（project_root が指定されていません）**"
+        ) in text
+        assert board["pillar2"]["not_measured"] == {
+            "hook": {"reason": "no_store"},
+            "pitfall_memory": {"reason": "mtime_collision"},
+        }
+        assert "未測定の反映先: hook（記録ストアなし） / pitfall_memory（mtime 衝突）" in text
+
+    def test_applied_reflections_are_wired_with_project_root_and_now(
+        self, stub_history, stub_correction_rate, monkeypatch, tmp_path
+    ):
+        stub_history([])
+        stub_correction_rate(_closed_gate_summary())
+        expected = {
+            "count": 2,
+            "measured": True,
+            "health": {"degraded": False},
+            "applied_list": [],
+            "not_measured": {
+                "hook": {"reason": "no_store"},
+                "pitfall_memory": {"reason": "mtime_collision"},
+            },
+        }
+        seen = {}
+
+        def _count(project_root, *, now):
+            seen.update(project_root=project_root, now=now)
+            return expected
+
+        monkeypatch.setattr(results_board, "count_applied_reflections", _count)
+
+        board = results_board.build_results_board(
+            "evolve-anything", now=_NOW, project_root=tmp_path
+        )
+
+        assert board["pillar2"] == expected
+        assert seen == {"project_root": tmp_path, "now": _NOW}
+
+    def test_reader_failure_is_explicitly_unmeasured(
+        self, stub_history, stub_correction_rate, monkeypatch, tmp_path
+    ):
+        stub_history([])
+        stub_correction_rate(_closed_gate_summary())
+        monkeypatch.setattr(
+            results_board,
+            "count_applied_reflections",
+            lambda *args, **kwargs: (_ for _ in ()).throw(PermissionError("pillar2 denied")),
+        )
+
+        board = results_board.build_results_board(
+            "evolve-anything", now=_NOW, project_root=tmp_path
+        )
+
+        assert board["pillar2"]["measured"] is False
+        assert board["measurements"]["pillar2"]["measured"] is False
+        assert "PermissionError" in board["measurements"]["pillar2"]["reason"]
+
+
 class TestBuildResultsBoardDecisions:
     def test_counts_by_bucket_within_window(self, stub_history, stub_correction_rate):
         stub_correction_rate(_closed_gate_summary())
@@ -755,6 +825,15 @@ class TestRenderResultsBoard:
                 "hits": 23, "recall": 21 / 47, "precision": 21 / 23,
                 "recall_ci": (0.314, 0.588), "precision_ci": (0.732, 0.976),
             },
+            "pillar2": {
+                "count": 2,
+                "measured": True,
+                "health": {"degraded": False},
+                "not_measured": {
+                    "hook": {"reason": "no_store"},
+                    "pitfall_memory": {"reason": "mtime_collision"},
+                },
+            },
             "decisions": {"accepted": 1, "rejected": 2, "pending": 1, "excluded": 4},
             "accepted_list": [{"skill_name": "queue", "timestamp": _iso(1)}],
             "withdrawal_candidates": [],
@@ -778,6 +857,36 @@ class TestRenderResultsBoard:
             self._board(capture_recall={"measured": False, "reason": "評価セットなし"})
         ))
         assert "L1捕捉率: 未測定（評価セットなし）" in text
+
+    def test_pillar2_count_is_distinct_from_accepted_improvements(self):
+        text = "\n".join(results_board.render_results_board(self._board()))
+
+        assert "実際に反映された改善（直近30日）: 2 件" in text
+        assert "採用した改善（直近30日）: accepted 1 件" in text
+
+    def test_pillar2_unmeasured_never_renders_partial_count(self):
+        board = self._board(
+            pillar2={
+                "count": 7,
+                "measured": False,
+                "health": {"degraded": True, "events_readable": False},
+                "not_measured": {},
+            },
+            measurements={
+                "pillar2": {"measured": True, "reason": None, "dropped_lines": 0},
+            },
+        )
+
+        text = "\n".join(results_board.render_results_board(board))
+
+        assert "実際に反映された改善（直近30日）: 測定不能" in text
+        assert "実際に反映された改善（直近30日）: 7 件" not in text
+        assert "イベント記録を読めません" in text
+
+    def test_pillar2_not_measured_targets_are_always_separate(self):
+        text = "\n".join(results_board.render_results_board(self._board()))
+
+        assert "未測定の反映先: hook（記録ストアなし） / pitfall_memory（mtime 衝突）" in text
 
     def test_capture_recall_builder_reports_current_pattern_version(self, monkeypatch, tmp_path):
         eval_path = tmp_path / "eval.jsonl"

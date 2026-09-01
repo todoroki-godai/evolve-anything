@@ -28,10 +28,13 @@ from optimize_history_store import load_effective_history, load_revert_events
 from correction_rate import build_correction_rate_summary, GATE_CONSECUTIVE_WEEKS
 from correction_semantic.prompt import CATEGORY_ENUM, CATEGORY_LABELS_JA
 from evolve_revert import REASON_LABELS, compute_revert_availability
+from pillar2_metrics import PILLAR2_NOT_MEASURED_TARGETS, count_applied_reflections
 from measurement_result import (
     collect_board_measurements,
     pillar_scopes,
+    read_measurement,
     render_decisions_health,
+    render_pillar2_health,
     render_rate_health,
     render_revert_health,
     render_scope,
@@ -264,7 +267,11 @@ def _in_window(
     return start <= ts < end
 
 
-def build_results_board(slug: str, now: Optional[datetime] = None) -> Dict[str, Any]:
+def build_results_board(
+    slug: str,
+    now: Optional[datetime] = None,
+    project_root: Optional[Path] = None,
+) -> Dict[str, Any]:
     """戦果ボードを決定論生成する（read-only・LLM 非依存）。
 
     Args:
@@ -273,6 +280,8 @@ def build_results_board(slug: str, now: Optional[datetime] = None) -> Dict[str, 
             pj_slug.resolve_pj_slug の basename と telemetry_query の project-name（ディレクトリ
             basename）が一致する前提（既存コードの growth_report.py 等と同じ簡略化）。
         now: 基準時刻（省略時は現在の UTC）。テストの決定論性のため注入可能にする。
+        project_root: 柱2の集計対象。sibling worktree から実行すると same-project の反映が
+            脱落しうるが、その場合も現在は measured=True になる。
 
     Returns:
         correction_rate（ADR-054 §7.2.1 柱3(a)「指摘率」の gate 状態 + 表示対象週 +
@@ -294,6 +303,30 @@ def build_results_board(slug: str, now: Optional[datetime] = None) -> Dict[str, 
         correction_fallback={**_EMPTY_CORRECTION_RATE, "generated_at": _now.isoformat()},
     )
     capture_recall = _build_capture_recall()
+
+    pillar2_fallback = {
+        "count": 0,
+        "measured": False,
+        "health": {"degraded": True},
+        "not_measured": {
+            target: {"reason": details["reason"]}
+            for target, details in PILLAR2_NOT_MEASURED_TARGETS.items()
+        },
+    }
+    if project_root is None:
+        pillar2 = pillar2_fallback
+        pillar2_health = {
+            "measured": False,
+            "reason": "project_root が指定されていません",
+            "dropped_lines": 0,
+        }
+    else:
+        pillar2, pillar2_health = read_measurement(
+            lambda: count_applied_reflections(Path(project_root), now=_now),
+            fallback=pillar2_fallback,
+            reader_name="pillar2_metrics.count_applied_reflections",
+        )
+    measurements["pillar2"] = pillar2_health
 
     # ── 採用した改善: 直近30日の optimize_history ─────────────────
     # #402 段階4: revert 済み accept を判断母集団から除外した effective view を読む
@@ -365,6 +398,7 @@ def build_results_board(slug: str, now: Optional[datetime] = None) -> Dict[str, 
         "generated_at": _now.isoformat(),
         "correction_rate": correction_rate,
         "capture_recall": capture_recall,
+        "pillar2": pillar2,
         "measurement_scopes": scopes,
         "measurements": measurements,
         "decisions": {
@@ -631,6 +665,16 @@ def render_results_board(board: Dict[str, Any]) -> List[str]:
     else:
         lines.append(f"**L1捕捉率: 未測定（{capture.get('reason', '評価セットなし')}）**")
     lines.append(render_scope(scopes, "capture_recall"))
+    lines.append("")
+
+    pillar2 = board.get("pillar2") or {
+        "count": 0,
+        "measured": False,
+        "health": {"degraded": True},
+        "not_measured": {},
+    }
+    lines.extend(render_pillar2_health(pillar2, measurements))
+    lines.append(render_scope(scopes, "pillar2"))
     lines.append("")
 
     lines.extend(render_rate_health(measurements))

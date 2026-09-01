@@ -321,7 +321,7 @@ def test_revert_list_json_surfaces_unmeasured(monkeypatch, capsys):
     assert '"total": null' in output
 
 
-def test_four_pillar_scopes_are_structured_and_rendered(monkeypatch):
+def test_board_scopes_are_structured_and_rendered(monkeypatch):
     monkeypatch.setattr(results_board, "build_correction_rate_summary", lambda **kwargs: _closed_summary())
     monkeypatch.setattr(results_board, "load_effective_history", lambda slug: [])
     monkeypatch.setattr(results_board, "load_revert_events", lambda slug: [])
@@ -342,6 +342,11 @@ def test_four_pillar_scopes_are_structured_and_rendered(monkeypatch):
         "label": "当PJ: proj",
     }
     assert scopes["correction_rate"]["kind"] == "all_projects"
+    assert scopes["pillar2"] == {
+        "kind": "project_and_global",
+        "slug": "proj",
+        "label": "当PJ: proj + グローバル反映",
+    }
     assert scopes["withdrawal_candidates"]["slug"] == "proj"
     for scope in scopes.values():
         assert scope["label"] in text

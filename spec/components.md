@@ -39,7 +39,7 @@ store_registry, store_write
 ## 修正フィードバック・weak_signals系 → [components-feedback.md](components-feedback.md)
 
 weak_signals, correction_semantic, bootstrap_backlog, daily_review, review_channels,
-idiom_autopromote, measurement_bug, growth_report, results_board, outcome_promotion_readiness,
+idiom_autopromote, measurement_bug, growth_report, results_board, pillar2_metrics, outcome_promotion_readiness,
 cross_pj_priority, plugin_self, testpaths_coverage, dogfood gate, sibling_copy_guard,
 evolve-release-sync, pj_slug, weak_signals drain永続化, idiom_filter, representative,
 multiview_eval, relevance_gate, remediation参照リンク相対化, report-feedback, paired_trajectory

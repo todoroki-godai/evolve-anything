@@ -9,6 +9,20 @@ from typing import Optional
 from reflect_fold import _parse_iso8601_utc, fold_corrections
 
 
+PILLAR2_NOT_MEASURED_TARGETS = {
+    "hook": {"reason": "no_store", "label": "記録ストアなし"},
+    "pitfall_memory": {"reason": "mtime_collision", "label": "mtime 衝突"},
+}
+
+
+def _not_measured_targets() -> dict[str, dict[str, str]]:
+    """公開定義から board の not_measured schema を生成する。"""
+    return {
+        target: {"reason": details["reason"]}
+        for target, details in PILLAR2_NOT_MEASURED_TARGETS.items()
+    }
+
+
 def _snapshot_stat(path: Path) -> Optional[tuple[int, int]]:
     """path の比較可能な状態を返す。存在しない状態も None として比較する。"""
     try:
@@ -200,9 +214,6 @@ def count_applied_reflections(
             "duplicate_confirmations": fold_health.duplicate_confirmations,
             "hash_mismatch_count": fold_health.hash_mismatch_count,
         },
-        "not_measured": {
-            "hook": {"reason": "no_store"},
-            "pitfall_memory": {"reason": "mtime_collision"},
-        },
+        "not_measured": _not_measured_targets(),
         "generated_at": now.isoformat(),
     }
