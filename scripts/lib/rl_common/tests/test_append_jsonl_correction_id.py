@@ -165,3 +165,88 @@ def test_prompt_reflects_each_semantic_field_independently(field):
     changed[field] += "-changed"
     assert _build_prompt([changed]) != _build_prompt([base])
     assert changed[field] in _build_prompt([changed])
+
+
+# --- 判定がロックの内側で行われることの決定論的固定（#593 実装レビュー [Must]）---
+#
+# 「2プロセスが同じ ID を同時に追記できない」ことを見る並行試験は、同期点より**前**の
+# 順序を固定できない。重複判定を flock 取得の前へ移す変異（TOCTOU の再導入）を入れても、
+# 同期点が「P1 の unlock 後に P2 を開始する」である限り P2 は P1 の行を読めてしまい、
+# 試験は緑のまま通る。実際にはその変異下で、P1 が「判定通過後・ロック待ち」で止まると
+# 同一 ID が2行とも appended になる。
+#
+# よって順序そのものを記録して assert する。実装変更ではなくテストで固定する。
+
+
+def test_exclusive_lock_is_acquired_before_duplicate_check(tmp_path, monkeypatch):
+    """LOCK_EX の取得は duplicate_check の評価より前でなければならない。"""
+    if not persistence._HAVE_FCNTL:
+        pytest.skip("fcntl unavailable")
+
+    calls: list[str] = []
+    real_flock = persistence._fcntl.flock
+
+    def spy_flock(fd, operation):
+        if operation == persistence._fcntl.LOCK_EX:
+            calls.append("lock_ex")
+        elif operation == persistence._fcntl.LOCK_UN:
+            calls.append("lock_un")
+        return real_flock(fd, operation)
+
+    monkeypatch.setattr(persistence._fcntl, "flock", spy_flock)
+
+    def probe(existing):
+        calls.append("duplicate_check")
+        return False
+
+    path = tmp_path / "corrections.jsonl"
+    result = persistence.append_jsonl(
+        path, {"correction_id": VALID_ID}, duplicate_check=probe
+    )
+
+    assert result.status == "written"
+    assert "lock_ex" in calls, f"LOCK_EX が取得されていない: {calls}"
+    assert "duplicate_check" in calls, f"duplicate_check が評価されていない: {calls}"
+    assert calls.index("lock_ex") < calls.index("duplicate_check"), (
+        f"重複判定がロックの外側で行われている（TOCTOU）: {calls}"
+    )
+    assert calls.index("duplicate_check") < calls.index("lock_un"), (
+        f"重複判定がロック解放後に行われている: {calls}"
+    )
+
+
+def test_write_happens_inside_the_same_lock_as_the_duplicate_check(tmp_path, monkeypatch):
+    """書込みも同じロック区間の内側で行われる（判定と書込みの不可分性）。"""
+    if not persistence._HAVE_FCNTL:
+        pytest.skip("fcntl unavailable")
+
+    calls: list[str] = []
+    real_flock = persistence._fcntl.flock
+
+    def spy_flock(fd, operation):
+        if operation == persistence._fcntl.LOCK_EX:
+            calls.append("lock_ex")
+        elif operation == persistence._fcntl.LOCK_UN:
+            calls.append("lock_un")
+        return real_flock(fd, operation)
+
+    monkeypatch.setattr(persistence._fcntl, "flock", spy_flock)
+
+    path = tmp_path / "corrections.jsonl"
+
+    def probe(existing):
+        # 判定時点ではまだ自分の行は書かれていない。
+        calls.append(f"duplicate_check:{len(existing)}")
+        return False
+
+    persistence.append_jsonl(path, {"correction_id": VALID_ID}, duplicate_check=probe)
+    persistence.append_jsonl(path, {"correction_id": "b" * 32}, duplicate_check=probe)
+
+    assert calls == [
+        "lock_ex",
+        "duplicate_check:0",
+        "lock_un",
+        "lock_ex",
+        "duplicate_check:1",
+        "lock_un",
+    ], f"ロック区間と判定・書込みの順序が崩れている: {calls}"

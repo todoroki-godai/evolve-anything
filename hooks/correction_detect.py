@@ -159,7 +159,12 @@ def handle_user_prompt_submit(event: dict) -> None:
     }
     if error_category is not None:
         record["error_category"] = error_category
-    corrections_path = Path(common.DATA_DIR) / "corrections.jsonl"
+    # DATA_DIR は rl_common パッケージ属性を call-time で参照する（store_write.py と同じ SoT）。
+    # `common` は `from rl_common import *` なので `common.DATA_DIR` は import 時のコピーになり、
+    # `rl_common.DATA_DIR` だけを patch したテストが実パスへ書いてしまう（pitfall #96 と同型）。
+    import rl_common
+
+    corrections_path = Path(rl_common.DATA_DIR) / "corrections.jsonl"
     append_result = common.append_correction_record(corrections_path, record)
     if append_result.status != "appended":
         print(
