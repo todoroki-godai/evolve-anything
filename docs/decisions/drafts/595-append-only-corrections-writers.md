@@ -13,6 +13,7 @@
 - `results_board.py` への表示配線
 - 新しい保存先ファイルの新設（#379 新設凍結は継続。既存 `corrections.jsonl` の中で完結させる）
 - `corrections.jsonl` 以外のストアの writer 協調
+- **ローリングデプロイ中の新旧バイナリ混在への耐性**（§4.2 で詳述）。信頼境界②「運用ミス」の範囲内であることに加え、**この環境はローカル単一利用者運用でありローリングデプロイという構成自体が存在しない**ため対象外とする（存在しない構成の耐性を設計しても検証しようがなく、コストだけが増える）
 
 ### ④ blocking
 - (a) 全文書き換え中に追記された行が失われる経路が1つでも残る
@@ -61,18 +62,20 @@
 
 ### 1.2 見つかった writer と issue 本文の6件との差分
 
-**issue 本文の6件との照合**: 6件は全て実在を確認できた（一致）。加えて、上記の切り口②③④（`open` 系＋`atomic_write_text` の機械 grep）で**issue 本文に無い2件**を新規発見した。
+**ヒット数のまとめ**: ①文字列直接参照 219 ヒット → ②変数越しも含むファイル単位 71 ファイル → ③書込みシグナルを実際に持つ writer **8 件**（issue 本文の棚卸しは6件）。
 
-| # | writer | file:line | 現状の書き方 | 何が失われるか | issue本文 |
+**issue 本文の6件との照合**: 6件は全て実在を確認できた（一致）。加えて、上記の切り口②③④（`open` 系＋`atomic_write_text` の機械 grep）で**issue 本文の棚卸し表には無く、今回の自分の実測で新たに見つけた2件**（#7・#8）がある。**issue 本文と本設計文書のどちらが新しいかは本表を正とする**（issue 本文は巡3レビューが file:line で名指しした時点のスナップショットで、その後の機械的再洗い出しを経ていない）。
+
+| # | writer | file:line | 現状の書き方 | 何が失われるか | issue本文の棚卸し表 |
 |---|---|---|---|---|---|
-| 1 | `update_reflect_status` | `skills/reflect/scripts/reflect.py:631-745`（書込みは`:735`） | 全読取→`filepath.write_text` | 読取後に追記された全レコード | ○（一致） |
-| 2 | `invalidate_idiom_corrections` | `scripts/lib/correction_semantic/promote.py:584-649`（書込みは`:636-642`） | ロックなし・tmp+`os.replace` | 同上＋invalidation自体の巻き戻り | ○（一致） |
-| 3 | `cleanup_corrections` | `scripts/lib/prune/corrections.py:51-117`（書込みは`:111-115`） | 全読取→`write_text` | 削除条件に合わない行も含め全て | ○（一致） |
-| 4 | `migrate`（reflect_confirmed→promoted） | `scripts/migrate_reflect_promoted_status.py:51-80`（書込みは`:78`） | 全読取→`write_text` | 同上 | ○（一致） |
-| 5 | `invalidate_subagent_contaminated_corrections` | `scripts/lib/corrections_subagent_invalidation.py:59-113`（書込みは`:106`） | 全読取→`atomic_write_text` | 同上 | ○（一致） |
-| 6 | `migrate`（correction_id backfill） | `scripts/migrate_correction_id_backfill.py:60-190`（書込みは`:139-166`） | 全読取→identity確認→tmp+`os.replace` | 確認〜replace間の窓（ロック非共有） | ○（一致） |
-| **7** | `backfill_corrections`（turn_index付与） | `scripts/lib/backfill_turn_indices.py:202-256`（書込みは`:253-254`、`_atomic_write`実体は`:65-72`） | 全読取→tmp+`Path.replace` | 全読取後に追記された全レコード（1回限りの移行スクリプトだが、`bin/`等から任意タイミングで再実行され得る） | **× issue本文に無し** |
-| **8** | `_backfill_jsonl`（pj_slug正規化・`corrections`ストア分） | `scripts/lib/pj_slug_backfill.py:76-111`（呼出しは`:201-202`、`_atomic_write`実体は`:60-73`） | 全読取→tmp+`os.replace` | 同上 | **× issue本文に無し** |
+| 1 | `update_reflect_status` | `skills/reflect/scripts/reflect.py:631-745`（書込みは`:735`） | 全読取→`filepath.write_text` | 読取後に追記された全レコード | ○ 記載あり（一致） |
+| 2 | `invalidate_idiom_corrections` | `scripts/lib/correction_semantic/promote.py:584-649`（書込みは`:636-642`） | ロックなし・tmp+`os.replace` | 同上＋invalidation自体の巻き戻り | ○ 記載あり（一致） |
+| 3 | `cleanup_corrections` | `scripts/lib/prune/corrections.py:51-117`（書込みは`:111-115`） | 全読取→`write_text` | 削除条件に合わない行も含め全て | ○ 記載あり（一致） |
+| 4 | `migrate`（reflect_confirmed→promoted） | `scripts/migrate_reflect_promoted_status.py:51-80`（書込みは`:78`） | 全読取→`write_text` | 同上 | ○ 記載あり（一致） |
+| 5 | `invalidate_subagent_contaminated_corrections` | `scripts/lib/corrections_subagent_invalidation.py:59-113`（書込みは`:106`） | 全読取→`atomic_write_text` | 同上 | ○ 記載あり（一致） |
+| 6 | `migrate`（correction_id backfill） | `scripts/migrate_correction_id_backfill.py:60-190`（書込みは`:139-166`） | 全読取→identity確認→tmp+`os.replace` | 確認〜replace間の窓（ロック非共有） | ○ 記載あり（一致） |
+| **7** | `backfill_corrections`（turn_index付与） | `scripts/lib/backfill_turn_indices.py:202-256`（書込みは`:253-254`、`_atomic_write`実体は`:65-72`） | 全読取→tmp+`Path.replace` | 全読取後に追記された全レコード（1回限りの移行スクリプトだが、`bin/`等から任意タイミングで再実行され得る） | **× issue本文の棚卸し表に記載無し。本設計文書で新規に発見** |
+| **8** | `_backfill_jsonl`（pj_slug正規化・`corrections`ストア分） | `scripts/lib/pj_slug_backfill.py:76-111`（呼出しは`:201-202`、`_atomic_write`実体は`:60-73`） | 全読取→tmp+`os.replace` | 同上 | **× issue本文の棚卸し表に記載無し。本設計文書で新規に発見** |
 
 **「これで全部」と言える根拠**: 71ファイルの機械 grep で書込みシグナルを持っていたのは上記8件のみ。残り63ファイルは全て read-only（集計・表示・フィルタ・診断）だった（個別に Read して確認済み）。ただし後述§7の限界により「絶対に0件」の証明はできない — 未実測の範囲を明示する。
 
@@ -171,10 +174,15 @@ def some_rewrite_writer(corrections_path: Path, ...) -> ...:
             return ...  # 既存の not_found 分岐はロック内でも同じ
 
         text = corrections_path.read_text(encoding="utf-8")
-        before_ids = _collect_valid_ids(text)          # 検出用（§2.6）
+        before_ids = _collect_valid_ids(text)                       # ID集合（§2.6a）
+        before_count = _count_records(text)                          # 総レコード数（§2.6b）
 
         # --- 既存のマッチング・変換ロジック（変更なし） ---
-        new_lines, matched = _existing_transform(text)
+        # intended_removed_ids: 意図的に削除した行のうち correction_id を持つものの集合
+        #                       （ID なしレコードを削除する writer は空集合のままでよい）
+        # intended_removed_count: 意図的に削除した行の総数（ID の有無を問わない。
+        #                       cleanup_corrections は既存の removed カウンタをそのまま使う）
+        new_lines, matched, intended_removed_ids, intended_removed_count = _existing_transform(text)
         # -----------------------------------------------
 
         if dry_run or not matched:
@@ -182,7 +190,11 @@ def some_rewrite_writer(corrections_path: Path, ...) -> ...:
 
         new_content = "\n".join(new_lines) + "\n" if new_lines else ""
         after_ids = _collect_valid_ids(new_content)
-        _assert_no_unexpected_loss(before_ids, after_ids, removed_ids=_intended_removals)
+        after_count = _count_records(new_content)
+
+        # 独立した2つの検出（片方が抜けても他方が拾える設計。§2.6）
+        assert_no_unexpected_loss(before_ids, after_ids, removed_ids=intended_removed_ids)
+        assert_record_count_preserved(before_count, after_count, intended_removed=intended_removed_count)
 
         atomic_write_text(corrections_path, new_content)   # tmp + os.replace（file_lock.py 既存関数）
     return ...
@@ -194,7 +206,7 @@ def some_rewrite_writer(corrections_path: Path, ...) -> ...:
 |---|---|---|
 | 1 | `update_reflect_status` | 関数本体を `with corrections_write_lock(filepath):` で包む。`filepath.write_text(...)` を `atomic_write_text(filepath, ...)` に置換（tmp+replace化）。index 計算ロジックは §3 で共有ヘルパーへ切り出す |
 | 2 | `invalidate_idiom_corrections` | 既存の tmp+`os.replace` はそのまま。全体（読取〜replace）を `corrections_write_lock` で包む |
-| 3 | `cleanup_corrections` | `write_text` を `atomic_write_text` に置換。全体を `corrections_write_lock` で包む |
+| 3 | `cleanup_corrections` | `write_text` を `atomic_write_text` に置換。全体を `corrections_write_lock` で包む。既存の `removed` カウンタ（decay_days 超過で削除した件数）を `intended_removed_count` としてそのまま §2.6b の検出に渡す（新しい計算ロジックは増やさない） |
 | 4 | `migrate`（promoted status） | `write_text` を `atomic_write_text` に置換。全体を `corrections_write_lock` で包む |
 | 5 | `invalidate_subagent_contaminated_corrections` | 既存の `atomic_write_text` 呼出しはそのまま。全体を `corrections_write_lock` で包む |
 | 6 | `migrate`（correction_id backfill） | 既存の identity 確認はそのまま維持（defense-in-depth・§6）。読取〜replace 全体を `corrections_write_lock` で包む（これにより identity 確認の「窓」は構造的に閉じる） |
@@ -222,9 +234,18 @@ def backfill(data_dir: Path, *, apply: bool = False) -> Dict[str, Any]:
 
 `_backfill_jsonl` 自体（読取・正規化・`_atomic_write` 呼出し）は無変更。この特別扱いは「1つの共有関数が複数ストアを触る」という既存構造をそのまま残しつつ、`corrections.jsonl` の呼出し箇所だけをロックで包む最小差分。
 
-### 2.6 検出可能性（blocking b）: `_assert_no_unexpected_loss`
+### 2.6 検出可能性（blocking b）: ID 集合差分 + 行数突合の2系統
 
-ロック協調により消失は構造的に起きなくなるはずだが、「本当に起きていない」ことを実行時に確認できないと、将来ロック取得を忘れる実装ミス（TOCTOU の再導入）が再び無音の消失を生む。`correction_id.py` の既存プリミティブ（`validate_correction_id` / `find_duplicate_ids` 相当のID集合演算）を使い、書換え直前に軽量な不変条件チェックを入れる。
+ロック協調により消失は構造的に起きなくなるはずだが、「本当に起きていない」ことを実行時に確認できないと、将来ロック取得を忘れる実装ミス（TOCTOU の再導入）が再び無音の消失を生む。
+
+**役割分担**（issue の信頼境界②は「移行スクリプトの流し忘れ」を運用ミスの代表例として明記しており、`correction_id` を持たない legacy レコードが消えるケースを検出対象から外すことはできない。そのため ID の有無で担当を分け、どちらか一方だけでは検出できない失われ方を互いに補う）:
+
+- **§2.6a `assert_no_unexpected_loss`（ID 集合差分）**: `correction_id` を持つ行だけが対象。**どの特定レコードが消えたか**まで特定できる。#593（PR #594）以降のレコードにのみ効く。
+- **§2.6b `assert_record_count_preserved`（行数突合）**: `correction_id` の有無に関係なく**有効な JSON dict レコード全件**を対象にした、独立に成立する検出。個々のレコードの同一性までは見ないが、legacy レコードの消失も含めて「総数が合わない」ことは検出できる。
+
+両方とも `correction_id.py` の既存プリミティブ（`validate_correction_id`）と §3 の共有 enumerate ヘルパー（`iter_indexed_records`）の上に組む。新しいストア・新しい永続化は発生しない（すべてメモリ上の集合・カウント演算）。
+
+#### 2.6a: ID 集合差分
 
 ```python
 # scripts/lib/rl_common/correction_id.py（追加）
@@ -259,9 +280,37 @@ def assert_no_unexpected_loss(
         )
 ```
 
-各 rewrite writer は書込み直前に `assert_no_unexpected_loss(before_ids, after_ids, removed_ids=...)` を呼ぶ。**削除を意図する writer**（`cleanup_corrections`）は削除対象の `correction_id` 集合を `removed_ids` として明示的に渡す。これにより「意図した削除」と「意図しない消失」を区別する。
+#### 2.6b: 行数突合（ID の有無に依存しない補助検出）
 
-**既知の限界**: `correction_id` は #593（PR #594）以降のレコードにのみ存在する。それ以前の legacy レコード（`correction_id` フィールド無し）は本チェックの対象外（集合に入らないため、消えても検出できない）。これは §6 に残存リスクとして明記する（新しい識別子を発明して legacy レコードを遡及識別することは本 issue のスコープ外＝#587 や別 issue の対象）。
+```python
+# scripts/lib/rl_common/correction_id.py（追加）
+def _count_records(text: str) -> int:
+    """有効な JSON dict レコードの総数（correction_id の有無を問わない・§3 の enumerate と同じ規約）。"""
+    from . import persistence
+    return sum(1 for _ in persistence.iter_indexed_records(text))
+
+
+class UnexpectedRecordCountChangeError(RuntimeError):
+    """全文書き換え前後でレコード総数が「意図した増減」と一致しないときに送出する。"""
+
+
+def assert_record_count_preserved(
+    before_count: int, after_count: int, *, intended_removed: int = 0
+) -> None:
+    expected = before_count - intended_removed
+    if after_count != expected:
+        raise UnexpectedRecordCountChangeError(
+            f"corrections.jsonl のレコード総数が想定と不一致: "
+            f"書換え前={before_count} 意図した削除={intended_removed} "
+            f"想定後={expected} 実際の書換え後={after_count}"
+        )
+```
+
+各 rewrite writer は書込み直前に **両方**を呼ぶ（§2.4 の共通形）。**削除を意図する writer**（`cleanup_corrections`）は、削除対象のうち ID を持つものの集合を `removed_ids` に、削除対象の総数（ID の有無を問わない）を `intended_removed` に、それぞれ明示的に渡す。フィールド更新のみで削除を伴わない writer（#1・#2・#4・#5・#6・#7・#8）は `removed_ids=frozenset()` / `intended_removed=0` で呼ぶ（総数が1件でも変わったら即エラー）。
+
+**§2.6a の既知の限界**: `correction_id` は #593（PR #594）以降のレコードにのみ存在する。それ以前の legacy レコード（`correction_id` フィールド無し）は ID 集合の対象外（集合に入らないため、単体では消えても検出できない）。**この穴は §2.6b が埋める**（legacy レコードも `_count_records` の対象であり、総数の不一致として検出できる）。
+
+**§2.6b が検出できないもの**: 総数だけを見るため、**「1件消えて1件（別内容で）増える」ような同数の入替**は検出できない（before_count と after_count が一致してしまう）。今回の8 writer はいずれも自分の書換え区間の中で新規レコードを追加しない（フィールド更新・削除のみ）ため、通常運用でこの穴を実際に踏む経路は無いと判断しているが、**将来 writer を追加・改修する際にこの前提が崩れると検出できなくなる**ことを残存リスクとして明記する（§6）。§2.6a（ID集合差分）は、消えた行と増えた行の `correction_id` が別物であれば "unexpected" として拾えるため、この特定のケースでは §2.6a が補完する（ID 付きレコード同士の入替に限る）。
 
 ---
 
@@ -331,6 +380,8 @@ worktree/PR単位でこのコードが段階的に配布される間、**旧バ�
 
 ## 5. 検証方法
 
+**設計段階では未実行**。下記の陰性試験・陽性対照・呼出順アサーション試験は、いずれも**この設計文書の作成時点では1件も実行していない**（実装コードがまだ存在しないため実行不可能）。これらは**実装 PR の完了条件**として、実装者が実際に走らせ、緑残りが無いことを報告する。「設計文書に書いたこと」を「実行して確認したこと」と混同しないこと。
+
 ### 5.1 陰性試験（各 blocking に1件以上）
 
 | ID | blocking | 変異内容（壊す不変条件） | 通したい検査経路 |
@@ -338,6 +389,7 @@ worktree/PR単位でこのコードが段階的に配布される間、**旧バ�
 | N-a-1 | (a) | `update_reflect_status` の呼出し**直前**に、別プロセス（simulate: 直接 `persistence.append_jsonl` を同じファイルへ）で新規レコードを追記し、`update_reflect_status` 完了後に**その新規レコードが残っているか**を検証。ロックを取らない旧実装（`corrections_write_lock` の呼出しをコメントアウトした変異）では、書換え中に読み込んだスナップショットに新規行が含まれず消える → 赤 | ロック実装ありでは新規行が保持される → 緑 |
 | N-a-2 | (a) | `cleanup_corrections` の read と write の間に別プロセスが追記するタイミングを、flock をモンキーパッチして決定論的に同期点を作り再現（N-a-1 と別の writer で再現・「回避手段とは種類の違うもの」） | 同上 |
 | N-b-1 | (b) | `assert_no_unexpected_loss` の呼出しを削除する変異を入れ、意図的に消失させるテストコードで「例外が飛ばない＝検出できない」ことを確認してから、削除しない実装で例外が飛ぶことを確認（削除変異＝赤、実装＝緑） | `UnexpectedCorrectionLossError` が飛ぶ |
+| N-b-2 | (b) | `correction_id` を持たない legacy レコード（fixture）だけを対象に、書換え処理から1行を無断削除する変異を入れる。`assert_no_unexpected_loss` は ID が無いため無反応（＝これ単体だと検出不能を再現）だが、`assert_record_count_preserved` が総数不一致で `UnexpectedRecordCountChangeError` を検出する | §2.6b が §2.6a の穴（legacy レコード）を埋める |
 | N-c-1 | (c) | `append_correction_record` から `corrections_write_lock` の呼出しだけを外す変異を入れ、N-a-1 と同じ手順（全文書き換え中に追記）を**追記側を無ロックにして**再現 → 消える | ロックを戻すと消えない |
 | N-c-2 | (c) | 全文書き換え writer 側の `corrections_write_lock` の呼出しだけを外す変異（N-c-1 の逆方向） → 消える | ロックを戻すと消えない |
 | N-d-1 | (d) | `iter_indexed_records` を使わず、`update_reflect_status` 側だけ「空行もカウントする」独自実装に戻す変異を入れ、空行を含む fixture で `load_corrections` が返す index と食い違うことを確認（#588 の再現） | 共有ヘルパー実装では一致する |
@@ -345,8 +397,8 @@ worktree/PR単位でこのコードが段階的に配布される間、**旧バ�
 
 ### 5.2 陽性対照
 
-- P-1: ロック実装ありの状態で、通常の読取（`load_corrections`）・通常の追記（1レコード）・通常の `cleanup_corrections`（decay 対象なし）を順に実行し、全レコードが1件も減らず・意味も変わらないことを確認（誤検出しないこと）。
-- P-2: `assert_no_unexpected_loss` に、削除を**意図した** `removed_ids` を正しく渡すケース（`cleanup_corrections` が実際に decay 対象を消す通常ケース）で例外が飛ばないことを確認。
+- P-1: ロック実装ありの状態で、通常の読取（`load_corrections`）・通常の追記（1レコード）・通常の `cleanup_corrections`（decay 対象なし）を順に実行し、全レコードが1件も減らず・意味も変わらないことを確認（誤検出しないこと）。§2.6a・§2.6b の両方が例外を飛ばさないことを確認する。
+- P-2: `assert_no_unexpected_loss` と `assert_record_count_preserved` の両方に、削除を**意図した** `removed_ids` / `intended_removed` を正しく渡すケース（`cleanup_corrections` が実際に decay 対象を消す通常ケース、ID付き・legacy 混在）で、いずれも例外が飛ばないことを確認。
 
 ### 5.3 「回避手段とは種類の違うもの」2件以上（実際に適用して結果を報告する）
 
@@ -369,8 +421,9 @@ worktree/PR単位でこのコードが段階的に配布される間、**旧バ�
 
 ## 6. 受容する残存リスク
 
-- **legacy レコード（`correction_id` 無し）の消失検出は効かない**（§2.6）。#593 以前のレコードは識別子が無いため `assert_no_unexpected_loss` の対象外。
-- **ローリングデプロイ中の新旧混在**は対象外（§4.2）。信頼境界②の「運用ミス」の範囲内で許容する。
+- **legacy レコード（`correction_id` 無し）単体の消失検出は §2.6a では効かない**が、§2.6b（行数突合）が全レコード対象の補助検出として埋める。
+- **§2.6b は「同数の入替」（1件消えて別内容の1件が増える）を検出できない**（総数が変わらないため）。現行の8 writer はいずれも自分の書換え区間内で新規追加を行わないためこの穴を実際には踏まないが、将来の writer 追加時にこの前提を確認せず流用すると穴が再現し得る。ID 付きレコード同士の入替は §2.6a が拾う（§2.6 参照）。
+- **ローリングデプロイ中の新旧混在**は対象外（§0③・§4.2）。この環境がローカル単一利用者運用でローリングデプロイという構成自体が存在しないため。
 - **`fcntl` 非対応環境**（`persistence._HAVE_FCNTL is False`）では `append_correction_record` は `unsupported_platform` を返して何もしないが、全文書き換え writer 側は `corrections_write_lock` 内部で `fcntl.flock` を呼ぶため同様に失敗する（`file_lock.py` は fcntl 前提）。この場合の扱いは既存の `file_lock.py` の契約（例外送出）に従い、本設計では新たな fallback を作らない。
 - **真の追記オンリー化（イベント fold）は行わない**。#587 が改めて設計する。本設計はそれまでの間、全文書き換え自体を安全にするだけ。
 
