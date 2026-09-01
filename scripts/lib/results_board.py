@@ -280,6 +280,8 @@ def build_results_board(
             pj_slug.resolve_pj_slug の basename と telemetry_query の project-name（ディレクトリ
             basename）が一致する前提（既存コードの growth_report.py 等と同じ簡略化）。
         now: 基準時刻（省略時は現在の UTC）。テストの決定論性のため注入可能にする。
+        project_root: 柱2の集計対象。sibling worktree から実行すると same-project の反映が
+            脱落しうるが、その場合も現在は measured=True になる。
 
     Returns:
         correction_rate（ADR-054 §7.2.1 柱3(a)「指摘率」の gate 状態 + 表示対象週 +
