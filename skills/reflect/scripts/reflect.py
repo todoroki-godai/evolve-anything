@@ -1357,7 +1357,11 @@ def main():
                 "status": "pillar2_event_failed",
                 "pillar2_event": {
                     "status": "invalid_correction_message",
-                    "reason": "correction 本文が無いため反映イベントを記録できません",
+                    "reason": (
+                        "correction 本文が無いため反映イベントを記録できません。"
+                        "correction に message を補って再実行するか、"
+                        "--skip で在庫から外してください"
+                    ),
                 },
             }, ensure_ascii=False, indent=2))
             sys.exit(1)

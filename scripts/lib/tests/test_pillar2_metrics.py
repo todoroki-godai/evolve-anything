@@ -113,6 +113,25 @@ def test_sibling_worktree_writer_slug_is_same_project(monkeypatch, tmp_path):
     assert metrics._pillar2_project_scope(correction, tmp_path / "ea-597") == "same-project"
 
 
+def test_unrelated_writer_slug_falls_through_to_classifier(monkeypatch, tmp_path):
+    """どちらの slug とも一致しない project_path は畳まず既存の判定へ落とす。
+
+    slug 照合の比較を真偽値へ潰す退行（``project_path == f(root)`` → ``f(root)``）は
+    「一致する入力が same-project になる」ことだけを見るテストでは検出できず、
+    他PJの correction が自PJの柱2へ計上される（corrections.jsonl は全PJ共有）。
+    委譲先の返り値を sentinel にして、フォールスルー自体を固定する。
+    """
+    monkeypatch.setattr("pj_slug.resolve_pj_slug", lambda root: "ea-597")
+    monkeypatch.setattr(
+        "rl_common.persistence.project_name_from_dir",
+        lambda root: "evolve-anything",
+    )
+    sentinel = "sentinel-scope"
+    monkeypatch.setattr(metrics, "_classify_project_scope", lambda c, root: sentinel)
+    correction = {"project_path": "other-pj", "message": "project detail"}
+    assert metrics._pillar2_project_scope(correction, tmp_path / "ea-597") == sentinel
+
+
 def test_same_reflection_is_deduplicated_by_normalized_key(tmp_path):
     second_base = _base(correction_id="d" * 32)
     second_events = [

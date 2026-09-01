@@ -1023,13 +1023,10 @@ class TestApplyCLI:
 
         assert exc_info.value.code == 1
         output = json.loads(capsys.readouterr().out)
-        assert output == {
-            "status": "pillar2_event_failed",
-            "pillar2_event": {
-                "status": "invalid_correction_message",
-                "reason": "correction 本文が無いため反映イベントを記録できません",
-            },
-        }
+        assert output["status"] == "pillar2_event_failed"
+        assert output["pillar2_event"]["status"] == "invalid_correction_message"
+        # 次手（--skip / message 補完）を必ず示す。文言そのものは固定しない。
+        assert "--skip" in output["pillar2_event"]["reason"]
         append.assert_not_called()
         update.assert_not_called()
         assert filepath.read_bytes() == before_bytes
