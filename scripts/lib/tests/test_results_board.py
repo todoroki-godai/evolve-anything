@@ -496,6 +496,7 @@ class TestBuildResultsBoardPillar2:
             "count": 2,
             "measured": True,
             "health": {"degraded": False},
+            "applied_list": [],
             "not_measured": {
                 "hook": {"reason": "no_store"},
                 "pitfall_memory": {"reason": "mtime_collision"},
