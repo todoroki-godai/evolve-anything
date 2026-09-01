@@ -78,6 +78,8 @@ def test_apply_writes_classified_kind(tmp_path, capsys):
         events_path=rl_common.DATA_DIR / "reflect_apply_events.jsonl",
     )
     assert result["count"] == 1
+    assert result["measured"] is True
+    assert result["applied_list"][0]["reconciled"] is False
 
 
 def test_apply_aborts_when_phase1_append_fails(tmp_path, capsys):
