@@ -168,3 +168,15 @@ def test_unknown_event_type_does_not_affect_fold():
     assert folded[0].has_pillar2_fields is False
     assert health.invalid_events == 0
     assert health.unknown_schema_events == 0
+
+
+def test_message_hash_normalizes_unicode_nfc():
+    decomposed = "Cafe\u0301"
+    composed_hash = _hash_correction_message({"extracted_learning": "Café"})
+    folded, health = fold_corrections(
+        [_base(extracted_learning=decomposed)],
+        [_attempt(correction_message_sha256=composed_hash), _applied()],
+        now=NOW,
+    )
+    assert folded[0].has_pillar2_fields is True
+    assert health.hash_mismatch_count == 0
