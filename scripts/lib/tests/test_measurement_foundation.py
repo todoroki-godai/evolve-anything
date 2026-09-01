@@ -334,8 +334,8 @@ def test_board_scopes_are_structured_and_rendered(monkeypatch):
     assert scopes["capture_recall"]["kind"] == "local_untracked_eval_set"
     assert scopes["capture_recall"]["label"] == (
         "ローカル評価セット（git 管理外・マシン依存。checkout 同梱または "
-        "共有 DATA_DIR の bench/ にあれば測れる。実体を持たないマシン・"
-        "fresh clone では測定不能）"
+        "共有 DATA_DIR の bench/ に実体があれば測れる。実体を持たない"
+        "マシンでは測定不能）"
     )
     assert scopes["accepted_improvements"] == {
         "kind": "project",

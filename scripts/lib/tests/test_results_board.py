@@ -907,15 +907,70 @@ class TestRenderResultsBoard:
         shared.touch()
         monkeypatch.setattr(results_board, "_CAPTURE_EVAL_PATH", missing)
         monkeypatch.setattr(rl_common, "DATA_DIR", tmp_path / "data")
-        monkeypatch.setattr(
-            results_board,
-            "load_capture_eval_set",
-            lambda _path: [{"text": "違う、そこです。", "label": "TP"}],
-        )
+        opened: list[Path] = []
+
+        def _load(path):
+            # 解決した候補と実際に読む候補が食い違う配線切れを検出するため path を記録する。
+            opened.append(Path(path))
+            return [{"text": "違う、そこです。", "label": "TP"}]
+
+        monkeypatch.setattr(results_board, "load_capture_eval_set", _load)
 
         result = results_board._build_capture_recall()
 
         assert result["measured"] is True
+        assert opened == [shared]
+
+    def test_broken_checkout_candidate_does_not_shadow_shared(self, monkeypatch, tmp_path):
+        """checkout 側が読めなくても、健全な共有 DATA_DIR 側で測る（#602 巡1 [Must]）。
+
+        評価セットは git 管理外なので、checkout に更新前の古い実体が残る状態は通常運用で
+        到達しうる。「最初に実在した候補」で打ち切ると、正しい実体があるのに測定不能になる。
+        """
+        import rl_common
+
+        stale = tmp_path / "checkout" / results_board._CAPTURE_EVAL_FILENAME
+        stale.parent.mkdir(parents=True)
+        stale.touch()
+        shared = tmp_path / "data" / "bench" / results_board._CAPTURE_EVAL_FILENAME
+        shared.parent.mkdir(parents=True)
+        shared.touch()
+        monkeypatch.setattr(results_board, "_CAPTURE_EVAL_PATH", stale)
+        monkeypatch.setattr(rl_common, "DATA_DIR", tmp_path / "data")
+
+        def _load(path):
+            if Path(path) == stale:
+                raise results_board.CaptureEvalIntegrityError("stale")
+            return [{"text": "違う、そこです。", "label": "TP"}]
+
+        monkeypatch.setattr(results_board, "load_capture_eval_set", _load)
+
+        result = results_board._build_capture_recall()
+
+        assert result["measured"] is True
+
+    def test_all_candidates_broken_reports_integrity_failure(self, monkeypatch, tmp_path):
+        """全候補が壊れているときは「なし」でなく不一致として申告する。"""
+        import rl_common
+
+        stale = tmp_path / "checkout" / results_board._CAPTURE_EVAL_FILENAME
+        stale.parent.mkdir(parents=True)
+        stale.touch()
+        shared = tmp_path / "data" / "bench" / results_board._CAPTURE_EVAL_FILENAME
+        shared.parent.mkdir(parents=True)
+        shared.touch()
+        monkeypatch.setattr(results_board, "_CAPTURE_EVAL_PATH", stale)
+        monkeypatch.setattr(rl_common, "DATA_DIR", tmp_path / "data")
+
+        def _load(_path):
+            raise results_board.CaptureEvalIntegrityError("broken")
+
+        monkeypatch.setattr(results_board, "load_capture_eval_set", _load)
+
+        assert results_board._build_capture_recall() == {
+            "measured": False,
+            "reason": "評価セット不一致",
+        }
 
     def test_capture_recall_unmeasured_when_absent_everywhere(self, monkeypatch, tmp_path):
         """どの候補にも実体が無ければ測定不能と申告する（黙って 0 件にしない）。"""
@@ -929,7 +984,11 @@ class TestRenderResultsBoard:
         assert result == {"measured": False, "reason": "評価セットなし"}
 
     def test_capture_eval_prefers_checkout_over_shared(self, monkeypatch, tmp_path):
-        """両方に実体があるときは checkout 同梱を先に読む（探索順を固定する）。"""
+        """両方に実体があるときは checkout 同梱を先に読む（探索順を固定する）。
+
+        production が実際に通る `_build_capture_recall` の loader 呼び出し順で固定する
+        （順序専用のアクセサを別に置くと、production の順序が変わっても緑のまま残る）。
+        """
         import rl_common
 
         bundled = tmp_path / "checkout" / results_board._CAPTURE_EVAL_FILENAME
@@ -940,8 +999,16 @@ class TestRenderResultsBoard:
         shared.touch()
         monkeypatch.setattr(results_board, "_CAPTURE_EVAL_PATH", bundled)
         monkeypatch.setattr(rl_common, "DATA_DIR", tmp_path / "data")
+        opened: list[Path] = []
 
-        assert results_board._resolve_capture_eval_path() == bundled
+        def _load(path):
+            opened.append(Path(path))
+            return [{"text": "違う、そこです。", "label": "TP"}]
+
+        monkeypatch.setattr(results_board, "load_capture_eval_set", _load)
+
+        assert results_board._build_capture_recall()["measured"] is True
+        assert opened == [bundled]
 
     @pytest.mark.parametrize(
         ("content", "reason"),

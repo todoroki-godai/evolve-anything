@@ -64,20 +64,10 @@ def _capture_eval_candidates() -> List[Path]:
     ]
 
 
-def _resolve_capture_eval_path() -> Optional[Path]:
-    """最初に実在した評価セットのパスを返す。どこにも無ければ None。"""
-    for candidate in _capture_eval_candidates():
-        if candidate.exists():
-            return candidate
-    return None
-
-
-def _build_capture_recall() -> Dict[str, Any]:
-    eval_path = _resolve_capture_eval_path()
-    if eval_path is None:
-        return {"measured": False, "reason": "評価セットなし"}
+def _capture_recall_from(path: Path) -> Dict[str, Any]:
+    """1つの候補パスから捕捉率を算出する。使えなければ measured=False を返す。"""
     try:
-        rows = load_capture_eval_set(eval_path)
+        rows = load_capture_eval_set(path)
         result = evaluate_capture_recall(
             rows,
             lambda text: correction_detection._detect_correction(text, false_positive_hashes=()),
@@ -98,6 +88,26 @@ def _build_capture_recall() -> Dict[str, Any]:
         "pattern_version": correction_detection.CORRECTION_PATTERN_VERSION,
         **result,
     }
+
+
+def _build_capture_recall() -> Dict[str, Any]:
+    """実在する候補を順に試し、最初に測れたものを返す。
+
+    **「最初に実在した候補」で打ち切らない**（#602 レビュー巡1 [Must]）。評価セットは
+    git 管理外なので、checkout 側に更新前の古い実体や誤配置が残る状態は通常運用で
+    到達しうる。1件目で確定すると、共有 DATA_DIR に正しい実体があっても壊れた側に
+    shadow されて測定不能になる。
+    """
+    present = [c for c in _capture_eval_candidates() if c.exists()]
+    if not present:
+        return {"measured": False, "reason": "評価セットなし"}
+    failure: Dict[str, Any] = {"measured": False, "reason": "評価セットなし"}
+    for path in present:
+        outcome = _capture_recall_from(path)
+        if outcome["measured"]:
+            return outcome
+        failure = outcome
+    return failure
 
 # ADR-054 §7.2.1 柱3(a): correction_rate.build_correction_rate_summary が返す schema と
 # 同型のフォールバック（read 失敗時に render 側を壊さないための安全な既定値）。

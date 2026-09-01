@@ -164,8 +164,8 @@ def pillar_scopes(slug: str) -> Dict[str, Dict[str, Any]]:
             "kind": "local_untracked_eval_set",
             "label": (
                 "ローカル評価セット（git 管理外・マシン依存。checkout 同梱または "
-                "共有 DATA_DIR の bench/ にあれば測れる。実体を持たないマシン・"
-                "fresh clone では測定不能）"
+                "共有 DATA_DIR の bench/ に実体があれば測れる。実体を持たない"
+                "マシンでは測定不能）"
             ),
         },
         "accepted_improvements": dict(project),
