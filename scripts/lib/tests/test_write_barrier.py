@@ -27,7 +27,7 @@ if str(_lib_dir) not in sys.path:
 import rl_common  # noqa: E402
 import shrink_freeze  # noqa: E402
 import store_registry  # noqa: E402
-from rl_common import store_write, store_write_raw  # noqa: E402
+from rl_common import guard_problem, store_write, store_write_raw  # noqa: E402
 from rl_common.store_write import StoreWriteError  # noqa: E402
 
 
@@ -459,3 +459,9 @@ def StoreDeclaration_json_kind() -> "store_registry.StoreDeclaration":
         retention="permanent",
         classification="derived_cache",
     )
+# --- guard_problem: correction 専用保存境界向け公開 API -----------------------
+
+
+def test_guard_problem_is_public_single_source():
+    assert guard_problem("corrections.jsonl") is None
+    assert "未登録ストア" in guard_problem("definitely-unknown.jsonl")
