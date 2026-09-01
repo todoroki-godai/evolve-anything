@@ -103,3 +103,18 @@ def test_w4_partial_failure_preserves_queue(tmp_path, monkeypatch):
     assert result["failed_index"] == 1
     assert result["unprocessed"] == 1
     assert queue.read_text(encoding="utf-8") == original
+
+
+def test_w1_to_w4_do_not_call_generic_store_writers_directly():
+    """correction 保存入口を専用境界1本へ固定する構造検査。"""
+    paths = [
+        ROOT / "hooks" / "correction_detect.py",
+        ROOT / "scripts" / "lib" / "correction_semantic" / "promote.py",
+        ROOT / "scripts" / "backfill_preceding_tool_calls.py",
+        ROOT / "scripts" / "migrate_reflect_queue.py",
+    ]
+    for path in paths:
+        source = path.read_text(encoding="utf-8")
+        assert "store_write(" not in source, path
+        assert "store_write_raw(" not in source, path
+        assert "append_correction_record(" in source, path

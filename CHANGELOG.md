@@ -20,6 +20,14 @@
   評価セットがない環境では数字を推測せず「未測定」と明示する。
 
 ### Fixed
+- **fix(corrections): correction レコードへ位置非依存の不変 ID を発行（#593）** — W1〜W4
+  （hook / semantic promote / preceding-tool-call backfill / learnings queue migration）の全 writer を
+  `append_correction_record` 1本へ統一し、32文字小文字hexの `correction_id` を構築時に付与する。
+  保存境界は公開 `guard_problem()`、共有 validator、排他ロック内の重複判定、unlock 前 flush を
+  無条件に通し、`fcntl` 非対応環境は拒否する。既存データ向けにバックアップ必須・回避フラグなしの
+  dry-run既定 migration（`tempfile` + identity/hash再照合 + `os.replace`）と、複合 source ID から
+  不変 ID を返す read-only resolver を追加。identity再照合後から置換前の競合は検出できないため、
+  writer停止契約と残存窓を runbook に明記した。更新経路・`reflect_status`・柱2表示は変更しない。
 - **fix(weak_signals): 読取失敗を正常な空在庫と区別（#539）** — canonical/legacy source ごとの
   `readable` / `error` / `malformed_lines` を同一 read snapshot に保持し、dedup・queue 集計・
   人間向け表示・JSON 出力へ伝播する。全 source が健全な場合だけ measured とし、読取不能や
