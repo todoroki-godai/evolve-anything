@@ -942,6 +942,7 @@ class TestApplyCLI:
     def test_apply_dry_run_writes_nothing(self, tmp_path, capsys):
         """--dry-run では一切書かない（既存 dry-run ゲート貫通規約）。"""
         corr = _make_correction(reflect_status="promoted", session_id="sess1", timestamp="2026-08-17T00:00:00Z")
+        corr.pop("message")
         filepath = _write_corrections(tmp_path, [corr])
         before_bytes = filepath.read_bytes()
         target = tmp_path / "rule.md"
@@ -982,7 +983,7 @@ class TestApplyCLI:
             "sess1", "2026-08-17T00:00:00Z"
         )
 
-        append = mock.Mock()
+        append = mock.Mock(return_value=mock.Mock(status="appended"))
         update = mock.Mock()
         monkeypatch.setattr(reflect, "append_unique_record", append)
         monkeypatch.setattr(reflect, "update_reflect_status", update)
@@ -1008,6 +1009,50 @@ class TestApplyCLI:
         append.assert_not_called()
         update.assert_not_called()
         assert filepath.read_bytes() == before_bytes
+
+    def test_apply_hashes_selected_correction_before_any_write(
+        self, tmp_path, capsys, monkeypatch
+    ):
+        """別レコードの本文で対象correctionのhash欠落を補ってはならない。"""
+        first = _make_correction(
+            message="別の correction 本文",
+            reflect_status="promoted",
+            session_id="sess1",
+            timestamp="2026-08-16T00:00:00Z",
+        )
+        target_corr = _make_correction(
+            reflect_status="promoted",
+            session_id="sess2",
+            timestamp="2026-08-17T00:00:00Z",
+        )
+        target_corr.pop("message")
+        filepath = _write_corrections(tmp_path, [first, target_corr])
+        target = tmp_path / "rule.md"
+        target.write_text("- 起草した行\n", encoding="utf-8")
+        draft_line_file = tmp_path / "draft.txt"
+        draft_line_file.write_text("起草した行", encoding="utf-8")
+        source_id = reflect.make_source_correction_id(
+            "sess2", "2026-08-17T00:00:00Z"
+        )
+
+        append = mock.Mock(return_value=mock.Mock(status="appended"))
+        update = mock.Mock()
+        monkeypatch.setattr(reflect, "append_unique_record", append)
+        monkeypatch.setattr(reflect, "update_reflect_status", update)
+
+        with mock.patch("sys.argv", [
+            "reflect.py", "--apply", source_id,
+            "--target-path", str(target),
+            "--draft-line-file", str(draft_line_file),
+            "--corrections-file", str(filepath),
+        ]):
+            with pytest.raises(SystemExit) as exc_info:
+                reflect.main()
+
+        assert exc_info.value.code == 1
+        assert json.loads(capsys.readouterr().out)["status"] == "pillar2_event_failed"
+        append.assert_not_called()
+        update.assert_not_called()
 
 
 # --- Test: --skip（#514 修正在庫の『もう出さない』） ---
