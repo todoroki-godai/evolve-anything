@@ -62,3 +62,16 @@ def test_resolver_reports_invalid_not_found_and_ambiguous():
     )
     assert result.status == "ambiguous"
     assert result.match_count == 2
+
+
+def test_validator_monkeypatch_changes_append_duplicate_and_resolver_together(monkeypatch, tmp_path):
+    """validator/duplicate predicate が保存とresolverへ実際に配線された単一ソース。"""
+    import rl_common.correction_id as module
+
+    monkeypatch.setattr(module, "validate_correction_id", lambda value: True)
+    path = tmp_path / "corrections.jsonl"
+    assert module.append_correction_record(path, {"correction_id": "x"}).status == "appended"
+    assert module.resolve_correction_id([{"correction_id": "x"}], "x").status == "found"
+
+    monkeypatch.setattr(module, "has_duplicate_id", lambda records, correction_id: True)
+    assert module.append_correction_record(path, {"correction_id": "y"}).status == "duplicate_id"

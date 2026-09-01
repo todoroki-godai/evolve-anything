@@ -188,6 +188,20 @@ def test_fcntl_unavailable_rejects_apply_and_dry_run(tmp_path, monkeypatch):
     assert module.migrate(path, dry_run=False).status == "retry_required"
 
 
+def test_migration_imports_shared_validator_and_duplicate_predicate(tmp_path, monkeypatch):
+    import rl_common.correction_id as shared
+
+    module = _load("migration_single_source")
+    assert module.validate_correction_id is shared.validate_correction_id
+    assert module.find_duplicate_ids is shared.find_duplicate_ids
+    path = tmp_path / "corrections.jsonl"
+    path.write_text('{"correction_id":"' + VALID + '"}\n', encoding="utf-8")
+    monkeypatch.setattr(module, "find_duplicate_ids", lambda records: {VALID: 2})
+    result = module.migrate(path)
+    assert result.status == "conflict"
+    assert result.duplicates == [VALID]
+
+
 @pytest.mark.parametrize(
     ("args", "expected"),
     [([], 0), (["--apply"], 0)],

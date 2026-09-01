@@ -125,3 +125,43 @@ def test_two_processes_cannot_append_the_same_id(tmp_path):
 
     assert sorted(queue.get(timeout=1) for _ in range(2)) == ["appended", "duplicate_id"]
     assert len(path.read_text(encoding="utf-8").splitlines()) == 1
+
+
+def test_complete_record_survives_queue_drain_prompt_path(tmp_path):
+    """保存済みrecord全体が enqueue→read→emit→prompt を欠落なく通る。"""
+    from auto_memory_broker import _build_prompt, emit_memory_requests, enqueue, read_queue
+
+    path = tmp_path / "corrections.jsonl"
+    record = {
+        "correction_id": VALID_ID,
+        "message": "message-value",
+        "session_id": "session-value",
+        "timestamp": "timestamp-value",
+        "reflect_status": "pending-value",
+        "correction_type": "type-value",
+    }
+    assert append_correction_record(path, record).status == "appended"
+    persisted = json.loads(path.read_text(encoding="utf-8"))
+    assert enqueue([persisted], "project", tmp_path)
+    queued = read_queue("project", tmp_path)
+    emitted = emit_memory_requests(queued)
+    prompt = emitted["requests"][0]["prompt"]
+    assert prompt == _build_prompt([record])
+    for value in record.values():
+        assert value in prompt
+
+
+@pytest.mark.parametrize("field", ["message", "reflect_status", "correction_type"])
+def test_prompt_reflects_each_semantic_field_independently(field):
+    from auto_memory_broker import _build_prompt
+
+    base = {
+        "correction_id": VALID_ID,
+        "message": "message-a",
+        "reflect_status": "status-a",
+        "correction_type": "type-a",
+    }
+    changed = dict(base)
+    changed[field] += "-changed"
+    assert _build_prompt([changed]) != _build_prompt([base])
+    assert changed[field] in _build_prompt([changed])
