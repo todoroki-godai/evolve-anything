@@ -132,6 +132,7 @@ def handle_user_prompt_submit(event: dict) -> None:
     now = datetime.now(timezone.utc).isoformat()
     error_category = _classify_error_category(correction_type)
     record = {
+        "correction_id": common.new_correction_id(),
         "correction_type": correction_type,
         "matched_patterns": matched_patterns,
         "message": message.strip(),
@@ -158,10 +159,14 @@ def handle_user_prompt_submit(event: dict) -> None:
     }
     if error_category is not None:
         record["error_category"] = error_category
-    # ADR-049 / #55: 全ストア書込は store_write 単一ゲート経由。保存先（canonical
-    # DATA_DIR/corrections.jsonl）は store_write が内部解決し、registry guard で
-    # active 登録を照合する（warn-only フェーズ・挙動不変）。
-    common.store_write("corrections.jsonl", record)
+    corrections_path = Path(common.DATA_DIR) / "corrections.jsonl"
+    append_result = common.append_correction_record(corrections_path, record)
+    if append_result.status != "appended":
+        print(
+            f"[evolve-anything:correction] record not saved: {append_result.status}"
+            + (f" ({append_result.reason})" if append_result.reason else ""),
+            file=sys.stderr,
+        )
 
     # Corrections threshold trigger evaluation (plain-text output)
     trigger_fired = _check_corrections_trigger()
