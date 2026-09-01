@@ -125,7 +125,10 @@
 
 ### 2.2 ストア名・置き場所
 
-- **basename**: `reflect_apply_events.jsonl`
+- **basename**: `reflect_apply_events.jsonl`（**頭の裁定・2026-09-01**。他候補
+  `reflect_events.jsonl`（`--skip` の `correction_skipped` も含むため厳密には "apply" だけ
+  ではないが、主目的が柱2＝反映件数であることを名前に残す）／`pillar2_events.jsonl`
+  は PJ 内部の呼び名（柱2）であって外部から読める語彙でないため不採用、を検討した上で採用した）
 - **置き場所**: `rl_common.DATA_DIR / "reflect_apply_events.jsonl"`（`store_write` が解決する
   canonical DATA_DIR と同じ規約。既存ストアと同じ階層に並ぶ）
 - `reflect.py` 側の `CORRECTIONS_FILE`（`skills/reflect/scripts/reflect.py:50`）は
@@ -727,9 +730,24 @@ def count_applied_reflections(
   `bin/evolve-audit --growth` で柱2の表示が `not_measured` から実測値に切り替わることを
   確認する必要がある——ただし §0対象外により `results_board` 配線自体が別 issue なので、
   この確認は results_board 配線 issue の完了条件になる（本 issue の完了条件ではない）
-- **新ストアの無限増加**: `reflect_apply_events.jsonl` は retention="permanent" とした
-  （§4.1）。`--apply` を叩くたびに1行ずつ増える append-only ストアであり、`corrections.jsonl`
-  同様に将来的な compaction/decay の要否は未検討（本設計のスコープ外・§0③に準ずる暫定判断）
+- **新ストアの retention は `"permanent"`。TTL/compaction は実装1巡に含めない
+  （頭の裁定・2026-09-01・裁定2）**。根拠は規模の実測: `corrections.jsonl` は
+  **247行・約320KB**（再現コマンド `wc -l -c ~/.claude/evolve-anything/corrections.jsonl`・
+  取得時刻 2026-09-01T05:28:12Z）。新ストアのイベントは `corrections.jsonl` の**部分集合**
+  （反映されたものだけがイベントを持つ。§9・§12.1）であり、行数はこの247件を超えない。
+  この規模で TTL/compaction を設計するのは、現時点では無い問題への対処になる。
+  **再検討の引き金（観測可能な量で定義）**: `reflect_apply_events.jsonl` の行数が
+  `corrections.jsonl` の現在の retention 上限相当（`prune/corrections.py` の
+  `DEFAULT_DECAY_DAYS=90` 適用後の実効件数——本設計時点で未計測。実装1巡の完了条件に
+  `wc -l ~/.claude/evolve-anything/corrections.jsonl` の decay 後件数を実測することを含める）
+  の**10倍**（目安。`corrections.jsonl` 自身が既に90日 decay で定常件数に収束する設計になって
+  いるため、その10倍という桁は「想定より1桁多い」ことを検知する閾値として置く。根拠となる
+  実測値が無いため暫定値であることを明記する）を超えた時点、または
+  **`count_applied_reflections`（§10）の実行時間が実装1巡のベンチマーク値
+  （§14「§10の集計関数のパフォーマンスは未計測」参照）の10倍を超えた時点**、のいずれか
+  早い方。**現時点では実装しない**（本設計のスコープ外。将来 TTL が必要になった場合は、
+  `corrections.jsonl` と同じ decay 方式（§12.2）を踏襲するか、append-only の性質を活かした
+  別方式にするかを再設計時に判断する）
 - **本設計のレビュー巡数は新規系列の総上限2巡（設計1巡＋実装1巡）の設計側1巡を消費する**
 
 ## 15. 人間の判断が要る点
@@ -740,5 +758,5 @@ def count_applied_reflections(
 | 2 | 欠陥3（照合の紐付け強度）の残存リスクを許容するか | 前巡で承認済み・残存リスクとして許容。継承 |
 | 3 | 正当な再反映が1件に潰れる既知の限界を許容するか | 前巡で承認済み・許容。継承 |
 | 4 | CLI `correction_id`/ordinal 明示指定オプションを実装1巡に含めるか | 前巡で承認済み・含めない。継承 |
-| **5（新規）** | **新ストアの basename を `reflect_apply_events.jsonl` とする案でよいか**（他候補: `reflect_events.jsonl`・`pillar2_events.jsonl`。本設計は「reflect の apply/skip イベント」という内容を basename に反映した） | **要判断** |
-| **6（新規）** | **retention を `"permanent"` としたこと**（§14「新ストアの無限増加」）。`corrections.jsonl` 同様に無期限で増え続けることを許容するか、TTL/compaction を実装1巡の範囲に含めるか | **要判断**（含めない場合は現行案のまま次巡へ） |
+| 5 | 新ストアの basename を `reflect_apply_events.jsonl` とする案でよいか（他候補: `reflect_events.jsonl`・`pillar2_events.jsonl`） | **裁定済み（2026-09-01）**。`reflect_apply_events.jsonl` を採用。理由: 何のイベントかが名前から読める。`pillar2_` は PJ 内部の呼び名で外部から読めないため不採用（§2.2） |
+| 6 | retention を `"permanent"` としたこと。`corrections.jsonl` 同様に無期限で増え続けることを許容するか、TTL/compaction を実装1巡の範囲に含めるか | **裁定済み（2026-09-01）**。実装1巡に含めない。根拠は規模実測（`corrections.jsonl` 247行・約320KB・2026-09-01T05:28:12Z実測）——新ストアはその部分集合であり現時点では無い問題。再検討の引き金を§14に観測可能な量で明記（§14） |
