@@ -28,7 +28,7 @@ from optimize_history_store import load_effective_history, load_revert_events
 from correction_rate import build_correction_rate_summary, GATE_CONSECUTIVE_WEEKS
 from correction_semantic.prompt import CATEGORY_ENUM, CATEGORY_LABELS_JA
 from evolve_revert import REASON_LABELS, compute_revert_availability
-from pillar2_metrics import count_applied_reflections
+from pillar2_metrics import PILLAR2_NOT_MEASURED_TARGETS, count_applied_reflections
 from measurement_result import (
     collect_board_measurements,
     pillar_scopes,
@@ -307,8 +307,8 @@ def build_results_board(
         "measured": False,
         "health": {"degraded": True},
         "not_measured": {
-            "hook": {"reason": "no_store"},
-            "pitfall_memory": {"reason": "mtime_collision"},
+            target: {"reason": details["reason"]}
+            for target, details in PILLAR2_NOT_MEASURED_TARGETS.items()
         },
     }
     if project_root is None:

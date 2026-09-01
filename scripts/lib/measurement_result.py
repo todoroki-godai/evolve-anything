@@ -8,6 +8,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, Optional
 
+from pillar2_metrics import PILLAR2_NOT_MEASURED_TARGETS
+
 
 class MeasuredList(list):
     """A list-compatible reader result with explicit measurement metadata."""
@@ -245,12 +247,6 @@ def render_decisions_health(
     return lines
 
 
-_PILLAR2_NOT_MEASURED_LABELS = {
-    "no_store": "記録ストアなし",
-    "mtime_collision": "mtime 衝突",
-}
-
-
 def _pillar2_degraded_reason(pillar2: Dict[str, Any]) -> str:
     health = pillar2.get("health") or {}
     reasons: list[str] = []
@@ -283,6 +279,11 @@ def _pillar2_degraded_reason(pillar2: Dict[str, Any]) -> str:
     return "・".join(reasons) or "集計 health が degraded"
 
 
+def _pillar2_not_measured_label(target: str, details: Dict[str, Any]) -> str:
+    configured = PILLAR2_NOT_MEASURED_TARGETS.get(target, {})
+    return configured.get("label", details.get("reason") or "理由不明")
+
+
 def render_pillar2_health(
     pillar2: Dict[str, Any], measurements: Dict[str, Dict[str, Any]]
 ) -> list[str]:
@@ -303,7 +304,7 @@ def render_pillar2_health(
 
     not_measured = pillar2.get("not_measured") or {}
     targets = [
-        f"{target}（{_PILLAR2_NOT_MEASURED_LABELS.get(details.get('reason'), details.get('reason') or '理由不明')}）"
+        f"{target}（{_pillar2_not_measured_label(target, details)}）"
         for target, details in not_measured.items()
     ]
     lines = [main]
