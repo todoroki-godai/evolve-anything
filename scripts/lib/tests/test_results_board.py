@@ -487,6 +487,25 @@ class TestBuildResultsBoardCorrectionRate:
 
 
 class TestBuildResultsBoardPillar2:
+    def test_missing_project_root_renders_unmeasured_with_unsupported_targets(
+        self, stub_history, stub_correction_rate
+    ):
+        stub_history([])
+        stub_correction_rate(_closed_gate_summary())
+
+        board = results_board.build_results_board("evolve-anything", now=_NOW)
+        text = "\n".join(results_board.render_results_board(board))
+
+        assert (
+            "**実際に反映された改善（直近30日）: 測定不能"
+            "（project_root が指定されていません）**"
+        ) in text
+        assert board["pillar2"]["not_measured"] == {
+            "hook": {"reason": "no_store"},
+            "pitfall_memory": {"reason": "mtime_collision"},
+        }
+        assert "未測定の反映先: hook（記録ストアなし） / pitfall_memory（mtime 衝突）" in text
+
     def test_applied_reflections_are_wired_with_project_root_and_now(
         self, stub_history, stub_correction_rate, monkeypatch, tmp_path
     ):
