@@ -962,6 +962,53 @@ class TestApplyCLI:
         assert output["status"] == "dry_run"
         assert filepath.read_bytes() == before_bytes
 
+    def test_apply_rejects_missing_correction_message_before_any_write(
+        self, tmp_path, capsys, monkeypatch
+    ):
+        """本文hashを作れない correction はイベント追記・状態更新より前に拒否する。"""
+        corr = _make_correction(
+            reflect_status="promoted",
+            session_id="sess1",
+            timestamp="2026-08-17T00:00:00Z",
+        )
+        corr.pop("message")
+        filepath = _write_corrections(tmp_path, [corr])
+        before_bytes = filepath.read_bytes()
+        target = tmp_path / "rule.md"
+        target.write_text("- 起草した行\n", encoding="utf-8")
+        draft_line_file = tmp_path / "draft.txt"
+        draft_line_file.write_text("起草した行", encoding="utf-8")
+        source_id = reflect.make_source_correction_id(
+            "sess1", "2026-08-17T00:00:00Z"
+        )
+
+        append = mock.Mock()
+        update = mock.Mock()
+        monkeypatch.setattr(reflect, "append_unique_record", append)
+        monkeypatch.setattr(reflect, "update_reflect_status", update)
+
+        with mock.patch("sys.argv", [
+            "reflect.py", "--apply", source_id,
+            "--target-path", str(target),
+            "--draft-line-file", str(draft_line_file),
+            "--corrections-file", str(filepath),
+        ]):
+            with pytest.raises(SystemExit) as exc_info:
+                reflect.main()
+
+        assert exc_info.value.code == 1
+        output = json.loads(capsys.readouterr().out)
+        assert output == {
+            "status": "pillar2_event_failed",
+            "pillar2_event": {
+                "status": "invalid_correction_message",
+                "reason": "correction 本文が無いため反映イベントを記録できません",
+            },
+        }
+        append.assert_not_called()
+        update.assert_not_called()
+        assert filepath.read_bytes() == before_bytes
+
 
 # --- Test: --skip（#514 修正在庫の『もう出さない』） ---
 

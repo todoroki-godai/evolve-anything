@@ -1349,6 +1349,19 @@ def main():
             }, ensure_ascii=False, indent=2))
             return
 
+        correction_message_sha256 = _hash_correction_message(
+            all_records[target_index]
+        )
+        if correction_message_sha256 is None:
+            print(json.dumps({
+                "status": "pillar2_event_failed",
+                "pillar2_event": {
+                    "status": "invalid_correction_message",
+                    "reason": "correction 本文が無いため反映イベントを記録できません",
+                },
+            }, ensure_ascii=False, indent=2))
+            sys.exit(1)
+
         attempt_id = new_correction_id()
         attempt_event = {
             "correction_id": attempt_id,
@@ -1358,9 +1371,7 @@ def main():
             "reflect_target_kind": classify_reflect_target_kind(args.target_path),
             "reflect_target_path": normalize_reflect_target_path(args.target_path),
             "reflect_draft_line": draft_line,
-            "correction_message_sha256": _hash_correction_message(
-                all_records[target_index]
-            ),
+            "correction_message_sha256": correction_message_sha256,
             "attempted_at": datetime.now(timezone.utc).isoformat(),
         }
         phase1 = append_unique_record("reflect_apply_events.jsonl", attempt_event)
