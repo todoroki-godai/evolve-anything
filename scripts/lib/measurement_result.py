@@ -155,7 +155,7 @@ def validate_correction_gate(summary: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def pillar_scopes(slug: str) -> Dict[str, Dict[str, Any]]:
-    """The four board pillars' intentionally different measurement scopes."""
+    """The board measurements' intentionally different scopes."""
     project = {"kind": "project", "slug": slug, "label": f"当PJ: {slug}"}
     return {
         "capture_recall": {
@@ -166,6 +166,11 @@ def pillar_scopes(slug: str) -> Dict[str, Dict[str, Any]]:
             ),
         },
         "accepted_improvements": dict(project),
+        "pillar2": {
+            "kind": "project_and_global",
+            "slug": slug,
+            "label": f"当PJ: {slug} + グローバル反映",
+        },
         "correction_rate": {"kind": "all_projects", "label": "全PJ合算"},
         "withdrawal_candidates": dict(project),
     }
@@ -237,6 +242,73 @@ def render_decisions_health(
         lines = [f"採用した改善（直近30日）: 測定不能（{health.get('reason') or '理由不明'}）"]
     if health.get("dropped_lines"):
         lines.append(f"  {health.get('reason')}")
+    return lines
+
+
+_PILLAR2_NOT_MEASURED_LABELS = {
+    "no_store": "記録ストアなし",
+    "mtime_collision": "mtime 衝突",
+}
+
+
+def _pillar2_degraded_reason(pillar2: Dict[str, Any]) -> str:
+    health = pillar2.get("health") or {}
+    reasons: list[str] = []
+    if health.get("snapshot_stable") is False:
+        reasons.append("並行更新で snapshot が安定しません")
+    if health.get("base_readable") is False:
+        reasons.append("corrections 記録を読めません")
+    if health.get("events_readable") is False:
+        reasons.append("イベント記録を読めません")
+    malformed = int(health.get("base_malformed_lines") or 0) + int(
+        health.get("events_malformed_lines") or 0
+    )
+    if malformed:
+        reasons.append(f"壊れた記録 {malformed} 行")
+    for key, label in (
+        ("orphan_events_unexpected", "孤立イベント"),
+        ("unknown_schema_events", "未知 schema イベント"),
+        ("invalid_events", "不正イベント"),
+        ("duplicate_base_row_count", "重複 correction"),
+        ("orphan_confirmations", "孤立確認イベント"),
+        ("duplicate_confirmations", "重複確認イベント"),
+        ("hash_mismatch_count", "hash 不一致"),
+    ):
+        count = int(health.get(key) or 0)
+        if count:
+            reasons.append(f"{label} {count} 件")
+    legacy = int(pillar2.get("legacy_unverified_count") or 0)
+    if legacy:
+        reasons.append(f"未照合の旧記録 {legacy} 件")
+    return "・".join(reasons) or "集計 health が degraded"
+
+
+def render_pillar2_health(
+    pillar2: Dict[str, Any], measurements: Dict[str, Dict[str, Any]]
+) -> list[str]:
+    """柱2の件数・測定不能・未測定反映先を混同せず表示する。"""
+    reader_health = measurements.get("pillar2") or {"measured": True}
+    if not reader_health.get("measured"):
+        main = (
+            "**実際に反映された改善（直近30日）: 測定不能"
+            f"（{reader_health.get('reason') or '理由不明'}）**"
+        )
+    elif not pillar2.get("measured"):
+        main = (
+            "**実際に反映された改善（直近30日）: 測定不能"
+            f"（{_pillar2_degraded_reason(pillar2)}）**"
+        )
+    else:
+        main = f"実際に反映された改善（直近30日）: {pillar2.get('count', 0)} 件"
+
+    not_measured = pillar2.get("not_measured") or {}
+    targets = [
+        f"{target}（{_PILLAR2_NOT_MEASURED_LABELS.get(details.get('reason'), details.get('reason') or '理由不明')}）"
+        for target, details in not_measured.items()
+    ]
+    lines = [main]
+    if targets:
+        lines.append(f"未測定の反映先: {' / '.join(targets)}")
     return lines
 
 
