@@ -20,7 +20,12 @@ sys.path.insert(0, str(PLUGIN_ROOT / "scripts"))
 sys.path.insert(0, str(PLUGIN_ROOT / "scripts" / "lib"))
 
 from memory_temporal import make_source_correction_id
-from reflect_apply_match import check_line_applied
+from reflect_apply_match import (
+    check_line_applied,
+    classify_reflect_target_kind,
+    normalize_reflect_target_path,
+)
+from reflect_fold import _hash_correction_message
 from reflect_utils import (
     read_all_memory_entries,
     read_auto_memory,
@@ -32,7 +37,12 @@ from line_limit import check_line_limit, suggest_separation
 from semantic_detector import detect_contradictions, validate_corrections
 from similarity import jaccard_coefficient, tokenize
 
-from rl_common import cleanup_false_positives, resolve_correction_id
+from rl_common import (
+    append_unique_record,
+    cleanup_false_positives,
+    new_correction_id,
+    resolve_correction_id,
+)
 
 try:
     from episodic_retriever import find_episodic_duplicates, promote_to_episodic
@@ -1303,6 +1313,19 @@ def main():
         draft_line = draft_line_path.read_text(encoding="utf-8").rstrip("\n")
 
         all_records = load_corrections(corrections_file)
+        source_resolution = resolve_source_correction_id(all_records, args.apply)
+        if source_resolution.get("status") != "found":
+            status = source_resolution.get("status")
+            if status == "ambiguous":
+                status = "ambiguous_source"
+            elif status == "invalid_id":
+                status = "unmigrated_source"
+            print(json.dumps({
+                **source_resolution,
+                "status": status,
+            }, ensure_ascii=False))
+            sys.exit(1)
+        target_correction_id = source_resolution["correction_id"]
         target_index = None
         for i, r in enumerate(all_records):
             sid = r.get("session_id", "")
@@ -1326,10 +1349,49 @@ def main():
             }, ensure_ascii=False, indent=2))
             return
 
+        attempt_id = new_correction_id()
+        attempt_event = {
+            "correction_id": attempt_id,
+            "schema_version": 1,
+            "event_type": "correction_apply_attempted",
+            "target_correction_id": target_correction_id,
+            "reflect_target_kind": classify_reflect_target_kind(args.target_path),
+            "reflect_target_path": normalize_reflect_target_path(args.target_path),
+            "reflect_draft_line": draft_line,
+            "correction_message_sha256": _hash_correction_message(
+                all_records[target_index]
+            ),
+            "attempted_at": datetime.now(timezone.utc).isoformat(),
+        }
+        phase1 = append_unique_record("reflect_apply_events.jsonl", attempt_event)
+        if phase1.status != "appended":
+            print(json.dumps({
+                "status": "pillar2_event_failed",
+                "pillar2_event": {
+                    "status": phase1.status,
+                    "reason": phase1.reason,
+                },
+            }, ensure_ascii=False, indent=2))
+            sys.exit(1)
+
         result = update_reflect_status(
             corrections_file, [target_index], "applied",
             target_path=args.target_path, draft_line=draft_line,
         )
+        if result.get("status") == "applied":
+            confirmation = append_unique_record("reflect_apply_events.jsonl", {
+                "correction_id": new_correction_id(),
+                "schema_version": 1,
+                "event_type": "correction_applied",
+                "target_correction_id": target_correction_id,
+                "confirms_attempt_id": attempt_id,
+                "reflect_applied_at": datetime.now(timezone.utc).isoformat(),
+            })
+            if confirmation.status != "appended":
+                result["pillar2_event"] = {
+                    "status": confirmation.status,
+                    "reason": confirmation.reason,
+                }
         # #475 §8.2/rev2: 反映先が rules 配下（= rule_identity is not None）で applied に
         # なったときは、必ず revert 記録を試みる（--before-content-file は上で必須化済み）。
         # 新規ファイル作成（before が空）は §8.2「やらないこと」どおり revert 未対応を
@@ -1369,6 +1431,19 @@ def main():
     # skipped に巻き戻さない安全弁）。
     if args.skip:
         all_records = load_corrections(corrections_file)
+        source_resolution = resolve_source_correction_id(all_records, args.skip)
+        if source_resolution.get("status") != "found":
+            status = source_resolution.get("status")
+            if status == "ambiguous":
+                status = "ambiguous_source"
+            elif status == "invalid_id":
+                status = "unmigrated_source"
+            print(json.dumps({
+                **source_resolution,
+                "status": status,
+            }, ensure_ascii=False))
+            sys.exit(1)
+        target_correction_id = source_resolution["correction_id"]
         target_index = None
         for i, r in enumerate(all_records):
             sid = r.get("session_id", "")
@@ -1400,6 +1475,18 @@ def main():
             return
 
         result = update_reflect_status(corrections_file, [target_index], "skipped")
+        if result.get("status") == "skipped":
+            skipped_event = append_unique_record("reflect_apply_events.jsonl", {
+                "correction_id": new_correction_id(),
+                "schema_version": 1,
+                "event_type": "correction_skipped",
+                "target_correction_id": target_correction_id,
+            })
+            if skipped_event.status != "appended":
+                result["pillar2_event"] = {
+                    "status": skipped_event.status,
+                    "reason": skipped_event.reason,
+                }
         print(json.dumps({
             "source_correction_id": args.skip,
             **result,

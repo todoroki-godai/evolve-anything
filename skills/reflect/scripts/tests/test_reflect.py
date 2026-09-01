@@ -3,6 +3,7 @@
 import json
 import os
 import sys
+import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
@@ -28,6 +29,7 @@ def _make_correction(
     timestamp=None,
     extracted_learning=None,
     session_id=None,
+    correction_id=None,
 ):
     """テスト用 correction レコードを生成する。"""
     record = {
@@ -37,6 +39,7 @@ def _make_correction(
         "reflect_status": reflect_status,
         "project_path": project_path,
         "timestamp": timestamp or datetime.now(timezone.utc).isoformat(),
+        "correction_id": correction_id or uuid.uuid4().hex,
     }
     if extracted_learning:
         record["extracted_learning"] = extracted_learning
@@ -87,6 +90,11 @@ class TestExtractPending:
     def test_empty_records(self):
         """空リストには空リストを返す。"""
         assert reflect.extract_pending([]) == []
+
+    def test_extract_pending_treats_event_shaped_row_as_pending(self):
+        """別ストア契約を破ると event 行が pending に混入することを実証する。"""
+        event = {"event_type": "correction_applied", "schema_version": 1}
+        assert reflect.extract_pending([event]) == [event]
 
 
 # --- Test: classify_project_scope ---
@@ -316,6 +324,32 @@ class TestSkipAllMode:
         reflect.update_reflect_status(filepath, [], "skipped")
         # エラーなく完了すること
         assert True
+
+    def test_skip_all_does_not_touch_event_store(self, tmp_path):
+        """--skip-all は柱2イベントストアを一切読み書きしない。"""
+        import rl_common
+
+        corrections = _write_corrections(
+            tmp_path, [_make_correction(reflect_status="pending")]
+        )
+        event_path = rl_common.DATA_DIR / "reflect_apply_events.jsonl"
+        event_path.parent.mkdir(parents=True, exist_ok=True)
+        content = "".join(
+            json.dumps({"event_type": "probe", "ordinal": index}) + "\n"
+            for index in range(1000)
+        )
+        event_path.write_text(content, encoding="utf-8")
+        before_stat = event_path.stat()
+
+        with mock.patch("sys.argv", [
+            "reflect.py", "--skip-all", "--corrections-file", str(corrections)
+        ]):
+            reflect.main()
+
+        after_stat = event_path.stat()
+        assert event_path.read_text(encoding="utf-8") == content
+        assert after_stat.st_mtime_ns == before_stat.st_mtime_ns
+        assert after_stat.st_size == before_stat.st_size
 
 
 # --- Test: --apply-all mode ---
