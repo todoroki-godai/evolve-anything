@@ -101,6 +101,18 @@ def test_sibling_worktree_authoritative_slug_is_same_project(monkeypatch, tmp_pa
     assert metrics._pillar2_project_scope(correction, tmp_path / "ea-587") == "same-project"
 
 
+def test_sibling_worktree_writer_slug_is_same_project(monkeypatch, tmp_path):
+    """authoritative slug と異なる writer slug は第二分岐で同一PJに畳む。"""
+    monkeypatch.setattr("pj_slug.resolve_pj_slug", lambda root: "ea-597")
+    monkeypatch.setattr(
+        "rl_common.persistence.project_name_from_dir",
+        lambda root: "evolve-anything",
+    )
+    correction = {"project_path": "evolve-anything", "message": "project detail"}
+    assert correction["project_path"] != "ea-597"
+    assert metrics._pillar2_project_scope(correction, tmp_path / "ea-597") == "same-project"
+
+
 def test_same_reflection_is_deduplicated_by_normalized_key(tmp_path):
     second_base = _base(correction_id="d" * 32)
     second_events = [
