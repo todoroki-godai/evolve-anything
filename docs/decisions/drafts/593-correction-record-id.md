@@ -1,17 +1,24 @@
-# #593: correction レコードに位置非依存の不変識別子を与える設計
+# #593: correction レコードに位置非依存の不変識別子を与える設計（第2版）
+
+> **旧版（巡1）は不採用**。外部レビューで `設計修正要`（[Must] 20 / [Should] 6）。
+> 中心的な欠陥: 「ID を発行するだけ」では blocking (b) を塞げない — `resolve_by_id` で
+> UUID を解決した**あと**、更新は依然として解決時点の配列 index を
+> `update_reflect_status` に渡していたため、解決と書込みの間に `prune` が1件消せば
+> 別レコードを更新する。旧版はこの窓を「#587 の担当」として対象外に送ったが、それが
+> 誤りだった（ユーザー裁定でスコープを引き直し）。旧版本文は
+> `git show 8d2e0b44:docs/decisions/drafts/593-correction-record-id.md` で参照できる。
 
 対象: `#593`。本文書は**設計のみ**。コードは1行も変更しない。
 
 **関係する issue**: `#587`（柱2の照合済み反映を測れるようにする設計）は codex 設計レビュー
 2巡で `設計修正要` が続き、`review-round-cap.md` の族2巡打ち切りによりユーザー裁定で
-本 issue へ切り出された（切り出し元: `docs/decisions/drafts/587-pillar2-applied-measurement.md`
-§2.3、branch `design/587-pillar2-append-events` commit `c84637b4`）。**その設計が採用していた
-`(source_correction_id, ordinal)` 複合キーは、`ordinal` が「ファイル出現順の相対位置」から
-導出される値であるため、削除・並べ替え・重複除去に耐えない**という指摘が出発点。
-本設計はこの弱点を直すことに範囲を絞り、#587 本体（反映イベントの追記・read 時 fold・
-柱2集計）には触れない。
+本 issue へ切り出された（切り出し元:
+`docs/decisions/drafts/587-pillar2-applied-measurement.md` §2.3、
+branch `design/587-pillar2-append-events` commit `c84637b4`）。その設計の
+`(source_correction_id, ordinal)` 複合キーは、`ordinal` が「ファイル出現順の相対位置」
+から導出される値であるため削除・並べ替え・重複除去に耐えない、というのが出発点。
 
-## 0. Round 0 完成条件（verbatim）
+## 0. Round 0 完成条件（verbatim・第2版で更新）
 
 ### ① 守る対象
 
@@ -23,28 +30,46 @@ correction レコードの個体を、ファイル内の位置に依存せず一
 移行スクリプトの未実行 / 再 ingest による重複）。悪意ある偽装・第三者の改竄は脅威に
 数えない。
 
-### ③ 対象外
+### ③ 対象外（変更なし）
 
 - 柱2の集計・表示（`results_board`）の変更。数え方には一切触れない
 - 反映イベントの追記と read 時 fold（#587 の本体）
 - `reflect_status` の意味論変更
 - `#379` 新設凍結の解除。新しい保存先を作らない
 
-### ④ blocking（設計はこの5つを塞がねばならない）
+### ④ スコープ（第2版で追加・1つの変更単位として設計する3点）
 
-- (a) 同一 ID を持つレコードが2件以上存在しうる
+1. 不変 ID の発行（新規 writer・既存レコードの移行）
+2. 書込み入口の一本化 — `corrections.jsonl` を書き換える全経路を、**置換
+   （`os.replace`）を跨げる固定 sidecar lock** の同一 lock domain へ入れる
+3. 更新前の identity 再確認 — ロック取得後に読み直し、対象 ID がちょうど1件で
+   あることを確認してから書く。古いスナップショット由来の index を更新 API へ渡さない
+
+### ⑤ blocking（(a)〜(e) 据え置き、(f)〜(h) 追加）
+
+- (a) 同一 ID を持つレコードが2件以上存在しうる。**`ambiguous` にして操作不能にする
+  だけでは塞いだことにならない**。一意性を回復する方針まで書く
 - (b) レコードの削除・並べ替え・重複除去で ID が変わる、または別レコードを指す
-- (c) ID を持たない既存レコードが、持つものと**黙って**同じに扱われる（fail-closed でない）
+- (c) ID を持たない既存レコードが持つものと**黙って**同じに扱われる（fail-closed
+  でない）。`{"correction_id": ""}` や `null`・非文字列も「キーあり」で通してはならない
 - (d) ID の発行が既存の reader を壊す
 - (e) 中断で ID だけ書かれた／本体だけ書かれた状態が生じ、成功として扱われる
+- (f) 「未移行」と「移行後に ID が消えた破損」が区別できず、再移行が同じレコードに
+  別 ID を発行する
+- (g) 移行の終了結果が `completed`/`incomplete`/`conflict`/`retry_required` を区別せず、
+  未完了を成功として返す
+- (h) ID の妥当性・一意性を判定する契約が単一ソースになっておらず、writer・移行・
+  resolver・更新前再確認で食い違う
 
-### ⑤ 検証方法
+### ⑥ 検証方法
 
-(a)〜(e) 各1件以上の陰性試験＋**陽性対照**を対で置く。(b)(e) は読取と書込の間に
-実際に別の書込・削除を差し込んで決定論的に再現する（N プロセス同時実行は競合窓が
-µs で再現せず偽の安全網になる）。
+(a)〜(h) 各1件以上の陰性試験＋**陽性対照**を対で置く。検証単位は resolver 単体でなく
+「writer→保存→reader→解決→競合差込み→更新／拒否」の実経路に置く。lock は mock でなく
+実 `fcntl.flock` と複数プロセスで、writer がロック待ちに入ったことを確認してから
+置換を進める決定論的試験にする。移行の中断は書込み開始後・置換前に failpoint を
+注入して再現する。
 
-## 1. 現状（実測・file:line つき）
+## 1. 現状（自分で数え直した file:line つき）
 
 ### 1.1 実データ
 
@@ -52,103 +77,243 @@ correction レコードの個体を、ファイル内の位置に依存せず一
 $ wc -l ~/.claude/evolve-anything/corrections.jsonl
      241 /Users/matsukaze-takashi/.claude/evolve-anything/corrections.jsonl
 ```
-取得時刻: 2026-08-31T23:32:12Z（`date -u +"%Y-%m-%dT%H:%M:%SZ"`）。
+取得時刻: 2026-08-31T23:32:12Z。既存241件に `correction_id` 相当のフィールドは無い
+（`(session_id, timestamp)` 重複0件、実測コマンドは巡1と同一・再現可能。取得時刻
+2026-08-31T23:32:19Z）。**巡1からの追加実測は行っていない**（データは不変のため）。
+
+### 1.2 書込み側 — 6経路を実物で数え直した結果
+
+**巡1の§1.3「新規追記はすべて `append_jsonl` 経由」は誤り**。直接 `open(..., "a")` する
+2経路を見落としていた。以下が実物で確認した全6経路:
+
+| # | file:line | 書込み方式 | ロック | atomic か |
+|---|---|---|---|---|
+| 1 | `hooks/correction_detect.py:164`（`common.store_write("corrections.jsonl", record)`）→ `scripts/lib/rl_common/store_write.py:77-92`（`store_write`）→ `append_jsonl` | 追記 | **あり**（`persistence.py:159-160` `fcntl.flock(f, LOCK_EX)`、`_HAVE_FCNTL` は `persistence.py:11-15` で判定） | 追記は本質的に atomic（1行 write のみ） |
+| 2 | `scripts/lib/correction_semantic/promote.py:565-568`（`store_write`/`store_write_raw`） | 追記 | 経路1と同じ `append_jsonl` 経由（`store_write_raw` も内部で `append_jsonl` を呼ぶ） | 同上 |
+| 3 | `scripts/backfill_preceding_tool_calls.py:229-254`（`persist_to_corrections`） | 一括追記（`with open(corrections_file, "a", ...) as f: ... f.write(...)`、line 250） | **なし**。`fcntl` を一切呼ばない | 各 `write` 呼び出しは行単位で atomic ではあるが、ロックが無いため経路1/2との排他は保証されない |
+| 4 | `scripts/migrate_reflect_queue.py:118-121`（`migrate` 内、`with open(CORRECTIONS_FILE, "a", ...) as f: for rec in converted: f.write(...)`） | 一括追記 | **なし** | 同上 |
+| 5 | `skills/reflect/scripts/reflect.py:602-706`（`update_reflect_status`）。書込みは line 706 `filepath.write_text("\n".join(updated_lines) + "\n", encoding="utf-8")` | **全文読込→全文書き戻し（in-place）** | **なし** | **atomic でない**。`write_text` は既存ファイルを truncate してから書くため、途中で kill されると壊れたファイル（旧内容と新内容が混在、または空）が残りうる |
+| 6a | `scripts/lib/prune/corrections.py:51-114`（`cleanup_corrections`）。書込みは line 112 `corrections_file.write_text(...)` | 全文読込→全文書き戻し（in-place、decay 超過行を除外） | **なし** | 同上（atomic でない） |
+| 6b | `scripts/lib/correction_semantic/promote.py:584-642`（`invalidate_idiom_corrections`）。書込みは line 634-642 `tempfile.mkstemp` → `os.fdopen` で書込み → `os.replace(tmp_path, corrections_path)` | 全文読込→全文書き戻し（**tempfile+`os.replace`**） | **なし** | atomic（inode 差し替え） |
+
+**確認コマンド**: `grep -n "corrections.jsonl\|CORRECTIONS_FILE\|corrections_path\|corrections_file" <各ファイル>` を該当6ファイルに対し個別実行し、`open(...)`/`write_text(...)`/`flock` の有無を目視確認した（実行時刻 2026-08-31 本文書作成セッション内）。**経路は6ではなく実質7**（6a と 6b は別関数・別書込み方式であるため区別する。指示の「6経路」は 5・6a・6b を1グループとして数えた場合と一致する）。
+
+### 1.3 なぜ「データファイル自身の `flock`」では足りないか（前巡の欠陥の構造）
+
+経路1・2 は `append_jsonl` の `flock` を取る。しかし経路6b（`invalidate_idiom_corrections`）
+は **`tempfile.mkstemp` + `os.replace`** で `corrections.jsonl` の inode を丸ごと差し替える。
+POSIX の `flock` はファイル**記述子**（正確には open file description）に対するロックであり、
+**パス名**に対するロックではない。ゆえに:
+
+- プロセス A が `open("corrections.jsonl", "a")` で fd を取得し `flock(LOCK_EX)` を待機中
+- プロセス B（`invalidate_idiom_corrections` 相当）が**別の** fd（`corrections_path` を
+  `open(..., "r")` で開いた読込み用 fd — これは `flock` を取っていない、なぜなら
+  経路6b は現状ロックを一切取らないため）で読み込み、`tempfile` に書いて
+  `os.replace` する。この `os.replace` は**新しい inode をパス名に結びつける**
+- プロセス A が経路5/6a のような**ロックなしの `write_text`** で書き込む場合、
+  さらに深刻: `flock` を誰も取っていないので、A・B・6a・6b がどんな順序で走っても
+  Last-Writer-Wins（後勝ちで先の変更が消える）が起こりうる
+
+**したがって「経路1・2 の `flock` を経路3〜6b にも広げる」だけでは不十分**——
+広げたとしても、広げた先の実装が `os.replace` で inode を差し替える限り、
+**同じパス名に対して新しく `open()` した fd は常に新しい inode を指す**ため、
+「rename 前に既にそのパスを `open()` していた別プロセスの fd」との排他は
+成立しない（旧 inode のロックを待っていたプロセスが、rename 後に lock を取得しても、
+書き込み先はもはやパスから参照されない孤立 inode になる）。**この問題を解く唯一の
+安全な方法は、ロック対象をデータファイル自身ではなく、rename されない固定パスの
+sidecar ロックファイルにすることである**（§2）。
+
+## 2. コア設計: sidecar lock による書込み入口の一本化
+
+### 2.1 sidecar lock ファイル
+
+新規パス `<DATA_DIR>/corrections.jsonl.lock`（**新しいストアではない** — §5で
+`#379` 抵触の有無を確認する）。中身は使わない（`flock` の対象として存在するだけ、
+`open(path, "a")` で作成・開くのみ）。このファイルは**一度作成されたら二度と
+rename/unlink されない**（`os.replace` の対象にしない）ことが安全性の前提。
+
+### 2.2 単一書込み関数（新規モジュール `scripts/lib/rl_common/corrections_writer.py`・設計のみ）
 
 ```python
-# 241 件を parse し、(session_id, timestamp) の重複と top-level キー集合を確認
-n records parsed: 241
-keys: ['confidence', 'correction_type', 'decay_days', 'error_category',
-       'extracted_learning', 'guardrail', 'invalidated', 'invalidated_at',
-       'invalidation_reason', 'last_skill', 'matched_patterns', 'message',
-       'pattern_version', 'preceding_tool_calls', 'project_path',
-       'reflect_status', 'routing_hint', 'sentiment', 'session_id', 'source',
-       'timestamp', 'turn_index', 'weak_signal_channel', 'weak_signal_key',
-       'weak_signal_provenance']
-duplicate (session_id,timestamp) pairs: 0
+import fcntl
+import os
+import tempfile
+from contextlib import contextmanager
+from pathlib import Path
+from typing import Callable
+
+LOCK_SUFFIX = ".lock"
+
+@contextmanager
+def _corrections_lock(corrections_path: Path):
+    lock_path = corrections_path.with_name(corrections_path.name + LOCK_SUFFIX)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(lock_path, "a") as lockf:
+        fcntl.flock(lockf, fcntl.LOCK_EX)  # ブロッキング取得（既存 append_jsonl と同じ意図）
+        try:
+            yield
+        finally:
+            fcntl.flock(lockf, fcntl.LOCK_UN)
+
+
+def append_correction(corrections_path: Path, record: dict) -> None:
+    """新規レコードを追記する（経路1〜4 の統一入口）。sidecar lock を取ってから
+    既存 append_jsonl 相当の1行追記を行う。"""
+    with _corrections_lock(corrections_path):
+        is_new = not corrections_path.exists() or corrections_path.stat().st_size == 0
+        with open(corrections_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        if is_new:
+            try:
+                corrections_path.chmod(0o600)
+            except OSError:
+                pass
+
+
+def rewrite_corrections(
+    corrections_path: Path,
+    transform: Callable[[list[dict]], list[dict]],
+) -> "RewriteResult":
+    """全文読込→transform→全文書き戻しを行う経路5・6a・6b の統一入口。
+
+    sidecar lock を取得した**後に**ファイルを読み込む（呼出元が lock 取得前に読んだ
+    スナップショットは一切信用しない — blocking (b) 対策の核心）。
+    transform は「生の行リスト（parse 成功 dict のみ）」を受け取り「書き戻す
+    dict リスト」を返す純関数。パース不能行・空行は transform に渡さず、
+    出力にそのまま温存する（既存 update_reflect_status の慣習を踏襲）。
+    書き戻しは必ず tempfile + os.replace（atomic）で行う（経路5・6a のような
+    直接 write_text は使わない — blocking (e) 対策）。
+    """
+    with _corrections_lock(corrections_path):
+        if not corrections_path.exists():
+            return RewriteResult(status="completed", records_written=0)
+        raw_lines = corrections_path.read_text(encoding="utf-8").splitlines()
+        parsed: list[dict] = []
+        passthrough: list[tuple[int, str]] = []  # 元の行位置を保持し、非dict行を温存する
+        for i, line in enumerate(raw_lines):
+            stripped = line.strip()
+            if not stripped:
+                passthrough.append((i, line))
+                continue
+            try:
+                rec = json.loads(stripped)
+            except json.JSONDecodeError:
+                passthrough.append((i, line))
+                continue
+            if not isinstance(rec, dict):
+                passthrough.append((i, line))  # blocking (c)/(d) 系: 非 dict は決して個体として扱わない
+                continue
+            parsed.append(rec)
+
+        try:
+            new_parsed = transform(parsed)
+        except Exception as e:
+            return RewriteResult(status="retry_required", error=str(e))
+
+        # 温存すべき非dict行の位置を保ちつつ、parsed→new_parsed の対応を保って再構成する。
+        # transform はレコードの「増減」を行わない契約とする（本設計が要求する transform は
+        # 既存レコードの field 更新のみ。新規追加・削除を伴う transform は本関数の対象外
+        # ＝経路5・6a はどちらも「既存レコードの1フィールド更新 or 除外」であり増減しない
+        # か「除外のみ」なので、この契約で表現できる）。
+        ...  # 実装詳細は次巡
+
+        new_content = _serialize(passthrough, new_parsed)
+        tmp_fd, tmp_path = tempfile.mkstemp(dir=str(corrections_path.parent), suffix=".tmp")
+        try:
+            with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+                f.write(new_content)
+            os.replace(tmp_path, corrections_path)
+        except OSError as e:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            return RewriteResult(status="retry_required", error=str(e))
+        return RewriteResult(status="completed", records_written=len(new_parsed))
 ```
-取得時刻: 2026-08-31T23:32:19Z。**既存241件に一意識別子に相当するフィールドは無い**
-（`id`/`uuid`/`correction_id` いずれも keys に含まれない）。現在の実データでは
-`(session_id, timestamp)` 重複は0件だが、これは実測結果であって保証ではない
-（§3 で `make_source_correction_id` が「実質一意」としか宣言していないことを確認する）。
 
-### 1.2 書込み側（新規レコードを作る4箇所）
+**6経路すべてがこの2関数のどちらかを通る**ように改修する（実装1巡のスコープ。
+本設計はこの契約を確定させるところまで）:
 
-| file:line | 何をするか |
+| 経路 | 改修後 |
 |---|---|
-| `hooks/correction_detect.py:132-165` | UserPromptSubmit hook。`record = {...}` を組み立て `common.store_write("corrections.jsonl", record)`（line 164）で追記。`reflect_status`/`session_id`/`timestamp` はここで初めて生成される |
-| `scripts/lib/correction_semantic/promote.py:346-393`（`_build_correction_record`）→ `:565-568` | weak signal の昇格。`store_write("corrections.jsonl", record)` または `store_write_raw(corrections_path, record)`（テスト/isolation 用パス指定時） |
-| `scripts/backfill_preceding_tool_calls.py:207-218` | 過去セッションからの一括バックフィル。`results.append({...})` で構築し、別関数 `persist_to_corrections`（219行目以降）が書込む |
-| `scripts/migrate_reflect_queue.py:38-56`（`convert_learning`） | `learnings-queue.json` からの1回限りマイグレーション。`_dedup_key`（line 18-21）で `(timestamp, SHA256(message[:100]))` の冪等キーを持つが、**このキーはファイルに保存されない**（read 時に既存行から再計算するだけ）ため識別子としては使えない |
+| 1 `correction_detect.py:164` | `store_write` の内部実装を `append_jsonl` から `append_correction`（sidecar lock 版）へ差し替え |
+| 2 `promote.py:565-568` | 同上（`store_write`/`store_write_raw` 経由なので経路1と同じ差し替えで両方直る） |
+| 3 `backfill_preceding_tool_calls.py:250` | `append_correction` を直接呼ぶよう書き換え |
+| 4 `migrate_reflect_queue.py:118-121` | 同上 |
+| 5 `reflect.py:602-706`（`update_reflect_status`） | `rewrite_corrections` を内部で呼ぶよう書き換え。**API 契約自体も変える**（§4） |
+| 6a `prune/corrections.py:51-114`（`cleanup_corrections`） | `rewrite_corrections` を呼ぶよう書き換え（transform は「decay 超過レコードを除外」） |
+| 6b `promote.py:584-642`（`invalidate_idiom_corrections`） | `rewrite_corrections` を呼ぶよう書き換え（transform は「該当レコードに `invalidated=True` を立てる」） |
 
-### 1.3 書込み経路の排他制御
+**この一本化により、経路6b の `os.replace` は sidecar lock 保持中にのみ発生する**。
+経路1〜4 の追記側も同じ sidecar lock を取るため、6b の rename と1〜4の追記は
+互いに排他される（§1.3 で述べた「rename を跨げないロック」問題は、
+**ロック対象をデータファイルから sidecar へ移す**ことで構造的に解消する——
+sidecar パスは6経路とも rename しないため、常に同一 inode に対する `flock` になる）。
 
-`scripts/lib/rl_common/persistence.py:154-172`（`append_jsonl`）は
-`fcntl.flock(f, LOCK_EX)`（line 160）を取ってから1行追記する。**新規レコードの追記は
-すべてこの関数を経由する**（`store_write` → `store_write_raw` → `append_jsonl` という
-呼び出し経路。`hooks/correction_detect.py:164` と `promote.py:566/568` はこの経路）。
-一方、`scripts/backfill_preceding_tool_calls.py` と `scripts/migrate_reflect_queue.py` は
-**一括書込み**（全件をまとめて `write_text`）であり、`append_jsonl` のロックを経由しない
-別経路。ただしこの2つは「1回限りの手動実行」が前提のスクリプトで、hook や CLI と
-同時に走る運用は想定されていない（コメント上の宣言のみで、コードによる強制はない）。
+## 3. `correction_id` の発行と resolve（一意性の「無害化」だけでなく「回復」まで書く）
 
-## 2. 採用する記録モデル: レコード内蔵の UUID を新設フィールドとして持つ
+### 3.1 スキーマ
 
-### 2.1 選ばなかった案とその理由
-
-| 案 | 却下理由 |
-|---|---|
-| `(source_correction_id, ordinal)` 複合キー（#587 v2 §2.3・不採用） | `ordinal` は「ファイル出現順の相対位置」から**毎回再計算**する値。同じ `source_correction_id` を持つレコードが増減すると、既存レコードの `ordinal` が変わりうる（削除された1件が0番だった場合、1番だったレコードが0番に繰り上がる）。§2.3 が想定した「基底レコードは追記のみで物理削除しない」という前提は、実際には `prune/corrections.py:105-115` が破っている（§4.2）ため、この案は blocking (b) を満たさない |
-| 生 JSON 行のテキストのハッシュ（内容ハッシュ）をキーにする | 同一内容のレコードが2件生成された場合（例: `correction_detect.py` が同一メッセージを2回検出）に区別できない。また `reflect_status` の更新（例: `pending`→`applied`）でハッシュが変わってしまうため、更新をまたいで同一レコードを指せない（`pitfall_content_identity_with_run_id.md`「冪等キーは対象でなく対象の状態で作ると壊れる」と同型の欠陥） |
-| **新規フィールド `correction_id`（UUID4）をレコード生成時に1回だけ発行し、レコードの JSON payload の一部として保存する（採用）** | 値がファイル内の位置からも内容からも独立している。レコードがどこに移動しても、内容がどう更新されても（`reflect_status` を書き換えても）不変。削除・並べ替えは**他の**レコードの `correction_id` に一切影響しない（ordinal のような再計算が発生しない） |
-
-### 2.2 スキーマ
-
-新規フィールド `correction_id: str`（`uuid.uuid4().hex` の32文字16進文字列）を
-基底レコードに追加する。生成は単一関数に集約する:
+新規フィールド `correction_id: str`（`uuid.uuid4().hex`、32文字16進）と、
+発行元を示す `correction_id_schema: int`（固定値 `1`）を**同じ書込みで同時に**追加する
+（§6 の (f) 対策で理由を述べる）。単一発行関数:
 
 ```python
-# scripts/lib/rl_common/correction_id.py（新規モジュール・新規 store ではない）
+# scripts/lib/rl_common/correction_id.py（新規モジュール・新規 store ではない・§7で根拠）
+import re
 import uuid
 
+_ID_PATTERN = re.compile(r"^[0-9a-f]{32}$")
+CURRENT_SCHEMA = 1
+
 def new_correction_id() -> str:
-    """新規 correction レコードに割り当てる、位置に依存しない一意識別子を生成する。"""
     return uuid.uuid4().hex
+
+def validate_correction_id(value) -> bool:
+    """correction_id として有効な形式か判定する単一ソース（blocking h）。
+    None・空文字列・非文字列・不正フォーマットはすべて False。"""
+    return isinstance(value, str) and bool(_ID_PATTERN.fullmatch(value))
+
+def validate_unique_ids(records: list[dict]) -> dict[str, int]:
+    """records 内の有効な correction_id ごとの出現回数を返す（重複検出の単一ソース・
+    blocking h）。validate_correction_id を通った値のみ数える。非 dict / 無効値は無視。"""
+    counts: dict[str, int] = {}
+    for r in records:
+        if not isinstance(r, dict):
+            continue
+        cid = r.get("correction_id")
+        if validate_correction_id(cid):
+            counts[cid] = counts.get(cid, 0) + 1
+    return counts
 ```
 
-§1.2 の4つの書込み箇所すべてで、レコード構築時（`store_write`/`persist_to_corrections`/
-`migrate` へ渡す**前**）に `record["correction_id"] = new_correction_id()` を追加する。
-既存フィールドの意味は一切変えない（round 0 対象外「`reflect_status` の意味論変更」を守る。
-`correction_id` は新設フィールドであり既存値の再定義ではない）。
+**writer 4経路（§1.2 の1〜4）は、レコード構築時に両フィールドを設定する**
+（`record["correction_id"] = new_correction_id(); record["correction_id_schema"] = CURRENT_SCHEMA`）。
+`promote.py:346-393`（`_build_correction_record`）のような構築関数の**内部**に置き、
+`store_write`/`store_write_raw` のどちらを呼ぶかの分岐（`promote.py:565-568`）より
+**前**に置く（テスト経路・production 経路の両方が取りこぼさないようにするため）。
 
-### 2.3 資格解決（resolve）の契約: 曖昧なら fail-closed で拒否する
+### 3.2 resolve: fail-closed（(a)(c) の防御）
 
 ```python
-# scripts/lib/rl_common/correction_id.py（続き・設計のみ）
 from dataclasses import dataclass
 from typing import Optional
 
 @dataclass
 class ResolveResult:
-    status: str            # "found" | "not_found" | "ambiguous" | "missing_id"
+    status: str  # "found" | "not_found" | "ambiguous" | "invalid_id"
     record: Optional[dict] = None
-    index: Optional[int] = None       # 呼出元がファイルへの書き戻しに使う物理配列位置
-                                       # （load 直後のスナップショット限りで有効。§2.4 参照）
+    index: Optional[int] = None
     match_count: int = 0
 
-def resolve_by_id(records: list[dict], correction_id: str) -> ResolveResult:
-    """records（load_corrections 相当の生配列）から correction_id 一致レコードを解決する。
-
-    - correction_id が空文字列/None なら missing_id を返す（blocking c の防御。
-      レコード側の欠落フィールドを空文字列として拾って偶然一致させない）。
-    - 一致が0件なら not_found。
-    - 一致が2件以上なら **ambiguous**（blocking a の防御。先頭を勝手に選ばない）。
-    - 一致が1件なら found。
-    """
-    if not correction_id:
-        return ResolveResult(status="missing_id")
+def resolve_by_id(records: list[dict], correction_id) -> ResolveResult:
+    if not validate_correction_id(correction_id):
+        return ResolveResult(status="invalid_id")  # (c): None/空文字列/非文字列/不正形式は即拒否
     matches = [
         (i, r) for i, r in enumerate(records)
-        if isinstance(r, dict) and r.get("correction_id") == correction_id
+        if isinstance(r, dict) and validate_correction_id(r.get("correction_id"))
+        and r["correction_id"] == correction_id
     ]
     if not matches:
         return ResolveResult(status="not_found")
@@ -158,353 +323,496 @@ def resolve_by_id(records: list[dict], correction_id: str) -> ResolveResult:
     return ResolveResult(status="found", record=r, index=i, match_count=1)
 ```
 
-**`ambiguous` の呼出側契約**: CLI（`reflect.py` の `--apply`/`--skip`）は `ambiguous` を
-`not_found` と同じく非0終了させ、どのレコードも更新しない。曖昧な状態を人間が手動で
-解消する（重複データの是正）まで、その `correction_id` に対する操作を一切許可しない。
-これは「同一 ID を持つレコードが2件以上存在すること自体を防止する」のではなく
-（信頼境界②の外側にある運用ミス — 再 ingest 等 — を完全には防げないため）、
-**存在してしまった重複を安全に無害化する**設計である（blocking (a) は「防止」でなく
-「発生しても実害が出ない」ことを要求している、と読む — ④の文言「同一 ID を持つ
-レコードが2件以上存在しうる」は起こりうる前提を認めた上での禁止対象を問うており、
-「存在しない」ことまでは要求していない。誤読の余地があるため§11で人間の確認を仰ぐ）。
+**`validate_correction_id` を writer・resolver 双方が使う**ことで、`r.get("correction_id", "") == correction_id`
+のような「欠落を空文字列として拾って偶然一致させる」実装ミスを構造的に防ぐ
+（`validate_correction_id("")` は `False` なので、そもそも比較対象に入らない）。
 
-### 2.4 CLI（`reflect.py`）側の変更点（設計のみ・実装は次巡）
+### 3.3 一意性の**回復**（新規スクリプト `scripts/repair_duplicate_correction_ids.py`・設計のみ）
 
-現行 `skills/reflect/scripts/reflect.py:1263-1269`（`--apply`）と `:1329-1335`（`--skip`）は
-`make_source_correction_id(sid, ts) == args.apply` の**先頭一致**（`break`、line 1269/1335）で
-`target_index` を決めている。これを次のように変える:
+**(a) は「ambiguous にして操作不能にする」だけでは塞いだことにならない**という
+指摘を受け、回復手順を設計する。
 
-1. `all_records = load_corrections(corrections_file)` は現行どおり
-2. `make_source_correction_id(sid, ts) == args.apply` に一致するレコード**群**を集める
-   （現行の `break` を外す）
-3. 1件だけなら、その1件の `correction_id` で `resolve_by_id` を呼び直し、
-   `index`（配列位置）を確定する（`correction_id` が無い旧レコードなら §4 の移行未実施
-   として `missing_id` 扱い — 後述）
-4. 2件以上なら、`source_correction_id` だけでは一意に定まらない（現在の実データでは
-   0件だが§1.1参照、将来的に起こりうる）ので `{"status": "ambiguous_source_id", ...}` を
-   返し非0終了する。**黙って先頭を選ばない**（現行の `break` はこの曖昧さを握り潰している）
+1. `rewrite_corrections`（§2.2）でロックを取り、`validate_unique_ids`（§3.1）で
+   `correction_id` ごとの出現回数を数える
+2. 出現回数が2以上のグループごとに、**ファイル出現順で最も早い1件を「primary」とし、
+   primary の `correction_id` は変更しない**。primary 以外の各レコードには
+   `new_correction_id()` を新たに発行し、`correction_id`/`correction_id_schema` を
+   上書きする
+3. **既定は `--dry-run`**（他の移行/修復スクリプトと同じ規約）。`--apply` 指定時のみ
+   書き戻す。実行結果には「どのレコードが再発行されたか」（旧 ID・新 ID・
+   `session_id`/`timestamp`・file 内での元位置）を全件出力する（人間が事後に
+   「この ID を指していた外部参照が無効になった」と気づけるようにするため）
 
-**`target_index` の役割の変化**: 従来は「読んだ配列の位置」をそのまま
-`update_reflect_status` に渡していた（読取後に配列が変わりうる問題は #587/#588 が担当）。
-本設計では `target_index` は「`correction_id` で再解決した結果の配列位置」になる。
-`update_reflect_status` 自体の identity-safe 化（読取直後の再確認・ロック協調）は
-#587 の blocking (f)(g) に属する話であり、**本 issue はそこへ手を入れない**
-（round 0 対象外「反映イベントの追記と read 時 fold」には含まれないが、
-「`update_reflect_status` の内部実装」自体も round 0 ①「レコードの個体を指せること」の
-射程外——指せるようになった後にどう安全に書き込むかは #587 の担務）。
+**誤複製へ新 ID を再発行してよい条件**: 本設計は**内容の同一性を条件にしない**
+（primary 以外は無条件で再発行する）。理由: 「内容が同じなら安全、違えば危険」という
+判定基準を導入すると、判定基準自体にバグが起きた場合に沈黙して間違った方を残す
+リスクを生む。一意性の回復という目的に対しては「どちらを残すか」より
+「両方とも一意な ID を持つ状態に戻すこと」が本質であり、primary/non-primary の
+選び方（ファイル出現順で先頭）は決定論的で監査可能である。**内容が異なる2つの
+論理的に別の correction が偶然同じ ID を持っていた場合**（信頼境界②の「手編集」
+シナリオ）も、この手順で一意性は回復するが、**参照元が既に存在する場合**（後述）は
+別途扱いが要る。
 
-## 3. `source_correction_id` との関係: 併存させる（置き換えない）
+**参照元が既に存在する場合**: 現状のコードベースには「`correction_id` を外部へ
+永続保存して後から参照する」経路がまだ無い（§7 の CLI オプションが実装されて
+初めて生まれる）。したがって本設計の時点では「参照元」は主に人間の記憶・手元の
+メモ・チャット履歴上のコピペである。これらは修復後に無効化される可能性がある
+（primary でない側を参照していた場合）ことを、修復スクリプトの出力とドキュメントで
+明示する以外に救済手段は無い（round 0 対象外——自動的な参照追跡・書き換えは
+「新しいストア」を要する可能性が高く、`#379` 凍結に抵触しうるため見送る）。
 
-**判断**: `correction_id`（新設・UUID・不変）を内部識別子として採用し、
-`source_correction_id`（`make_source_correction_id`、`scripts/lib/memory_temporal.py:339-345`、
-`f"{session_id}#{timestamp}"` 形式）は**廃止しない**。
+**バックアップ復元時の手順**: 過去のバックアップから `corrections.jsonl` を丸ごと
+復元すると、復元後のファイルと現在のファイルで同じレコード（同じ `correction_id`）が
+重複しうる。本設計はこのケースも「同一 ID の重複」として §3.3 の手順で扱う
+（復元 vs 通常運用の重複を区別しない — 区別する情報がそもそも無い）。**運用上の
+注意**として、バックアップ復元は「復元→即座に `repair_duplicate_correction_ids.py --dry-run`
+を実行して重複件数を確認する」を手順化することを§14で人間に提案する。
 
-**根拠（file:line）**:
+## 4. 更新前の identity 再確認（blocking b の直接対応）
 
-- `memory_temporal.py:343` のドキュメント文字列は「session_id と ms 精度の timestamp の
-  組み合わせで**実質一意**」と明記しており、一意性を保証していない
-- `source_correction_id` は本 issue のスコープ外の箇所で**表示・監査キー**として広く
-  使われている: `reflect.py:857-861`（memory 書き込み時の provenance）、
-  `reflect.py:975-980`（CLI `--apply`/`--skip` の引数として人間/上位ツールが入力する値）、
-  `scripts/lib/audit/memory.py:474-489`（`reflected_ids: set[str]` に `add` — この実装は
-  **重複が起きた場合に `set` へ吸収されて静かに1件へ縮む**、まさに blocking (a) の
-  「同一 ID が複数存在しても検出されない」実例。本設計はこの箇所を変更しないが
-  （round 0 対象外の柱2集計コード）、この実例が「実質一意」という前提の危うさを
-  裏付ける一次証拠として記録しておく）
-- `source_correction_id` を丸ごと `correction_id` に置き換えると、**人間が既に
-  `--apply <source_correction_id>` の形式で運用している**（`reflect.py:975-980` の
-  help 文字列、daily review の既存フロー）ため、CLI 入出力フォーマットの破壊的変更になり
-  round 0 対象外の「反映先の種別が残らない」等とは別の、非対象領域（CLI UX）への
-  波及を生む。**置き換えではなく、内部の一意性保証だけを `correction_id` に差し替える**
-  ほうが影響範囲が小さい
+### 4.1 `update_reflect_status` の API 契約変更
 
-**結論**: `source_correction_id` は「人間が入力する検索キー（実質一意・表示用）」として
-残し、`correction_id` は「システム内部で実際にレコードを同定する一意キー（保証された
-一意性ではないが、fail-closed な resolve で安全化された運用一意キー）」として新設する。
-2層構造にする。
+**現行**: `update_reflect_status(filepath, indices: list[int], status, ...)`
+（`reflect.py:602-608`）。`indices` は**呼出元が事前に読んだ配列のスナップショット
+位置**であり、ロック取得もしていない（§1.2 経路5）。
 
-## 4. 既存 reader の列挙（自分で数え直した結果）
+**新設計**: シグネチャを `update_reflect_status(filepath, correction_ids: list[str], status, ...)`
+に変える。内部実装:
+
+```python
+def update_reflect_status(filepath, correction_ids, status, *, target_path=None, draft_line=None):
+    if status == "applied":
+        # 既存の check_line_applied 検証はロック外で先に行ってよい
+        # （target_path の中身は corrections.jsonl と無関係なファイルであり、
+        #  identity 再確認の対象ではない）
+        ...
+
+    def _transform(records: list[dict]) -> list[dict]:
+        updated_ids: set[str] = set()
+        result = []
+        for r in records:
+            cid = r.get("correction_id")
+            if validate_correction_id(cid) and cid in correction_ids:
+                resolved = resolve_by_id(records, cid)  # ロック内で再解決
+                if resolved.status != "found":
+                    continue  # ambiguous/not_found はそのレコードを更新しない
+                r = dict(r)
+                r["reflect_status"] = status
+                updated_ids.add(cid)
+            result.append(r)
+        return result
+
+    outcome = rewrite_corrections(filepath, _transform)
+    # updated_ids と correction_ids の差分から not_found を判定して返す（詳細省略・次巡）
+    ...
+```
+
+**この設計で blocking (b) が解消される理由**: `rewrite_corrections`（§2.2）は
+**sidecar lock を取得した後にファイルを読み込む**。呼出元（CLI）が事前に持っている
+`correction_ids` の**値そのもの**（UUID 文字列）はレコードの中身であり位置ではないため、
+ロック取得後の読み込みでも意味が変わらない。ロック取得後に `prune` が同じ sidecar
+lock を取ろうとしても、`update_reflect_status` がロックを解放するまで待たされる
+（§2.1 の一本化）ため、「解決と書込みの間に prune が1件消す」という前巡の欠陥の
+発生源だった**競合窓自体が構造的に閉じる**（旧設計は index を渡す時点でロック外の
+スナップショットを信用していたが、新設計は correction_id という位置非依存の値だけを
+ロックを跨いで受け渡し、位置（index）はロック内で毎回作り直す）。
+
+### 4.2 CLI（`reflect.py`）側の変更点
+
+`reflect.py:1263-1269`（`--apply`）・`:1329-1335`（`--skip`）の
+`make_source_correction_id(sid, ts) == args.apply` による**先頭一致**（`break`）を、
+まず全一致を集める形に変える。1件なら、その1件の `correction_id` を取り出し
+（§3.1 の移行済みレコードであれば持っているはず。§8 の gate が「移行未完了時は
+このパス自体を無効化する」ため、ここに到達する時点で `correction_id` の存在は
+gate が保証する）、`update_reflect_status(filepath, [correction_id], status, ...)`
+（§4.1 の新シグネチャ）を呼ぶ。2件以上一致するなら `ambiguous_source_id` として
+非0終了する（先頭を黙って選ばない）。
+
+## 5. 移行の状態機械（blocking f・g の対応）
+
+### 5.1 「未移行」と「移行後に破損」を区別する判別子
+
+`correction_id_schema`（§3.1）を判別子として使う:
+
+| `correction_id` | `correction_id_schema` | 判定 |
+|---|---|---|
+| 無い | 無い | **未移行**（安全に ID を新規発行してよい） |
+| 無い | ある（`1`） | **破損**（過去に移行済みだったが `correction_id` だけ消えた——手編集・マージ事故等）。**新規 ID を無条件発行しない**。§5.4 の `--repair-corrupted` フローへ回す |
+| ある（形式妥当） | ある（`1`） | 移行済み・正常 |
+| ある（形式不正 or 非文字列） | 無関係 | `validate_correction_id` で `False` になるため、実質「無い」と同じ扱い（`(c)` の要求どおり形式チェックを通す） |
+
+**両フィールドを同一書込みで同時に設定する**（§3.1）ため、
+「`correction_id_schema` はあるのに `correction_id` は正常」かつ「書込み経路の
+バグでこの2フィールドが非同期に書かれた」という状態は、本設計の書込み関数
+（`append_correction`/`rewrite_corrections`）を正しく実装する限り発生しない
+（1回の JSON 行 write は atomic な単位）。**発生しうるのは人間の手編集のみ**
+（信頼境界②で想定済み）。
+
+### 5.2 移行スクリプト（新規 `scripts/migrate_correction_id_backfill.py`・設計のみ）
+
+`rewrite_corrections`（§2.2）を使う。transform 関数:
+
+```python
+def _migrate_transform(records: list[dict]) -> "MigrationTransformOutcome":
+    newly_migrated = 0
+    corrupted = 0
+    out = []
+    for r in records:
+        has_id = validate_correction_id(r.get("correction_id"))
+        has_schema = r.get("correction_id_schema") == CURRENT_SCHEMA
+        if has_id and has_schema:
+            out.append(r)  # 既に移行済み。冪等にスキップ
+        elif not has_id and not has_schema:
+            r = dict(r)
+            r["correction_id"] = new_correction_id()
+            r["correction_id_schema"] = CURRENT_SCHEMA
+            out.append(r)
+            newly_migrated += 1
+        else:
+            # has_schema かつ not has_id（またはその他の不整合な組合せ）→ 破損。
+            # ID を発行しない。レコードはそのまま温存し、件数だけ数える。
+            out.append(r)
+            corrupted += 1
+    return MigrationTransformOutcome(records=out, newly_migrated=newly_migrated, corrupted=corrupted)
+```
+
+### 5.3 4値の終了ステータス（blocking g）
+
+```python
+@dataclass
+class MigrationResult:
+    status: str  # "completed" | "incomplete" | "conflict" | "retry_required"
+    total_records: int
+    already_migrated: int
+    newly_migrated: int
+    corrupted_detected: int
+    malformed_lines: int
+    error: Optional[str] = None
+```
+
+判定規則（`read_corrections_records_with_health` の `readable`/`error`/`malformed_lines`
+という「成功/失敗の2値ではなく複数軸」という設計を踏襲）:
+
+- **`completed`**: `rewrite_corrections` が `status="completed"` を返し、かつ
+  `corrupted_detected == 0`
+- **`incomplete`**: 書き戻し自体は成功したが `corrupted_detected > 0`。
+  「ID 依存操作を全面的に使ってよい」とは言えない状態——§5.4 の repair フローが
+  必要であることを呼出元に伝える
+- **`conflict`**: `rewrite_corrections` 内部で（sidecar lock 契約に参加していない
+  未改修コードが仮に残っていた場合の防御として）書き戻し直前に再読込した内容の
+  ハッシュが、transform に渡した内容のハッシュと食い違った場合。**通常運用では
+  発生しない**（sidecar lock が全経路を排他するため）が、実装1巡で「契約に
+  参加し忘れた経路が残っていないか」を検出する最後の防衛線として組み込む
+- **`retry_required`**: `OSError`（ディスク容量・権限）等で書き戻しに失敗した場合。
+  再実行が安全（§5.5 の冪等性）なのでこの名前にする
+
+### 5.4 `--repair-corrupted` フロー
+
+破損（`correction_id_schema` はあるが `correction_id` が無い/不正）レコードは
+自動修復しない。人間が明示的に `--repair-corrupted` を指定したときのみ、
+そのレコードを「未移行」として扱い直し（`correction_id_schema` を含めて
+まっさらに再発行する）、修復内容（`session_id`/`timestamp`/新 ID）を全件出力する。
+**この操作は「そのレコードが過去に持っていた ID を永久に失う」ことを意味する**——
+移行済みだった証拠自体が消えているため、これは避けられない（round 0 対象外の
+「完全な自動復旧」は要求されていないと解釈する。§14で確認）。
+
+### 5.5 中断耐性（blocking e、§7.2 旧版から継続）
+
+- `rewrite_corrections` はロック内で「読込→transform（メモリ上のみ）→
+  tempfile 書込→`os.replace`」の順に実行する。プロセスが transform 完了前に
+  kill されれば、元ファイルはバイト単位で無傷（tempfile すら存在しない可能性がある）
+- `os.replace` 自体は OS レベルで atomic。前半（tempfile 書込）で kill されれば
+  元ファイルは無傷、後半（rename 自体）に「途中」という状態は存在しない
+- 冪等性（§5.2 の「既に移行済みならスキップ」）により、中断後の再実行は
+  「最初からやり直す」だけで安全（進捗マーカー方式は採用しない——241件という
+  規模で1回のロック区間内に完結できるため。数万件規模になった場合は§14で
+  再検討を提起する）
+
+## 6. 既存 reader の母集団を数え直す（`reflect_status` 読取6箇所 + 全レコード読取5経路）
+
+### 6.1 `reflect_status` を直接読む6箇所（巡1から変更なし・再確認済み）
+
+`scripts/lib/audit/memory.py:474-489` / `scripts/lib/correction_semantic/correction_backlog.py:106`
+（`fleet.queue_materials.read_corrections_records_with_health` 経由）/
+`scripts/lib/discover/suppression.py:198` / `scripts/lib/issues_summary.py:35-42` /
+`skills/genetic-prompt-optimizer/scripts/optimize_core.py:60-84` /
+`scripts/lib/prune/corrections.py:17-48`（read 側。write 側は §1.2 経路6a）。
+いずれも `dict.get(key)` 方式（未知キーを無視する）で読んでおり、新規フィールド
+追加は影響しない（巡1 §4 の結論を維持）。
+
+### 6.2 レコード全体を読む5経路（巡1で見落としていたもの・自分で grep して確認）
 
 ```
-$ grep -rn "reflect_status" /Users/matsukaze-takashi/wt/ea-593 --include="*.py" | grep -v "/tests/\|test_"
+$ grep -rln "corrections.jsonl\|CORRECTIONS_FILE" /Users/matsukaze-takashi/wt/ea-593 \
+    --include="*.py" | grep -v "/tests/\|test_"
 ```
-取得時刻: 2026-08-31T23:38 台（本文書作成セッション内で実行、上のコマンドで再現可能）。
-`reflect.py` 自身の定義・書込み箇所・docstring 内の言及を除き、**独立して `reflect_status`
-を直接読む箇所は次の6箇所**（issue 本文の「最低6箇所」と一致することを自分のコマンド
-実行で確認した）:
+実行時刻: 本文書作成セッション内。この結果から、`reflect_status` だけでなく
+**レコード全体（dict 全フィールド）を扱う**箇所を洗い出した:
 
-| # | file:line | 読み方 | `correction_id` 追加の影響 |
+| # | file:line | 何をするか | `correction_id` 追加の影響 |
 |---|---|---|---|
-| 1 | `scripts/lib/audit/memory.py:474-489` | 独自 `for line in ... json.loads` ループ | 影響なし。`.get("reflect_status")`/`.get("session_id")`/`.get("timestamp")` のみ参照、未知キーは無視される（Python dict の `.get` は該当なしを許容） |
-| 2 | `scripts/lib/correction_semantic/correction_backlog.py:106`（`_read_eligible_backlog_records`） | `fleet.queue_materials.read_corrections_records_with_health`（`scripts/lib/fleet/queue_materials.py:227-`）経由。単一ソース化済みの read health 付き reader | 影響なし。同上 |
-| 3 | `scripts/lib/discover/suppression.py:198`（`load_claude_reflect_data`） | `load_jsonl`（同ファイル line 22-31）で独自 parse。`isinstance(dict)` チェック無し | 影響なし |
-| 4 | `scripts/lib/issues_summary.py:35-42`（`_count_unprocessed_corrections`） | 呼出元が渡した `Iterable[Mapping]` を走査するのみ（自身はファイルを読まない） | 影響なし。`isinstance(rec, Mapping)` チェックあり（line 39） |
-| 5 | `skills/genetic-prompt-optimizer/scripts/optimize_core.py:60-84`（`collect_corrections`） | 独自 `for line in ... json.loads` ループ | 影響なし |
-| 6 | `scripts/lib/prune/corrections.py:17-48`（`load_corrections`）/ `:51-117`（`cleanup_corrections`） | 独自 `for line in ... json.loads` ループ。**物理削除**を行う唯一の箇所（§7.2 で扱う） | 影響なし（read 側）。削除時は行をまるごと落とすため `correction_id` を含む JSON も一緒に消える（意図通り。§7.2） |
+| 1 | `hooks/auto_memory_runner.py:57-90`（`read_recent_corrections`）/ `:123-154`（`_load_all_corrections`） | corrections.jsonl から直近 N 件（`MAX_CORRECTIONS=5` / `max_records=50`）の**レコード全体**を取得し、`scripts/lib/auto_memory_broker.py` へ渡す | 直接の実害は無い（`.get()`/フィルタ処理は未知キーを無視）。ただし §6.3 で述べる下流への露出が新たに増える |
+| 2 | `scripts/lib/auto_memory_broker.py:322-335`（`_build_prompt`） | `json.dumps(corrections, ensure_ascii=False, indent=2)` で**レコード全体を JSON 文字列化し、そのまま LLM プロンプトへ埋め込む**（`corrections_text` 変数、line 322） | **`correction_id` フィールドがそのまま LLM プロンプトに露出する**（§6.3） |
+| 3 | `hooks/save_state.py:76-104`（`_load_corrections_snapshot`） | corrections.jsonl 全件を読み、`checkpoint["corrections_snapshot"]` としてディスク保存する（コメントに「全件ディスク保存したまま無改変」— `hooks/restore_state.py:52-53` の docstring 記載） | 実害なし（保存のみ） |
+| 3' | `hooks/restore_state.py:41-77`（`_summarize_checkpoint_for_output`） | `_load_corrections_snapshot` が保存した checkpoint の `corrections_snapshot` を、直近 `MAX_SNAPSHOT_ITEMS=20`（line 47）件・合計 `MAX_SNAPSHOT_CHARS=8000`（line 48）文字に truncate してから **SessionStart で Claude context へ print** する（line 51-53 のコメントで明記） | **`correction_id` を含むレコード全体が毎セッション Claude のコンテキストへ注入される**（§6.3） |
+| 4 | `scripts/lib/corrections_insights.py:31-60`（`load_corrections_for_insights`） | lookback 期間内のレコード全体を読み、コーパスレベルの繰り返しパターン集計に使う（`count_repeated_patterns` の入力） | 実害なし（未知キー無視） |
+| 5 | `scripts/rl/fitness/telemetry.py:435-473`（`score_failure_distribution`） | `record.get("error_category")` のみ参照。レコード全体は読むが使うのは1フィールド | 実害なし |
+| 6 | `scripts/lib/audit/outcome_metrics.py:113-131`（`_read_jsonl`） | `isinstance(rec, dict)` チェックあり（line 129）の安全なパターン。呼出元でどのフィールドを使うかは別関数 | 実害なし |
 
-**結論（blocking d の充足）**: 6箇所すべて `dict.get(key)` 方式（未知キーを無視する）で
-読んでおり、`isinstance(..., dict)` の有無に関わらず**新規フィールドの追加は既存6箇所の
-挙動を一切変えない**。スキーマ検証ライブラリ（pydantic 等）や `extra="forbid"` 相当の
-仕組みを本リポジトリの corrections.jsonl 周辺コードに使っている箇所は grep 上見つからない
-（`grep -rn "pydantic\|extra=.forbid" scripts/lib/ hooks/ skills/reflect` は0件）。
-6箇所とも**改修不要**。
+（#5・#6 はレコード全体を読み込むが実質的に少数フィールドしか使わないため、
+上記11箇所のうち**実際に「レコード全体」を下流へ運ぶのは #1〜#3' の4箇所**。
+これが本設計にとって重要な経路——§6.3 参照）
 
-## 5. `#379` 新設凍結に抵触しない根拠
+### 6.3 pass-through reader でのフィールド投影: 判断と根拠
 
-`scripts/lib/shrink_freeze.py:62-77`（`FROZEN_STORES`）は72行目に `"corrections.jsonl"` を
-列挙している。`assert_no_new_keys`（`shrink_freeze.py:261-275`）は
-`current`（実行時に検出したストア名の集合）と `frozen`（上記の固定集合）の**差分**を
-見て、`frozen` に無い新しい**ストア名**が現れたら reject する（line 269-275）。
-**この関数はストアの中身（フィールド名）を一切検査しない** — 引数 `current`/`frozen`
-はどちらも `Iterable[str]`（ストア名の文字列集合）であり、レコードの JSON 構造は
-渡されていない。
+**判断: allowlist 投影を導入せず、露出を明示的に受容する。**
 
-`corrections.jsonl` という**ストア名自体は変わらない**（新しいファイルを作らない・
-既存ファイルへ新フィールドを追記するだけ）ため、`assert_no_new_keys` の検査対象に
-本設計は一切ならない。`shrink_freeze.py` の docstring（line 9）が言う「新設」は
-「実装時点（#379 Step 1）の `store_registry`/`_OBSERVABILITY_BUILDERS`/
-`ADVISORY_PROPOSAL_ADAPTERS`/`WEAK_SIGNAL_CHANNELS` の live 集合」（line 26-28）の
-話であり、**store の中のフィールド粒度は凍結の対象になっていない**（#587 v2 §2.4 が
-同じ根拠で新規4フィールドを追加した前例があり、本設計もそれに倣う）。
+**根拠**:
 
-**新しい observability section も作らない**: §2.3 の `resolve_by_id` は
-`audit --growth` 等のレポート出力に接続しない（ambiguous の検出結果を通知する
-新しい表示面は作らない、という意味で `_OBSERVABILITY_BUILDERS`（新設凍結対象）にも
-一切触れない）。ambiguous は CLI 呼出しの戻り値としてのみ表出する。
+1. `correction_id` は `uuid.uuid4().hex` の32文字16進文字列であり、**注入攻撃の
+   運び屋になりえない**（固定文字集合・固定長・意味を持つ自然文でない）。既存の
+   露出経路（#2 `_build_prompt`、#3' `restore_state.py`）は既に `message`
+   （ユーザー発話全文）や `extracted_learning`（LLM 抽出テキスト）という、
+   `correction_id` よりはるかにリスクの高い自由記述フィールドを無条件で運んでいる。
+   `correction_id` を追加してもリスクの質は変わらない（新しい攻撃面を開かない）
+2. サイズ影響は既存の防御機構内に収まる。`restore_state.py:47-48` の
+   `MAX_SNAPSHOT_ITEMS=20`/`MAX_SNAPSHOT_CHARS=8000` は件数・合計文字数の両方で
+   既に truncate している。1レコードあたり `correction_id`（32文字）+
+   `correction_id_schema`（数文字）を追加しても、20件で最大 `20 * ~40 = 800`
+   文字程度の増加であり、8000文字上限に対し無視できる規模（既存の `message` 等の
+   自由記述フィールドの方がはるかに大きい）。`auto_memory_runner.py:48`
+   `MAX_CORRECTIONS=5` も同様に件数上限で吸収する
+3. allowlist 投影を採用する場合、#1〜#3' の4箇所すべてに「投影ロジック」を
+   新規実装する必要があり、これは§4/§6.1で確認した「新規フィールド追加は
+   reader を壊さない」という利点を自ら手放し、**新たな reader 改修（本 issue の
+   スコープ外の書込み4経路とは別の、読取4経路の追加改修）を発生させる**。
+   round 0 ④「1つの変更単位」に含めるべき対象（writer 6/7経路・resolve・
+   identity 再確認）だけでも十分に大きく、読取4経路の allowlist 化まで含めると
+   スコープが再肥大化する
 
-## 6. 有効レコードの述語を単一ソース化する設計
+**受容の裏付けとして実装1巡で行う検証**（§10 の一部として明記）: #2 の
+`_build_prompt` が生成するプロンプト文字列の長さを、`correction_id` フィールド
+追加前後で比較し、既存の LLM 呼出しコスト上限（`llm-batch-guard.md` が要求する
+事前確認）に影響する増分でないことを実測する。#3' の `MAX_SNAPSHOT_CHARS` 上限に
+対する実際の truncate 発生率が悪化しないことを、実データ241件 + 新フィールド
+シミュレーションで確認する。
 
-**現状（§4 で確認した重複）**: `reflect.py:111-124`（`load_corrections`）、
-`prune/corrections.py:17-48`（別の `load_corrections`）、
-`discover/suppression.py:22-31`（`load_jsonl`）、`audit/memory.py:474-489`（インライン）、
-`optimize_core.py:60-84`（インライン）の**5箇所が独立に**
-`try: json.loads(line) except JSONDecodeError: continue` を実装している
-（`fleet/queue_materials.py:227-` の `read_corrections_records_with_health` だけが
-単一ソース化済みで、`correction_backlog.py` のみがそれを使っている）。
+## 7. `#379` 新設凍結への非抵触（**正しかったので維持**・巡1から再掲）
 
-**本 issue の対応範囲**: 上記5箇所の統合は `pitfall_copied_parse_convention_partial_fix`
-（片側だけ直す部分修正のリスク）に該当する横展開作業であり、`design-before-fanout.md`
-に従えば独立した issue にすべき規模（5箇所×挙動確認のコストが `correction_id` 追加
-そのものより大きい）。**本設計は述語の統合をスコープに含めない**が、
-`correction_id` を含む新しいレコード生成コード（§2.2 の `new_correction_id`）と
-`resolve_by_id`（§2.3）は、**この5重複の6つ目を増やさない**ように設計する:
-`resolve_by_id` は `records: list[dict]` を受け取るだけで、ファイルの読み込み自体は
-呼出元（`reflect.py` の既存 `load_corrections`）に委ねる。`resolve_by_id` 内部で
-`isinstance(r, dict)` を確認する（§2.3 のコード参照）ことで、呼出元が非 dict を
-混入させても安全側に倒れる（述語の**完全な**単一化ではないが、「新設する関数が
-既存の非統一状態を悪化させない」ことは満たす）。
+`scripts/lib/shrink_freeze.py:62-77`（`FROZEN_STORES`。72行目に `"corrections.jsonl"`）・
+`:23-37`（凍結対象の4集合: `store_registry`/`_OBSERVABILITY_BUILDERS`/
+`ADVISORY_PROPOSAL_ADAPTERS`/`WEAK_SIGNAL_CHANNELS`）・`:261-275`
+（`assert_no_new_keys`、ストア名・section key・adapter key・channel の文字列集合のみ検査）
+を実物照合し、**JSON フィールド粒度は凍結の対象外**であることを確認済み
+（外部レビューで正しいと確認された）。
 
-**述語統合を本 issue でやらない代わりに払うコスト**: `prune/corrections.py` の
-`load_corrections`（§4 の #6）は `record.setdefault(...)` で後方互換フィールドを
-補完しているが、`correction_id` にはこの補完を追加しない（§7 の移行スクリプトが
-別途担うため）。これにより `prune.load_corrections()` が返す辞書には、移行未実施の
-レコードで `correction_id` キー自体が存在しない状態と、移行済みで存在する状態が
-混在しうる。読み手はいずれも `.get("correction_id")` で `None` を受け取れるため
-実害はない（§4 の結論を参照）。
+**本第2版で新設する `corrections.jsonl.lock`（§2.1）についても同じ根拠で確認**する:
+`FROZEN_STORES`（`shrink_freeze.py:62-77`）は corrections.jsonl 等の**データストア**を
+列挙したものであり、`.lock` サイドカーはデータを保持しない排他制御用の空ファイルで
+`store_registry`/`store_write`（`scripts/lib/rl_common/store_write.py:77-92`）を
+一切経由しない（`append_correction`/`rewrite_corrections` は `store_write` の**外側**、
+`store_write` が最終的に呼ぶ `append_jsonl` 相当の**より低いレイヤ**に位置する）。
+ゆえに `assert_no_new_keys` の検査対象にもならない。**ただし `.lock` ファイルが
+`store_registry` や `FROZEN_STORES` の走査（例: ディレクトリ全体を列挙して
+「未知のファイル」を検出するような将来の凍結検査）に引っかからないかは、
+本設計では「現状のコードが store 名の**列挙**でなく `store_registry` への
+**登録有無**で判定している」ことまでしか確認していない。ディレクトリ走査型の
+検査が将来追加された場合の扱いは§14で人間に確認する**。
 
-## 7. 移行
+## 8. 起動時 gate — 移行完了までID依存操作を無効化する
 
-### 7.1 対象
+新しいストアを作らずに「移行が完了しているか」を判定する必要がある
+（`#379` 凍結・§7）。**read 時導出**方式を採る（`weak_signals` の TTL が read 時に
+age を導出する既存パターンと同型）:
 
-既存241件（§1.1、取得時刻 2026-08-31T23:32:12Z）すべてが `correction_id` を持たない。
-**一括付与**を採用する（read 時導出は不採用 — 理由は次項）。
+```python
+def correction_id_migration_status(corrections_path: Path) -> str:
+    """corrections.jsonl を読み、ID 依存操作を許可してよいかを read 時に判定する。
+    永続化しない（#379 新設凍結の遵守）。"""
+    if not corrections_path.exists():
+        return "completed"  # レコードが無ければ移行すべき対象も無い
+    for line in corrections_path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        try:
+            rec = json.loads(stripped)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(rec, dict):
+            continue
+        has_id = validate_correction_id(rec.get("correction_id"))
+        has_schema = rec.get("correction_id_schema") == CURRENT_SCHEMA
+        if not has_id and not has_schema:
+            return "not_migrated"
+        if has_schema and not has_id:
+            return "corrupted"
+    return "completed"
+```
 
-**read 時導出を採らない理由**: `correction_id` は「このレコードを一意に指す」という
-用途上、**書込み側と読み込み側が同じ値を得られる**必要がある（§2.3 の `resolve_by_id`
-は「渡された `correction_id` に一致するレコードを探す」という双方向の同定に使うため）。
-read 時に `(session_id, timestamp)` 等から**決定論的に**再計算する案は、結局
-`source_correction_id` と同じ「実質一意」の弱点を引き継ぐ（§3 で却下したのと同じ理由）。
-真に位置・内容非依存な値（UUID）は、その場で作って保存する以外に得る方法がない
-（過去に遡って「本来割り振られるべきだった UUID」を再現することはできない —
-これが§11で人間へ確認する未決定点の一つ）。
+**gate の適用箇所**: §4.2 の CLI（`--apply`/`--skip` の `correction_id` ベース解決部分）
+は、この関数が `"completed"` を返さない限り ID ベースの解決を行わず、
+`{"status": "migration_required", "migration_status": "<not_migrated|corrupted>"}`
+を返して非0終了する。**旧来の `source_correction_id` ベースの操作は gate の対象外**
+（後方互換——移行前でも `--apply <source_correction_id>` は動き続けるが、
+§4.2 で述べた「2件以上一致したら ambiguous」という安全策だけが効く。真の
+identity 再確認は移行後にしか使えない）。
 
-### 7.2 移行スクリプトの設計（中断耐性を含む）
+**この関数は全件を毎回スキャンする**（O(N)・241件では無視できるコスト）。
+数万件規模になった場合はキャッシュ等の再設計が要る（§14）。
 
-新規スクリプト `scripts/migrate_correction_id_backfill.py`（既存の
-`scripts/migrate_reflect_queue.py`/`scripts/migrate_reflect_promoted_status.py` と
-同じ「1回限りの手動実行」パターンを踏襲）:
+## 9. CLI での不変 ID 直接指定（`--correction-id`）
 
-1. `fcntl.flock(f, LOCK_EX)` を取得する（`append_jsonl` と同じロック対象ファイル・
-   `persistence.py:159-160` と同じ排他。これにより、移行実行中に hook が追記を
-   試みても待たされるだけで、追記中の行を移行スクリプトが上書きすることはない
-   — §7.3 で決定論的に再現する）
-2. ロックを保持したまま、ファイル全体を読み込む
-3. 各行について:
-   - 空行・JSON parse 失敗（`json.JSONDecodeError`）・dict でない値 →
-     **そのまま温存**（既存慣習 `reflect.py:687-696` と同じ扱い。パースできない行に
-     `correction_id` を挿入しようがないため、これは温存以外の選択肢がない）
-   - dict かつ既に `correction_id` を持つ → **そのまま温存**（冪等性。二重付与しない）
-   - dict かつ `correction_id` を持たない → `new_correction_id()` を1回呼び、
-     そのフィールドだけを追加した dict を新しい行として組み立てる
-4. 3で組み立てた全行を**一時ファイルへ書き込み**、`tempfile.mkstemp` +
-   `os.replace`（atomic rename）でファイル全体を差し替える。この手法は
-   `scripts/lib/correction_semantic/promote.py:634-642`
-   （`invalidate_idiom_corrections`）が既に使っている atomic-write パターンと同一
-5. ロックを解放する
+`--apply-id <correction_id>` / `--skip-id <correction_id>` を新設する（既存の
+`--apply <source_correction_id>` / `--skip <source_correction_id>` は残す・§3 巡1の
+判断を維持）。`--apply-id`/`--skip-id` は §8 の gate が `"completed"` でなければ
+使用不能（`migration_required` を返す）。`validate_correction_id` に通らない値が
+渡された場合は即座に `invalid_id` を返す（CLI 引数レベルでも§3.1の単一ソースを使う）。
 
-**中断耐性（blocking e）の成立理由**:
+**書式判別による自動振り分けは採用しない**（例: 32文字16進なら `correction_id`、
+`#` を含めば `source_correction_id`、という sniffing）。理由: `source_correction_id`
+の形式（`f"{session_id}#{timestamp}"`）は `session_id` の生成規則に依存しており、
+将来 `session_id` が32文字16進のみで構成される可能性を排除できない（UUID 形式の
+session_id は実際にありうる）。曖昧な sniffing は round 0 blocking (c)（黙った
+誤同定）と同じ種類の危険を生むため、**引数名を分けて明示させる**設計にする。
 
-- ステップ1〜3は**メモリ上の計算のみ**でファイルへの書込みを一切行わない。
-  この途中でプロセスが kill されても、`corrections.jsonl` の内容は移行開始前と
-  ビット単位で同一（一時ファイルすら作られていない可能性がある）
-- ステップ4は `tempfile.mkstemp`（別パスへの新規書込み）→ `os.replace`
-  （OS レベルでの atomic rename）の2段階。前半で kill されれば `corrections.jsonl`
-  は無傷、後半（rename 自体）は OS が保証する原子操作なので「rename の途中」という
-  状態は存在しない
-- **再実行の安全性**: ステップ3の「既に `correction_id` を持つ行は温存」という
-  冪等性により、移行が完了した後に誤って再実行しても実質 no-op（新しい UUID で
-  上書きされることはない）。中断後の再実行は「最初から全部やり直す」だけでよく、
-  「途中から再開する」ロジックを持つ必要がない（`persist-progress-incrementally.md`
-  が要求する「実体を読んで再開判定」を、**全体が241件と小さく1回のロック区間内で
-  完結できる規模**であることを理由に、チャンク分割・進捗マーカー方式ではなく
-  「毎回全件処理・冪等性で安全化」方式を採用する。件数が数万件規模になった場合は
-  この設計は再検討が要る — §11）
+## 10. 検証計画（前巡は11試験すべてに「緑のまま通る変異」が構成可能だった。作り直す）
 
-### 7.3 §7.2 の主張を裏付ける決定論的再現（設計時点での確認手順のみ記載。実装は次巡）
+**設計原則**: 検証単位は resolver 単体でなく「writer→保存→reader→解決→
+競合差込み→更新／拒否」の実経路に置く。lock は実 `fcntl.flock` + 複数プロセス
+（`multiprocessing.Process` を使い、子プロセスがロック待ちに入ったことを
+`multiprocessing.Event`/pipe で確認してから親プロセス側の操作を進める、という
+決定論的な同期を取る——スレッドでなくプロセスを使う理由: `flock` はプロセス単位の
+排他が本来の用途であり、同一プロセス内の複数スレッドでは fd 共有の影響で
+排他が成立しない場合があるため、実運用に近い検証にはプロセス分離が必要）。
+テストは `scripts/lib/tests/test_corrections_writer.py`（新設）・
+`scripts/lib/tests/test_correction_id.py`（新設）・
+`skills/reflect/scripts/tests/test_reflect_update_status_identity.py`（新設）に置く。
 
-読取と書込の間に別の書込を実際に差し込んで検証する試験設計（§8 の (e) 陰性試験の
-一部として実装1巡で実行する）: 移行スクリプトの「ロック取得」ステップと
-「ファイル読込」ステップの間に、テストコード側で別スレッドから `append_jsonl` を
-1回呼ぶ。`append_jsonl` は `LOCK_EX` を取ろうとしてブロックされるため、移行スクリプト
-側のロック解放後に初めて追記が成立する。移行スクリプトが読み込んだ内容には
-その追記行が**含まれていない**ため、書き戻し後のファイルには追記された行が残らない
-という結果になる**はず**——これは望ましくない喪失なので、実装1巡では
-「ロック取得は追記側と移行側で同じファイルパスの同じロックを取り合う」ことに加えて
-「移行スクリプトは自分がロックを保持している**間に他の書込みが来ないことを祈るのではなく、
-書き戻し直前にもう一度ファイルの mtime か内容ハッシュを確認し、ロック取得後に
-想定外の変化がないことを検証する」という §2.2 の resolve と同型の防御を追加するかどうかを
-検討する必要がある（**未決定点として§11に記載** — 本設計は「ロックを取る」ところまでは
-確定させたが、「ロック保持中に発生し得る取りこぼし」の完全な排除は、移行スクリプトが
-一括 `write_text` を行う設計である限り原理的に残る。243行規模・1回限りの手動実行という
-運用条件下ではリスクは小さいが、ゼロではないことを明記する）。
-
-## 8. 検証計画
-
-各陰性試験に「壊す不変条件」と「通したい検査経路」を書く。テストは
-`scripts/lib/tests/test_correction_id.py`（新設）に置く。
-
-| # | 壊す不変条件 | 変異 | 通したい検査経路 | 期待結果 |
+| # | 壊す不変条件 | 変異（実経路） | 期待結果 | この試験を「緑のまま通す」実装変異（自己検証） |
 |---|---|---|---|---|
-| (a) 陰性 | 同一 ID が複数存在しても片方だけが黙って選ばれない | fixture に同じ `correction_id` を持つ内容の異なる2レコードを用意 | `resolve_by_id` | `status == "ambiguous"`, `match_count == 2`, `record is None` |
-| (a) 陽性対照 | 同上 | `correction_id` が異なる2レコード | 同上 | 対象の1件だけが `status == "found"` で返る |
-| (a) トートロジー化の回避 | — | 上記陰性試験は「`resolve_by_id` が None 以外を返さない」ことだけを見ると、`matches[0]` を常に返す（先頭を黙って選ぶ）実装でも「何かは返る」ため**その粒度のassertでは検出できない**。テストは必ず `status == "ambiguous"` という**具体的な文字列**と `record is None` の両方を assert する（先頭を返す壊れた実装だとこの assert で確実に落ちる） | | |
-| (b) 陰性 | 削除・並べ替えが**他の**レコードの ID を変えない | fixture 3件（A/B/C）を用意し、B の `correction_id` を記録した上で A を配列から**物理削除**して書き戻し、再度ファイルを読み直して `resolve_by_id(records, B の id)` を呼ぶ | `resolve_by_id` の ID ベース照合 | 削除前後で B の中身（`correction_id` 以外のフィールドも含め）が完全一致した状態で見つかる。**A の削除前は B が index=1、削除後は B が index=0** になっていることも同時に assert し、「index は変わったが id ベースの解決結果は変わらない」ことを対比で示す |
-| (b) 陽性対照 | 同上 | 削除を行わず同じ3件のまま `resolve_by_id(records, B の id)` を呼ぶ | 同上 | 削除ありのケースと**同じ** B の中身が返る（index は元の1のまま） |
-| (b) トートロジー化の回避 | — | 「削除後も見つかる」だけを見ると、`resolve_by_id` が実は index ベースにフォールバックしていて**たまたま**別の当たりを返す実装でも通ってしまう。テストは返ってきたレコードの `correction_id` フィールド自体が要求した値と一致することに加え、`message`（内容フィールド）が削除前の B の内容と一致することまで assert する（ordinal ベースの誤実装なら、削除後は C の内容を B として誤って返すため、この二重 assert で検出できる） | | |
-| (c) 陰性 | ID を持たない旧レコードが偶然一致しない | `correction_id` フィールード自体が存在しない fixture レコードを用意し、`resolve_by_id(records, "")`（空文字列）と `resolve_by_id(records, None)` を呼ぶ | `resolve_by_id` の `missing_id` 早期リターン | 両方とも `status == "missing_id"`。**旧レコードが誤って返らない**ことを `record is None` で確認 |
-| (c) 陽性対照 | 同上 | 同じ fixture 内に `correction_id` を持つ正常レコードを1件混ぜ、その実際の値で `resolve_by_id` を呼ぶ | 同上 | `status == "found"` でその1件が返る（旧レコードとは無関係に解決できる） |
-| (c) トートロジー化の回避 | — | `rec.get("correction_id", "") == correction_id` という実装（旧レコードの欠落を空文字列として拾う）は、`correction_id=""` を渡された場合に**旧レコードにマッチしてしまう**。上記の陰性試験はまさにこの引数（空文字列）で呼んでいるため、この壊れた実装だと `status` が `"found"` になり赤くなる。**トートロジーではなく実際に有効な検査**であることをこの理由で担保する | | |
-| (d) 陰性 | 新フィールド追加が既存 reader を壊さない | §4 表の6箇所のうち、直接呼べる4関数（`_count_unprocessed_corrections`／`load_claude_reflect_data`／`collect_corrections`／`prune.corrections.load_corrections`）それぞれに、**同一内容+`correction_id` フィールドだけ追加した** fixture と、**`correction_id` なしの同一内容** fixture の2種を渡し、返り値を比較する | 4関数それぞれ | 2種の fixture で返り値が完全一致（新フィールドの有無で挙動が変わらない） |
-| (d) 陽性対照 | 同上 | 同じ4関数に、`reflect_status` の値**そのもの**を変えた fixture（`pending`→`applied`等）を渡す | 同上 | 返り値が変わる（＝テストの比較ロジック自体が「違いを検出できる」ことを別の軸で確認する対照。無条件で同じ値を返す壊れたテストでないことの証明） |
-| (e) 陰性1（読込前に kill 相当） | 中断で ID だけ書かれる状態が生じない | 移行処理のうち「計算」ステップ（§7.2 の1〜3）だけを呼び、「書き戻し」ステップ（4）を**意図的に呼ばない**（例外を送出させて呼び出しを止める）。その後、元の `corrections.jsonl` を再読込する | 移行スクリプトの2段階分離 | ファイル内容が処理前とバイト単位で同一（`hashlib.sha256` の一致で確認）。**1件も `correction_id` を持たない** |
-| (e) 陽性対照 | 同上 | 同じ fixture で書き戻しステップまで完走させる | 同上 | 全レコードが `correction_id` を持ち、`correction_id` 以外のフィールドは変化なし |
-| (e) 陰性2（追記との競合） | ロック保持中の追記が失われない | §7.3 で述べた「ロック取得直前で別スレッドから `append_jsonl` を呼ぶ」を実際にテストコードで再現する（`threading.Thread` で「移行スクリプトの `flock` 取得」の直前にブロックさせ、その状態で追記スレッドを起動、追記完了後に移行スクリプトの取得を進める、という順序をロックオブジェクトのモックで固定する） | §7.2 のロック取得順序 | 移行完了後のファイルに、追記されたレコード（`correction_id` 付き・新規なので既に持っている）と、移行対象だった旧241件（新たに `correction_id` が付与された状態）の**両方**が残る |
-| (e) トートロジー化の回避 | — | 「ファイルが空でない」「何行かある」という粒度の assert では、追記行を消して243→242件になった実装でも通る。テストは追記したレコードの一意な `message` フィールドの値が書き戻し後のファイルに**行として存在する**ことを直接 grep 相当で確認する | | |
+| (a) 陰性 | 重複 ID があっても操作不能・かつ回復可能 | fixture 2件に同一 `correction_id` を書込み（`append_correction` を2回呼び、2回目の直前で強制的に同じ ID を注入する形で作る——通常経路では起きないため直接ファイル操作で作る）。`resolve_by_id` で `ambiguous` を確認した後、`repair_duplicate_correction_ids.py --apply` を実行し、再度 `validate_unique_ids` で重複0件になることを確認 | `ambiguous`→修復後は重複0、primary の ID は不変（修復前後で同一）、non-primary は新 ID | `matches[0]` を無条件で返す実装は `ambiguous` の assert で落ちる。修復スクリプトが「両方に新 ID を発行」する実装は「primary 不変」の assert で落ちる |
+| (a) 陽性対照 | 同上 | 重複の無い2件で同じ手順 | `resolve_by_id` は即 `found`。修復スクリプトは対象0件で no-op | — |
+| (b) 陰性 | 解決と書込みの間に他プロセスが削除しても、更新は正しいレコードだけに当たるか、識別不能として失敗する | **実プロセス2つ**を使う: 子プロセスP1が `update_reflect_status(filepath, [B の correction_id], "applied", ...)` を呼ぶ直前に**sidecar lock を先に親プロセスが取得**し、P1 がロック待ちに入ったことを `multiprocessing.Event` で確認してから、親プロセスが**別のレコードA を `prune.cleanup_corrections` 相当の transform で物理削除**して `rewrite_corrections` 経由で書き戻し、ロックを解放。その後 P1 のロック取得・処理が進む | P1 の結果は「B の中身が正しく `applied` になっている」（A の削除は B の識別に一切影響しない）。もし新設計が sidecar lock を経由せず旧来の index ベースのままなら、A 削除後は B の index が変わっているため、この試験は誤ったレコードを更新するか `not_found` を返すはずで、この試験はその違いを検出する | ロックを取らず index ベースのままの実装（旧設計）はこの試験で B ではなく別レコードを更新するため、`record["message"]` の一致 assert で落ちる |
+| (b) 陽性対照 | 同上 | 親プロセスの削除処理を行わない（A を消さない） | P1 は通常どおり B を更新できる | — |
+| (c) 陰性1 | 欠落フィールドが偶然一致しない | `correction_id` キー自体が無い fixture レコードに対し `resolve_by_id(records, "")` と `resolve_by_id(records, None)` を呼ぶ | 両方 `invalid_id`。`record is None` | `rec.get("correction_id", "") == correction_id` 型の実装は、空文字列を渡された場合に欠落レコードへマッチしてしまうため、この試験の `status == "invalid_id"` assert で落ちる |
+| (c) 陰性2（**第2版で追加**） | `{"correction_id": ""}` や `{"correction_id": null}`、`{"correction_id": 12345}`（非文字列）を持つレコードが「キーあり」として通ってはならない | fixture にこの3種のレコードを混在させ、有効な `correction_id` を持つ別レコードと合わせて `validate_unique_ids` を呼ぶ | 3種のレコードはいずれも戻り値の集計に含まれない（`validate_correction_id` が全て `False` を返すため） | `"correction_id" in rec` のような存在チェックのみの実装は、この3種を「有効」として数えてしまい、件数の assert で落ちる |
+| (c) 陽性対照 | 同上 | 妥当な `correction_id` を持つレコード1件 | `resolve_by_id`/`validate_unique_ids` 双方で正しく検出される | — |
+| (d) 陰性 | 新フィールド追加が既存 reader を壊さない | §6.1 の6関数 + §6.2 の `_build_prompt`（#2）・`_summarize_checkpoint_for_output`（#3'）に、`correction_id`/`correction_id_schema` 付き fixture と無し fixture を渡し比較する | `reflect_status` 系6関数は返り値完全一致。`_build_prompt`/`_summarize_checkpoint_for_output` は**出力される文字列に `correction_id` の値が含まれる**ことを確認する（§6.3 の「受容」判断が実装で実際に反映されていることの確認であり、除外されていないことをこの陰性試験で確認する——「除外されていない」ことを陰性側で確認するのは一見逆だが、allowlist 投影を採用しない設計判断が実装で骨抜きにされていないかの検査として位置づける） | `correction_id` を意図せず落とすフィルタが混入した実装は、この試験の「含まれる」assert で落ちる |
+| (d) 陽性対照 | 同上 | `reflect_status` の値自体を変えた fixture | 6関数の返り値が変わる（比較ロジックが「違いを検出できる」ことの対照） | — |
+| (e) 陰性1 | 中断で部分状態が生じない | `rewrite_corrections` の transform 内で例外を送出させ、書き戻し前に処理を止める。その後ファイルのハッシュを処理前と比較 | ハッシュ一致（無傷）。かつ `retry_required` が返る | 「書かない関数が書かないことしか見ない」トートロジーを避けるため、**この試験は transform を「実際に何かを変える transform」にして、書き戻し**直前**に例外を注入する**（transform 自体は正常に完了し、tempfile 書込みの途中で `OSError` を模擬注入する形にする——`os.fdopen` をモックして書込み半ばで例外を出す）。空の transform で「何も変わらない」ことを確認するだけの試験は、書き戻しロジック自体をバイパスした実装でも通ってしまうため、必ず実際の書込みパスを通す形にする |
+| (e) 陰性2 | ロック保持中の追記が失われない | 親プロセスが sidecar lock を保持したまま `rewrite_corrections` の transform 内で意図的に一時停止（`multiprocessing.Event` で子プロセスに合図）、その間に子プロセスが `append_correction` を呼ぼうとしてロック待ちになることを確認してから、親が処理を完了してロックを解放し、子の追記が完了するのを待つ | 親の書き戻し結果と子の追記結果の**両方**がファイルに残る（追記レコードの一意な `message` を grep 相当で確認） | ロックを取らない実装、または経路ごとに別ロックを取る実装（§1.3 の欠陥そのもの）は、この試験で追記が失われるため「両方残る」assert で落ちる |
+| (e) 陽性対照 | 同上 | 競合を発生させない単純な移行実行 | 全レコードが正しく `correction_id` を持ち、内容は変化なし | — |
+| (f) 陰性 | 未移行と破損が区別される | fixture A（両フィールド無し）・fixture B（`correction_id_schema=1` のみ、`correction_id` 無し）を用意し、`correction_id_migration_status` を呼ぶ | A のみのファイルは `not_migrated`。B を含むファイルは `corrupted`（B が1件でも混ざれば全体を `corrupted` とする——設計は「1件でも破損があれば安全側に倒す」を採用） | `correction_id` の有無だけで判定する実装（`correction_id_schema` を見ない）は、B を「未移行」と誤判定し `not_migrated` を返すため、この試験の `"corrupted"` assert で落ちる |
+| (f) 陽性対照 | 同上 | 全レコードが両フィールドを正しく持つファイル | `completed` | — |
+| (g) 陰性 | 未完了が成功として返らない | `rewrite_corrections` に渡す transform 内で、破損レコード（§f のB相当）を混入させた fixture で移行を実行 | `MigrationResult.status == "incomplete"`（`corrupted_detected > 0`）であり、単純な bool 成功フラグではなく列挙値であることを型で確認する | `status` を `bool` 1個に潰す実装は、`corrupted_detected > 0` でも `True`（成功）を返しうるため、この試験の `status == "incomplete"` という文字列一致 assert で落ちる |
+| (g) 陽性対照 | 同上 | 破損レコードの無い正常な241件相当 fixture | `completed`、`corrupted_detected == 0` | — |
+| (h) 陰性 | 妥当性・一意性判定が単一ソースでない実装との差分を検出する | `resolve_by_id`・移行スクリプトの重複検出・修復スクリプトの重複検出の3箇所が、**同じ `validate_correction_id`/`validate_unique_ids` の import**であることをテストコード内で `inspect` により確認する（3箇所が独自に正規表現を再実装していないかを機械的に検査） | import 元のモジュール・関数オブジェクトが同一であることを `is` 比較で確認 | 3箇所のうち1つでも独自実装（別の正規表現・別のロジック）に置き換わっていたら、`is` 比較の assert で落ちる |
+| (h) 陽性対照 | 同上 | 3箇所とも正しく import している現状の設計どおりの実装 | 一致 | — |
 
 **委譲側が挙げた回避手段とは種類の違うものを2件以上、実際に適用して結果を報告する
 （実装1巡の完了条件に含める。ここでは列挙のみ）**:
 
-- `resolve_by_id` の `len(matches) > 1` 判定を `len(matches) >= 1`（＝常に見つかった
-  時点で ambiguous 分岐を無視して found を返す）に変異させたビルドを一時的に作り、
-  (a) の陰性試験が緑のまま残らない（＝赤くなる）ことを確認する
-- 移行スクリプトの atomic rename（`os.replace`）を、行ごとの逐次 `write_text` 追記
-  （非 atomic）に変異させたビルドを一時的に作り、(e) 陰性1 の途中停止試験が
-  「一部の行だけ `correction_id` を持つ」状態を検出して赤くなることを確認する
+- `rewrite_corrections` の sidecar lock 取得コードを削除した変異ビルドを作り、
+  (b) 陰性・(e) 陰性2 の両方が赤くなることを確認する（1つの変異で複数試験が
+  同時に検出できることも報告に含める）
+- 移行スクリプトの `has_schema and not has_id` 判定を `not has_id`（`has_schema`を
+  見ない）に単純化した変異ビルドを作り、(f) 陰性が赤くなることを確認する
 
 **探索したが未探索のまま残すクラス**（次巡での探索候補として明示）:
-`correction_id` の衝突（UUID4 の理論上の衝突確率 2^-122 は本設計では無視するが、
-`uuid.uuid4()` が乱数源の初期化不備で偏る環境があるかは未検証）／
-移行スクリプトを**2プロセス同時**に起動した場合の `flock` 待機順序（本設計は
-「1回限りの手動実行」を前提にしており多重起動を積極的には検証しない）／
-`corrections.jsonl` が**数万件規模**に成長した場合の移行スクリプトのメモリ・時間
-（§7.2 の「全件をメモリに載せて一括書き戻し」は241件では問題にならないが
-スケールしない設計であることを§11に明記）。
+sidecar lock ファイル自体が何らかの理由で削除された場合（`open(path, "a")` は
+存在しなければ新規作成するため、削除後の再作成は新しい inode になり、
+削除前からロック待ちしていたプロセスとの排他が破れる——この経路は本設計が
+新たに持ち込むリスクであり、実運用で `.lock` ファイルを誰かが `rm` する
+シナリオは信頼境界②の「手編集」に含まれるかどうか§14で確認が要る）／
+`fcntl` 非対応環境（`_HAVE_FCNTL=False`、`persistence.py:11-15` と同型の
+フォールバック）での sidecar lock 無効化時の挙動／`correction_id_schema` の
+将来のスキーマバージョンアップ（`CURRENT_SCHEMA` が2以上になった場合の移行）。
 
-## 9. この設計が成立しなくなる入力・順序・中断点（自己検証・3件以上）
+## 11. 自己検証: この設計が成立しなくなる入力・順序・中断点（3件以上）
 
-1. **バックアップ復元による内容重複**: `corrections.jsonl` を過去のバックアップから
-   復元した際、既に `correction_id` を持つレコード群が、現在のファイルに既に存在する
-   同じ `correction_id` のレコードと**衝突する**（信頼境界②「再 ingest による重複」に
-   該当）。**設計の答え**: §2.3 の `resolve_by_id` が `ambiguous` を返すため、
-   衝突した ID に対する更新操作はすべて拒否される（データは壊れないが、その ID を
-   持つレコード群は「更新不能」になる）。**この状態からの回復手順は本設計に含まれない**
-   （手動での重複解消が必要。round 0 blocking (a) は「実害を出さないこと」までを要求し、
-   「自動修復」までは要求していないと解釈した — §11で確認）
-2. **`prune/corrections.py` の decay 削除との時間的競合**: §7.2 の移行スクリプトが
-   ロックを保持している最中に `cleanup_corrections`（`prune/corrections.py:51-117`）が
-   実行されると、`cleanup_corrections` 自身は `append_jsonl` のロックを一切見ていない
-   （§1.3 で確認済みの独立書込み経路）ため、**移行スクリプトの `flock` はこの経路を
-   防御しない**。移行の書き戻し（`os.replace`）と `cleanup_corrections` の書き戻し
-   （`corrections_file.write_text`、`prune/corrections.py:113-116`）が同時に走ると、
-   後勝ちで片方の変更が消える。**設計の答え**: これは本設計が新たに作るリスクではなく、
-   `prune/corrections.py` が最初から `append_jsonl` のロック機構に参加していない
-   既存の欠陥（#587 v2 §1.1 が同種の欠陥として `invalidate_idiom_corrections` を
-   記録済み）。**本 issue はこの欠陥を修正しない**（round 0 対象外の「反映イベントの
-   追記」寄りの話ではなく、`prune` 自体の独立したロック協調の話であり、blocking (a)〜(e)
-   のいずれにも含まれていない）。ただし移行スクリプトの実行タイミングは
-   「`prune` の自動実行スケジュールと衝突しない時間帯に手動実行する」という運用上の
-   注意として§11に明記する
-3. **`store_write_raw` によるテスト/isolation パス経由の書込み**
-   （`promote.py:568`）: production 経路（`store_write`）を通らない書込みが
-   `correction_id` の付与を忘れる実装ミスがあった場合、その経路で作られたレコードは
-   `correction_id` を持たないまま corrections.jsonl に混入する。**設計の答え**:
-   §2.2 の `new_correction_id()` 呼び出しは `_build_correction_record`
-   （`promote.py:346-393`）という**レコード構築関数の内部**に置く設計にし
-   （`store_write`/`store_write_raw` のどちらを呼ぶかの分岐（`promote.py:565-568`）
-   より**前**）、production/テスト両経路が同じ構築関数を通る限り取りこぼさない。
-   実装1巡でこの配置（構築関数内 vs 呼出し分岐後）を守ることをレビュー観点として
-   明記する
-4. **移行スクリプトの未実行のまま新規書込み関数だけ先にデプロイされる順序**:
-   §2.2（新規レコードは `correction_id` を持つ）と §7.2（既存レコードへの一括付与）
-   は独立した変更単位として実装しうる。前者だけ先にマージ・運用されると、
-   `corrections.jsonl` の中に「新しい行は `correction_id` を持つが、古い行は持たない」
-   という**過渡的な混在状態**が、移行スクリプト実行までの間ずっと続く。
-   **設計の答え**: §2.3 の `resolve_by_id` は `correction_id` の有無を前提にしない
-   （欠落レコードは `not_found`/`missing_id` として自然に扱われ、クラッシュしない）ため、
-   この過渡状態は**安全側で動作する**（新しいレコードだけが ID 経由で操作可能になり、
-   古いレコードは移行完了まで ID 経由の操作対象外のまま）。§4 の6箇所の reader も
-   混在状態を問題なく読める（blocking d の結論がそのまま当てはまる）。
-   **実装1巡の完了条件には、2つの変更単位を同一 PR ないし同一デプロイ単位にまとめるか、
-   分離してよいかの判断を含める**（分離してよいという結論が本設計の帰結だが、
-   最終判断は実装1巡のレビューで確定させる）
+1. **sidecar lock ファイルの手動削除**（§10 の未探索クラスとして触れた
+   シナリオを自己検証として明示する）: 運用者が `corrections.jsonl.lock` を
+   `rm` すると、その時点でロックを待っていたプロセスと、削除後に新規
+   `open()` したプロセスとで、異なる inode に対する `flock` になり排他が
+   破れる。**設計の答え**: これは §1.3 で述べた「rename されないことが安全性の
+   前提」を運用者が破るケースであり、`corrections.jsonl` 自身への `rm`
+   （信頼境界②の「手編集」に類する運用ミス）と同種のリスクとして受容する。
+   完全な防止は「lock ファイルの削除も検知して再同期する」仕組みを要し、
+   本 issue のスコープ（識別子・書込み一本化・identity 再確認）を超える
+2. **`corrections.jsonl` 自体が存在しない状態から複数の writer が同時に
+   初回書込みする**: `append_correction`（§2.2）は `corrections_path.exists()`
+   の判定と実際の `open(..., "a")` の間に TOCTOU の隙間がある
+   （既存 `append_jsonl` の `is_new = f.tell() == 0`（`persistence.py:162`）は
+   `flock` 取得**後**に判定しており TOCTOU を回避しているが、新設計の
+   `_corrections_lock` は `corrections.jsonl.lock` に対するロックであり、
+   `corrections.jsonl` 本体の「新規作成か否か」判定はこの sidecar lock の
+   **外**で行われる可能性がある）。**設計の答え**: `is_new` 判定は
+   `_corrections_lock` コンテキストの**内側**（`open(corrections_path, "a")`
+   の直前ではなく、sidecar lock 取得後）に置くことを§2.2のコード例で明示している
+   （`with _corrections_lock(...): is_new = ... ; with open(...)`）。この配置に
+   より、複数 writer が同時に初回書込みしても、chmod の重複適用（副作用は
+   軽微だが2回目以降は無意味な `chmod` 呼び出しになる）以外の実害は無い
+3. **移行スクリプトが `--repair-corrupted` なしで実行され、破損レコードを
+   延々と `corrupted` のまま放置する**: §8 の gate は `corrupted` が1件でも
+   あれば全体を `not "completed"` とするため、破損レコードが1件でも残る限り
+   **ID ベースの CLI 操作（§9 `--apply-id`/`--skip-id`）が全PJ・全レコードで
+   使えなくなる**（1件の破損が全体をブロックする設計）。**設計の答え**:
+   これは意図した安全側の挙動（fail-closed の帰結）だが、運用上のリスクとして
+   §14で明示し、`corrupted_detected` の件数と対象レコードを人間が読める形で
+   毎回の gate チェック結果に含めることを実装1巡の要件に加える
+   （沈黙した無限ブロックを避けるため）
+4. **`validate_correction_id` の正規表現が将来 `uuid.uuid4().hex` 以外の
+   フォーマット（例: ハイフン付き標準 UUID 文字列）を発行するよう変更された
+   場合**: 過去に発行された ID（ハイフン無し32文字）と新しい ID
+   （ハイフン付き36文字）が混在し、`_ID_PATTERN` が片方しか通さないと、
+   古い ID を持つレコードが突然「無効」扱いになる。**設計の答え**:
+   `CURRENT_SCHEMA` フィールド（§3.1）はこの種のフォーマット変更を
+   将来吸収するために用意してある——スキーマバージョンごとに異なる
+   `validate_correction_id` の許容パターンを分岐させる拡張点として機能する
+   ことを設計意図として明記する（現時点では `CURRENT_SCHEMA=1` のみ実装し、
+   分岐ロジック自体は次のスキーマ変更が実際に必要になったときに追加する
+   ——YAGNI と将来の破壊的変更のバランスを、フィールドの存在だけで
+   確保しておく）
 
-## 10. やらないこと（完成条件③の対象外の再掲・理由つき）
+## 12. やらないこと（完成条件③の対象外の再掲・理由つき）
 
-- **柱2の集計・表示（`results_board`）の変更**: 本設計は識別子のみを扱う。集計ロジックへの
-  接続は #587（切り出し元）の担務
-- **反映イベントの追記と read 時 fold**: `record_kind="reflect_event"` のような追記型
-  イベント設計は #587 v2 §2.4 が既に書いている。本設計はそれとは独立に成立する
-  （`correction_id` は #587 が再開されたとき、イベント行の `source_correction_id` を
-  `correction_id` に差し替えるだけで、ordinal 由来の脆弱性を継承せずに済む——
-  これは§11で人間に確認を仰ぐ「#587 との統合方針」の材料になる）
+- **柱2の集計・表示（`results_board`）の変更**: 一切触れない
+- **反映イベントの追記と read 時 fold**（#587 本体）: #587 が再開されたとき、
+  イベント行の識別子を `correction_id` に差し替えるだけで済むよう、本設計は
+  独立して成立するよう作った（§13-5）
 - **`reflect_status` の意味論変更**: 一切触れない
-- **`#379` 新設凍結の解除**: 新しいストアを作らない（§5）
-- **有効レコードの述語の完全統合**（§6）: 5箇所の重複を1箇所へ集約する作業は
-  規模が本 issue を超えるため別 issue とする
-- **`prune/corrections.py` のロック協調**（§9-2）: 既存の欠陥であり本 issue のスコープ外
-- **CLI の `--correction-id` オプション新設**（§2.4 で触れた、ユーザーが `correction_id`
-  を直接指定できるようにする改善）: round 0 は「レコードを一意に指せること」という
-  内部的な性質を要求しているのであって、CLI からの直接指定 UX 改善は Should 相当
-  （実装1巡で追加するかは§11で判断）
+- **`#379` 新設凍結の解除**: 新しいデータストアを作らない（§7・sidecar lock も
+  データを持たない排他制御専用ファイルとして区別する）
+- **有効レコードの述語の完全統合**（巡1§6 から継続・対象外）: `rewrite_corrections`
+  の入口が非dict行を温存する処理を持つため、5箇所の重複読取実装の統合とは
+  独立に安全性を確保できている
+- **`--correction-id` 参照元の自動追跡・書き換え**（§3.3）: 新しいストアを
+  要する可能性が高く見送る
+- **移行スクリプトの数万件規模対応**（§5.5・§8）: 241件を前提にした設計。
+  スケール時は§14で再検討を提起する
 
-## 11. 人間の判断が要る点
+## 13. 人間の判断が要る点
 
-1. **blocking (a) の解釈**: 「同一 ID を持つレコードが2件以上存在しうる」を
-   「発生を完全に防止する」と読むか「発生しても実害が出ないよう無害化する」と読むか。
-   本設計は後者を採用した（§2.3）。前者を要求するなら、書込み時に既存ファイル全体を
-   スキャンして ID の重複を検出・reject する仕組みが追加で必要になり、
-   `append_jsonl` の「ロックを取って追記するだけ」という軽量な書込み経路の性質が変わる
-2. **§9-1（バックアップ復元による衝突）からの自動回復**: 本設計は「実害を出さず
-   ambiguous として拒否する」までで止めている。人間による重複解消の手順（どちらの
-   レコードを残すか、マージするか）を本 issue のスコープに含めるかどうか
-3. **§9-2（`prune` のロック未協調）を本 issue で直すか**: 直さない場合、運用上の注意
-   （移行スクリプトの実行タイミング）をどこに書くか（README？ 移行スクリプト自身の
-   docstring？）
-4. **§7.2 のスケーラビリティ**: corrections.jsonl が数万件規模に成長した場合、
-   一括読込・一括書き戻し方式の移行スクリプトは再検討が必要になる。今回は241件
-   （§1.1）を前提に「全件処理・冪等性で安全化」を採用したが、将来の再設計トリガーを
-   件数の閾値として明記するか
-5. **#587 との統合順序**: 本設計（`correction_id`）を先にマージし、#587 が
-   再開したときに `source_correction_id`/ordinal 依存部分を `correction_id` ベースに
-   差し替える、という順序でよいか。あるいは両方を1本の変更系列として扱うか
-   （`review.md` の「変更系列はリセットできない・前身の巡数を継承する」規定との整合）
+1. **blocking (a) の「一意性の回復」が要求する強度**: §3.3 の
+   `repair_duplicate_correction_ids.py`（primary 以外へ無条件で新 ID 再発行）で
+   十分か、それとも内容比較による判定（同一内容のみ再発行）まで求めるか
+2. **§3.3 の参照元喪失リスク**: `--correction-id` を使い始めた後にバックアップ
+   復元・重複修復が起きると、ユーザーが記憶していた ID が無効になりうる。
+   この UX 上のリスクを許容範囲とするか
+3. **§5.4 の `--repair-corrupted`**: 破損レコードは過去の ID を永久に失う
+   （復元不能）という制約を許容するか。より慎重な設計（例: 破損レコードは
+   `--repair-corrupted` 後も「repaired_from_corruption: true」のような
+   マーカーを残す）を求めるか
+4. **§8 の gate 設計（1件の破損が全体をブロックする）**: §11-3 で述べた
+   通り安全側だが厳しい。PJ 単位・時間窓単位でスコープを絞る代替設計
+   （ただし round 0 対象外「柱2のスコープ判定ロジック」に触れずに実現
+   できるかは未検討）を求めるか
+5. **§6.3 のフィールド投影判断**: allowlist 投影を採らず露出を受容する判断で
+   よいか。将来 `correction_id` 以外の新フィールドを追加する際にも同じ方針
+   （形式が制約された値なら受容）を踏襲してよいか
+6. **#587 との統合順序**: 本設計を先にマージし、#587 再開時に
+   `source_correction_id`/ordinal 依存部分を `correction_id` ベースに
+   差し替える、という順序でよいか
+7. **§11-1 の sidecar lock 削除リスク**への追加防御（検知・自己修復）を
+   本 issue に含めるか、別 issue に切り出すか
