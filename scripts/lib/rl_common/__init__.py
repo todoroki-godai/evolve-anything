@@ -231,6 +231,7 @@ from .correction_id import (  # noqa: F401, E402
     AppendResult,
     ResolveResult,
     append_correction_record,
+    append_unique_record,
     find_duplicate_ids,
     has_duplicate_id,
     new_correction_id,

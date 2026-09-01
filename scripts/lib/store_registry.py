@@ -111,6 +111,7 @@ class StoreDeclaration:
     disposition: Optional[DispositionKind] = None
     status: StoreStatus = "active"
     writer_module: Optional[str] = None
+    write_boundary: Optional[str] = None
     note: Optional[str] = None
 
 
@@ -124,6 +125,20 @@ _DECLARATIONS: List[StoreDeclaration] = [
         retention="permanent",
         classification="raw_event",
         note="修正フィードバックの SoR。reflect の入力源。",
+    ),
+    StoreDeclaration(
+        name="reflect_apply_events.jsonl",
+        writer="skills/reflect/scripts/reflect.py --apply/--skip ハンドラ（柱2反映イベント）",
+        reader="scripts/lib/reflect_fold.py・scripts/lib/pillar2_metrics.py",
+        retention="permanent",
+        classification="raw_event",
+        writer_locus="batch",
+        write_boundary="rl_common.correction_id.append_unique_record",
+        note=(
+            "#587 柱2測定用。#379 新設凍結の例外としてユーザー裁定（2026-09-01）で"
+            "追加。corrections.jsonl とは別ファイル・別ロック。generic store_write"
+            "からの直接書込みは write_boundary により拒否される（#587 巡2 [Must]2）。"
+        ),
     ),
     StoreDeclaration(
         name="usage.jsonl",

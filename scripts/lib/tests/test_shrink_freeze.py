@@ -6,6 +6,7 @@ advisory proposal adapter / weak_signal channel の追加を止める契約テ�
 """
 from __future__ import annotations
 
+import hashlib
 import sys
 from pathlib import Path
 
@@ -16,6 +17,18 @@ if str(_lib_dir) not in sys.path:
     sys.path.insert(0, str(_lib_dir))
 
 import shrink_freeze as sf  # noqa: E402
+
+_PRE_587_FROZEN_STORES_SHA256 = "9f076b1d1fffb482743c00d32ebaa76e5cb64f6d2e996805ff9a8c95041c85d7"
+_PRE_587_FROZEN_STORES_COUNT = 45
+
+
+def test_frozen_stores_587_exception_is_exactly_one() -> None:
+    live = set(sf.FROZEN_STORES)
+    added = live - {"reflect_apply_events.jsonl"}
+    assert len(added) == _PRE_587_FROZEN_STORES_COUNT
+    digest = hashlib.sha256("\n".join(sorted(added)).encode()).hexdigest()
+    assert digest == _PRE_587_FROZEN_STORES_SHA256
+    assert "reflect_apply_events.jsonl" in live
 
 
 def test_is_frozen_reflects_flag_state_when_active(monkeypatch) -> None:

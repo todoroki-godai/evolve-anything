@@ -18,6 +18,7 @@ WriteResult(status: str, reason: str | None = None) -> None
 add_false_positive(msg: str, correction_type: str) -> None
 append_correction_record(filepath: 'Path', record: 'dict') -> 'AppendResult'
 append_jsonl(filepath: pathlib.Path, record: dict, *, duplicate_check: Callable[[list[dict]], bool] | None = None) -> rl_common.persistence.WriteResult
+append_unique_record(store_name: 'str', record: 'dict') -> 'AppendResult'
 bare_skill_name(key: str | None) -> str | None
 calculate_confidence(base_confidence: float, text: str, matched_count: int = 1, has_strong: bool = False, has_i_told_you: bool = False) -> tuple[float, int]
 classify_prompt(prompt: str) -> str

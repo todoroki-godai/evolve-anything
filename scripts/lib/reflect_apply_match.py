@@ -26,6 +26,15 @@ _BULLET_PREFIX = "- "
 # 番号付き（"1. "）/ チェックボックス（"- [ ] " / "- [x] "）/ 引用（"> "）/ 表（"| ...|"）。
 _UNKNOWN_PREFIX_RE = re.compile(r"^(\d+\.\s|-\s\[[ xX]\]\s|>\s|\|)")
 
+_KNOWN_TARGET_KINDS = frozenset({
+    "global_rule",
+    "project_rule",
+    "global_claude_md",
+    "project_claude_md",
+    "skill",
+    "other",
+})
+
 
 def classify_file(lines: List[str]) -> str:
     """`- ` 始まりの行（インデント許容）が1行でもあれば "bullet"、無ければ "plain"。"""
@@ -74,3 +83,62 @@ def check_line_applied(target_path: Path, draft_line: str) -> Dict[str, Optional
             return {"matched": True, "reason": None}
 
     return {"matched": False, "reason": "no_match"}
+
+
+def classify_reflect_target_kind(target_path: str) -> str:
+    """反映先ファイルの種別を分類する（#587 blocking (b)）。"""
+    from evolve_decision_ids import global_skills_root, repo_identity
+    from evolve_revert._target import global_rules_root
+
+    path = Path(target_path).expanduser()
+    try:
+        resolved = path.resolve()
+    except OSError:
+        resolved = path
+
+    try:
+        resolved.relative_to(global_rules_root().resolve())
+        return "global_rule"
+    except ValueError:
+        pass
+
+    if resolved == (Path.home() / ".claude" / "CLAUDE.md").resolve():
+        return "global_claude_md"
+
+    try:
+        resolved.relative_to(global_skills_root().resolve())
+        if resolved.name == "SKILL.md":
+            return "skill"
+    except ValueError:
+        pass
+
+    identity = repo_identity(str(path))
+    repo_id = identity.get("repo_id")
+    relative_path = (identity.get("relative_path") or "").replace("\\", "/")
+    if repo_id:
+        if relative_path.startswith(".claude/rules/"):
+            return "project_rule"
+        if relative_path == "CLAUDE.md":
+            return "project_claude_md"
+        if relative_path.endswith("/SKILL.md") or relative_path == "SKILL.md":
+            if relative_path.startswith(".claude/skills/") or relative_path.startswith("skills/"):
+                return "skill"
+
+    return "other"
+
+
+def normalize_reflect_target_path(target_path: str) -> str:
+    """反映先を worktree 間で安定する監査・重複排除キーへ正規化する。"""
+    from evolve_decision_ids import repo_identity
+
+    path = Path(target_path).expanduser()
+    try:
+        resolved = path.resolve()
+    except OSError:
+        resolved = path
+    identity = repo_identity(str(resolved))
+    repo_id = identity.get("repo_id")
+    relative_path = identity.get("relative_path")
+    if repo_id and relative_path:
+        return f"{repo_id}:{str(relative_path).replace(chr(92), '/')}"
+    return str(resolved)

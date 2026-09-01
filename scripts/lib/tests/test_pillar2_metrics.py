@@ -1,0 +1,128 @@
+import json
+from datetime import datetime, timezone
+from pathlib import Path
+from unittest import mock
+
+import pillar2_metrics as metrics
+from reflect_fold import _hash_correction_message
+
+
+NOW = datetime(2026, 9, 1, tzinfo=timezone.utc)
+BASE_ID = "a" * 32
+ATTEMPT_ID = "b" * 32
+APPLIED_ID = "c" * 32
+
+
+def _write(path: Path, rows: list[dict]) -> None:
+    path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+
+
+def _base(**overrides):
+    value = {
+        "correction_id": BASE_ID,
+        "extracted_learning": "Use the stable API",
+        "reflect_status": "applied",
+        "project_path": None,
+        "timestamp": "2026-08-31T00:00:00+00:00",
+    }
+    value.update(overrides)
+    return value
+
+
+def _events(applied_at="2026-08-31T10:01:00+00:00"):
+    base = _base()
+    return [
+        {
+            "correction_id": ATTEMPT_ID, "schema_version": 1,
+            "event_type": "correction_apply_attempted", "target_correction_id": BASE_ID,
+            "reflect_target_kind": "project_rule", "reflect_target_path": "repo:.claude/rules/a.md",
+            "reflect_draft_line": "Use the stable API",
+            "correction_message_sha256": _hash_correction_message(base),
+            "attempted_at": "2026-08-31T10:00:00+00:00",
+        },
+        {
+            "correction_id": APPLIED_ID, "schema_version": 1,
+            "event_type": "correction_applied", "target_correction_id": BASE_ID,
+            "confirms_attempt_id": ATTEMPT_ID, "reflect_applied_at": applied_at,
+        },
+    ]
+
+
+def _count(tmp_path, bases, events):
+    corrections = tmp_path / "corrections.jsonl"
+    event_path = tmp_path / "reflect_apply_events.jsonl"
+    _write(corrections, bases)
+    _write(event_path, events)
+    return metrics.count_applied_reflections(
+        tmp_path, corrections_path=corrections, events_path=event_path, now=NOW
+    )
+
+
+def test_count_applied_reflections_uses_reflect_applied_at(tmp_path):
+    old = _count(tmp_path, [_base(timestamp="2026-08-31T00:00:00+00:00")], _events("2026-07-01T00:00:00+00:00"))
+    fresh = _count(tmp_path, [_base(timestamp="2026-01-01T00:00:00+00:00")], _events())
+    assert old["count"] == 0
+    assert fresh["count"] == 1
+    assert fresh["applied_list"][0]["reflect_applied_at"] == "2026-08-31T10:01:00+00:00"
+
+
+def test_invalidated_excluded_from_count(tmp_path):
+    result = _count(tmp_path, [_base(invalidated=True)], _events())
+    assert result["count"] == 0
+    assert result["invalidated_count"] == 1
+
+
+def test_pending_backlog_does_not_pollute_legacy_unverified(tmp_path):
+    result = _count(tmp_path, [_base(reflect_status="pending")], [])
+    assert result["legacy_unverified_count"] == 0
+    assert result["measured"] is True
+
+
+def test_unstable_snapshot_forces_not_measured(tmp_path):
+    healthy = {"readable": True, "error": None, "malformed_lines": 0}
+    reads = [([_base()], healthy), (_events(), healthy)] * 3
+    with mock.patch.object(metrics, "_snapshot_stat", side_effect=range(12)), mock.patch(
+        "fleet.queue_materials.read_corrections_records_with_health", side_effect=reads
+    ):
+        result = metrics.count_applied_reflections(
+            tmp_path,
+            corrections_path=tmp_path / "corrections.jsonl",
+            events_path=tmp_path / "events.jsonl",
+            now=NOW,
+        )
+    assert result["health"]["snapshot_stable"] is False
+    assert result["measured"] is False
+
+
+def test_sibling_worktree_authoritative_slug_is_same_project(monkeypatch, tmp_path):
+    monkeypatch.setattr("pj_slug.resolve_pj_slug", lambda root: "evolve-anything")
+    monkeypatch.setattr("rl_common.persistence.project_name_from_dir", lambda root: "ea-587")
+    correction = {"project_path": "evolve-anything", "message": "project detail"}
+    assert metrics._pillar2_project_scope(correction, tmp_path / "ea-587") == "same-project"
+
+
+def test_same_reflection_is_deduplicated_by_normalized_key(tmp_path):
+    second_base = _base(correction_id="d" * 32)
+    second_events = [
+        {**_events()[0], "correction_id": "e" * 32, "target_correction_id": "d" * 32,
+         "correction_message_sha256": _hash_correction_message(second_base)},
+        {**_events()[1], "correction_id": "f" * 32, "target_correction_id": "d" * 32,
+         "confirms_attempt_id": "e" * 32},
+    ]
+    result = _count(tmp_path, [_base(), second_base], _events() + second_events)
+    assert result["count"] == 1
+
+
+def test_other_target_kind_is_excluded(tmp_path):
+    events = _events()
+    events[0]["reflect_target_kind"] = "other"
+    result = _count(tmp_path, [_base()], events)
+    assert result["count"] == 0
+    assert result["other_kind_count"] == 1
+
+
+def test_legacy_applied_forces_not_measured(tmp_path):
+    result = _count(tmp_path, [_base()], [])
+    assert result["count"] == 0
+    assert result["legacy_unverified_count"] == 1
+    assert result["measured"] is False
