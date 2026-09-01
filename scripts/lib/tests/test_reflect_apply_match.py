@@ -93,3 +93,56 @@ class TestFileNotFound:
         target = tmp_path / "does-not-exist.md"
         result = ram.check_line_applied(target, "何かの行")
         assert result == {"matched": False, "reason": "file_not_found"}
+
+
+def test_classify_reflect_target_kind_claude_md(monkeypatch, tmp_path):
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    assert ram.classify_reflect_target_kind(str(tmp_path / ".claude" / "CLAUDE.md")) == "global_claude_md"
+
+
+def test_classify_reflect_target_kind_global_rule(monkeypatch, tmp_path):
+    rules = tmp_path / ".claude" / "rules"
+    monkeypatch.setattr("evolve_revert._target.global_rules_root", lambda: rules)
+    assert ram.classify_reflect_target_kind(str(rules / "tdd.md")) == "global_rule"
+
+
+@pytest.mark.parametrize(
+    ("relative_path", "expected"),
+    [
+        (".claude/rules/tdd.md", "project_rule"),
+        ("CLAUDE.md", "project_claude_md"),
+        (".claude/skills/review/SKILL.md", "skill"),
+        ("skills/review/SKILL.md", "skill"),
+        ("docs/notes.md", "other"),
+    ],
+)
+def test_classify_reflect_target_kind_repo_paths(monkeypatch, tmp_path, relative_path, expected):
+    monkeypatch.setattr(
+        "evolve_decision_ids.repo_identity",
+        lambda path: {"repo_id": "repo-1", "relative_path": relative_path},
+    )
+    assert ram.classify_reflect_target_kind(str(tmp_path / relative_path)) == expected
+
+
+def test_classify_reflect_target_kind_global_skill(monkeypatch, tmp_path):
+    skills = tmp_path / ".claude" / "skills"
+    monkeypatch.setattr("evolve_decision_ids.global_skills_root", lambda: skills)
+    assert ram.classify_reflect_target_kind(str(skills / "review" / "SKILL.md")) == "skill"
+
+
+def test_normalize_reflect_target_path_uses_repo_identity(monkeypatch, tmp_path):
+    target = tmp_path / "repo" / "rules.md"
+    monkeypatch.setattr(
+        "evolve_decision_ids.repo_identity",
+        lambda path: {"repo_id": "repo-1", "relative_path": "rules.md"},
+    )
+    assert ram.normalize_reflect_target_path(str(target)) == "repo-1:rules.md"
+
+
+def test_normalize_reflect_target_path_falls_back_to_resolved_path(monkeypatch, tmp_path):
+    target = tmp_path / "outside.md"
+    monkeypatch.setattr(
+        "evolve_decision_ids.repo_identity",
+        lambda path: {"repo_id": None, "relative_path": path},
+    )
+    assert ram.normalize_reflect_target_path(str(target)) == str(target.resolve())
