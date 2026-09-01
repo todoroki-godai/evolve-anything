@@ -312,3 +312,30 @@ def test_run_audit_growth_surfaces_measurement_failure_through_recommended_actio
     assert "rate denied" in output
     assert called["recommended_actions"] is True
     assert "要対応（実行コマンドあり）" in output
+
+
+def test_run_audit_growth_surfaces_pillar2_generation_failure(tmp_path, monkeypatch):
+    """#598: 柱2生成例外を exit 0 相当の本文でも測定不能として見える形に保つ。"""
+    proj = _isolate_env(tmp_path, monkeypatch)
+    import audit as _audit
+    import results_board
+
+    monkeypatch.setattr(results_board, "load_effective_history", lambda slug: [])
+    monkeypatch.setattr(results_board, "load_revert_events", lambda slug: [])
+    monkeypatch.setattr(
+        results_board,
+        "_build_capture_recall",
+        lambda: {"measured": False, "reason": "fixture"},
+    )
+    monkeypatch.setattr(
+        results_board,
+        "count_applied_reflections",
+        lambda *args, **kwargs: (_ for _ in ()).throw(PermissionError("pillar2 denied")),
+    )
+
+    output = _audit.run_audit(str(proj), skip_rescore=True, growth=True, dry_run=True)
+
+    assert "実際に反映された改善（直近30日）: 測定不能" in output
+    assert "PermissionError" in output
+    assert "pillar2 denied" in output
+    assert "戦果ボードの生成に失敗しました" not in output
