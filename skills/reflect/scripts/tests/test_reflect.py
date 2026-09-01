@@ -942,7 +942,6 @@ class TestApplyCLI:
     def test_apply_dry_run_writes_nothing(self, tmp_path, capsys):
         """--dry-run では一切書かない（既存 dry-run ゲート貫通規約）。"""
         corr = _make_correction(reflect_status="promoted", session_id="sess1", timestamp="2026-08-17T00:00:00Z")
-        corr.pop("message")
         filepath = _write_corrections(tmp_path, [corr])
         before_bytes = filepath.read_bytes()
         target = tmp_path / "rule.md"
@@ -956,6 +955,31 @@ class TestApplyCLI:
             "--target-path", str(target),
             "--draft-line-file", str(draft_line_file),
             "--corrections-file", str(filepath),
+        ]):
+            reflect.main()
+
+        output = json.loads(capsys.readouterr().out)
+        assert output["status"] == "dry_run"
+        assert filepath.read_bytes() == before_bytes
+
+    def test_apply_dry_run_precedes_correction_message_validation(self, tmp_path, capsys):
+        """--dry-run は本文hash検証より先に返る（dry-run ゲートを後段の検証で殺さない）。"""
+        corr = _make_correction(reflect_status="promoted", session_id="sess1", timestamp="2026-08-17T00:00:00Z")
+        corr.pop("message")
+        filepath = _write_corrections(tmp_path, [corr])
+        before_bytes = filepath.read_bytes()
+        target = tmp_path / "rule.md"
+        target.write_text("- 起草した行\n", encoding="utf-8")
+        draft_line_file = tmp_path / "draft.txt"
+        draft_line_file.write_text("起草した行", encoding="utf-8")
+        source_id = reflect.make_source_correction_id("sess1", "2026-08-17T00:00:00Z")
+
+        with mock.patch("sys.argv", [
+            "reflect.py", "--apply", source_id,
+            "--target-path", str(target),
+            "--draft-line-file", str(draft_line_file),
+            "--corrections-file", str(filepath),
+            "--dry-run",
         ]):
             reflect.main()
 
