@@ -100,6 +100,20 @@ def store_write(
             raise StoreWriteError(msg)
         print(msg + "（warn-only: 書込は継続）", file=sys.stderr)
 
+    # 専用境界自身も公開 guard_problem を使うため、この拒否は generic writer の
+    # 本体だけに置く（#587・2026-09-01 裁定）。
+    try:
+        import store_registry
+    except ImportError:
+        store_registry = None
+    decl = store_registry.declaration_for(store_name) if store_registry is not None else None
+    boundary = getattr(decl, "write_boundary", None)
+    if boundary is not None:
+        raise StoreWriteError(
+            f"[evolve-anything:write-barrier] ストア '{store_name}' は専用の追記境界 "
+            f"'{boundary}' を経由する必要があります（generic store_write からの直接書込みは拒否・#587）"
+        )
+
     # DATA_DIR は rl_common パッケージ属性（mock.patch.object(rl_common, "DATA_DIR", ...)
     # 経路の SoT）。遅延 import で call-time の live 値を参照する。
     import rl_common

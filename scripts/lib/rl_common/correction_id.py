@@ -77,6 +77,38 @@ def append_correction_record(filepath: Path, record: dict) -> AppendResult:
     return AppendResult(status="retry_required", reason=result.reason)
 
 
+def append_unique_record(store_name: str, record: dict) -> AppendResult:
+    """登録ストアへ correction_id 重複拒否つきで追記する専用境界。"""
+    if not persistence._HAVE_FCNTL:
+        return AppendResult(
+            status="unsupported_platform",
+            reason="fcntl unavailable: unique append is not supported",
+        )
+
+    from .store_write import guard_problem
+    import rl_common
+
+    problem = guard_problem(store_name)
+    if problem is not None:
+        return AppendResult(status="unregistered_store", reason=problem)
+    correction_id = record.get("correction_id")
+    if not validate_correction_id(correction_id):
+        return AppendResult(status="invalid_id")
+
+    rl_common.ensure_data_dir()
+    filepath = rl_common.DATA_DIR / store_name
+    result = persistence.append_jsonl(
+        filepath,
+        record,
+        duplicate_check=lambda existing: has_duplicate_id(existing, correction_id),
+    )
+    if result.status == "written":
+        return AppendResult(status="appended")
+    if result.status == "duplicate":
+        return AppendResult(status="duplicate_id")
+    return AppendResult(status="retry_required", reason=result.reason)
+
+
 @dataclass
 class ResolveResult:
     status: str

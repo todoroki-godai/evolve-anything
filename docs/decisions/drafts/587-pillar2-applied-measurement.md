@@ -320,22 +320,26 @@ class StoreDeclaration:
 **`reflect_apply_events.jsonl` の宣言（§4.1）へ `write_boundary="rl_common.correction_id.
 append_unique_record"` を追加する**。
 
-**`store_write._guard_problem`（`scripts/lib/rl_common/store_write.py:51-`）へ1分岐追加**:
+**2026-09-01 の実装裁定**: 公開 `guard_problem` は `_guard_problem` の薄いラッパーで、
+`append_unique_record` 自身もこれを呼ぶ。したがって専用境界の拒否を `_guard_problem` に
+置くと専用境界まで自己拒否する。`_guard_problem` は従来どおり active/kind だけを見て、
+**`store_write()` 本体の `_guard_problem` 呼出し直後へ1分岐追加する**:
 
 ```python
-def _guard_problem(store_name: str) -> Optional[str]:
-    ...（既存の未登録/非active/kind=json判定はそのまま）
+def store_write(store_name: str, record: dict, *, guard_mode=None) -> None:
+    ...（既存の _guard_problem による未登録/非active/kind=json判定はそのまま）
+    decl = declaration_for(store_name)
     boundary = getattr(decl, "write_boundary", None)
     if boundary is not None:
-        return (
+        raise StoreWriteError(
             f"ストア '{store_name}' は専用の追記境界 '{boundary}' を経由する必要があります"
             "（generic store_write からの直接書込みは拒否・#587）"
         )
-    return None
 ```
 
 **`append_unique_record`（§3.2）自体は `store_write` を経由しない**（`persistence.append_jsonl`
-を直接呼ぶ）ため、この拒否分岐の影響を受けない——専用境界関数だけが書ける状態になる。
+を直接呼び、`guard_problem` は専用境界を拒否しない）ため、この拒否分岐の影響を受けない
+——専用境界関数だけが書ける状態になる。
 
 **既存テストへの実測した影響（実装手順に明記）**:
 - `test_write_barrier.py:363-374` `test_store_write_resolves_every_active_store_under_canonical`
@@ -1360,7 +1364,7 @@ test_append_jsonl_correction_id.py`の2ファイルで、新規分はロジッ�
 | **(p)（巡2 [Must]1・新設）** | `reflect_fold.fold_corrections`: `confirms_attempt_id`解決チェック（`attempt = attempts_by_own_id.get(attempt_id); if attempt is None: ...continue`）を削除し、参照先の有無を確認せず無条件に受理する変異 | `correction_applied` は既存 attempt への参照でなければならない | `test_reflect_fold.py::test_orphan_applied_confirmation_is_degraded`（reviewer提案の変異そのもの） | baseline: `confirms_attempt_id`が実在しないattemptを指す孤立`applied`イベントのfixtureで、`orphan_confirmations==1`・`degraded==True`になり`count`には混入せず緑。変異適用後は検証なしで受理され、kind/path/draft/hashが取得できず（attemptが無いため）例外になるか、実装次第で不正な値のまま`count`に混入し赤 |
 | (p)-陽性対照 | 同上 | 同上 | 同上 | 正しい`confirms_attempt_id`で実在attemptを参照する正常fixtureでは`count`に含まれ緑 |
 | **(q)（巡2 [Must]1・新設）** | `reflect_fold.fold_corrections`: hashハッシュ突合ブロック（`if expected_hash is not None and ev.get(...) != expected_hash: continue`）を削除する変異 | attemptのhashは基底messageと一致しなければ照合済みと認めない | `test_reflect_fold.py::test_attempt_hash_mismatch_rejected` | baseline: 基底の`extracted_learning`から計算した期待ハッシュと異なる`correction_message_sha256`を持つattemptのfixtureで、`hash_mismatch_count==1`になり`count`から除外され緑。変異適用後は無検証で採用され`count`に混入し赤 |
-| **(r)（巡2 [Must]2・新設）** | `store_write._guard_problem`: §3.4 の `write_boundary` 分岐（`if boundary is not None: return ...`）を削除する変異（reviewer提案の変異そのもの） | 専用境界を持つストアへの generic 直接書込みを拒否する | `test_write_barrier.py::test_generic_store_write_rejects_specialized_boundary` | baseline: `store_write("reflect_apply_events.jsonl", {"probe": 1})` が `StoreWriteError` を送出し緑。変異適用後は例外を送出せず書込みが成功して赤 |
+| **(r)（巡2 [Must]2・新設）** | `store_write.store_write`: §3.4 の `write_boundary` 拒否分岐（`if boundary is not None: raise StoreWriteError(...)`）を削除する変異（2026-09-01実装裁定） | 専用境界を持つストアへの generic 直接書込みを拒否する | `test_write_barrier.py::test_generic_store_write_rejects_specialized_boundary` | baseline: `store_write("reflect_apply_events.jsonl", {"probe": 1})` が `StoreWriteError` を送出し緑。変異適用後は例外を送出せず書込みが成功して赤 |
 | **(s)（巡2 [Must]2・新設）** | `reflect.py` の `--apply` ハンドラ: §8.1手順2の「フェーズ1が`appended`以外ならフェーズ2へ進まない」分岐を削除し、第6版の挙動（常にフェーズ2を実行する）へ戻す変異 | フェーズ1の成功をフェーズ2実行の前提条件にする | `test_reflect_apply_event.py::test_apply_aborts_when_phase1_append_fails` | baseline: フェーズ1が`retry_required`を返すようモックした状態で`--apply`を実行すると、`update_reflect_status`が呼ばれず`reflect_status`は`"pending"`のまま・非0終了で緑。変異適用後は`reflect_status`が`"applied"`になるのにイベントが無い状態が発生し赤 |
 | **(t)（巡2 [Must]3・新設）** | `pillar2_metrics._read_stable_snapshot`: stat比較（`if stat_before == stat_after: return ...`）を常に`True`扱いにする変異（=snapshot安定性チェックの無効化） | base/eventのread前後でファイルが変化していないことを確認する | `test_pillar2_metrics.py::test_unstable_snapshot_forces_not_measured` | baseline: `read_corrections_records_with_health`呼出しの間に`corrections.jsonl`のmtimeが変化するようモックしたfixtureで、3回のretryが尽きて`snapshot_stable==False`・`measured==False`になり緑。変異適用後は不安定な読取のまま`measured==True`が返り赤 |
 | **(u)（[Should]2の実装ガード・新設）** | `pillar2_metrics.count_applied_reflections`: `if f.base.get("reflect_status") != "applied": continue` の行を削除する変異（§16「見落としやすい1行」） | 未反映の通常バックログ（pending等）は柱2の legacy_unverified に混入しない | `test_pillar2_metrics.py::test_pending_backlog_does_not_pollute_legacy_unverified` | baseline: `reflect_status="pending"`の基底が複数あっても`legacy_unverified_count==0`・`measured==True`（イベントも無反映もない通常状態）で緑。変異適用後は全ての`pending`基底が`legacy_unverified_count`に混入し`measured`が恒常的に`False`になり赤 |

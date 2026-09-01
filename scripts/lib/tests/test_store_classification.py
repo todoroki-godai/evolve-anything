@@ -30,6 +30,7 @@ _STATUS_DEAD_EXEMPT: set[str] = set()
 # 既存の実ファイル・writer/reader コードの宣言漏れバックフィルで新設ではない
 # （詳細は store_registry.py の該当 StoreDeclaration note 参照）。
 _RAW_EVENT = {
+    "reflect_apply_events.jsonl",
     "corrections.jsonl",
     "usage.jsonl",
     "usage-registry.jsonl",
@@ -144,7 +145,7 @@ def test_classification_golden_counts_and_names() -> None:
     assert by_classification.get("derived_cache", set()) == _DERIVED_CACHE
     assert by_classification.get("dead", set()) == _DEAD
 
-    assert len(_RAW_EVENT) == 12
+    assert len(_RAW_EVENT) == 13
     assert len(_WORKFLOW_STATE) == 18
     assert len(_DERIVED_CACHE) == 15
     assert len(_DEAD) == 0

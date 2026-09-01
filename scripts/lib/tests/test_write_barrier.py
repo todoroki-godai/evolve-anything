@@ -335,6 +335,7 @@ _EXPECTED_ACTIVE_STORES = [
     # #475 §12 決定4: 未登録だった live store の宣言バックフィル。
     "optimize_history/<slug>.jsonl",
     "pj_slug_cache.json",
+    "reflect_apply_events.jsonl",
     "remediation-outcomes.jsonl",
     "remediation_suppression/<slug>.jsonl",
     "remediation_surfaced/<slug>.json",
@@ -368,10 +369,18 @@ def test_store_write_resolves_every_active_store_under_canonical(data_dir):
     for name in store_registry.active_store_names():
         if "<" in name or not name.endswith(".jsonl"):
             continue
+        if getattr(store_registry.declaration_for(name), "write_boundary", None):
+            continue
         store_write(name, {"probe": name})
         assert (data_dir / name).exists()
         # 解決先は常に canonical 直下（別 dir に漏れない）。
         assert json.loads((data_dir / name).read_text().splitlines()[0]) == {"probe": name}
+
+
+def test_generic_store_write_rejects_specialized_boundary(data_dir):
+    with pytest.raises(StoreWriteError, match="専用の追記境界"):
+        store_write("reflect_apply_events.jsonl", {"probe": 1})
+    assert not (data_dir / "reflect_apply_events.jsonl").exists()
 
 
 # --- Phase 2b wave 3: scripts/lib caller の store_write 経由ルーティング -------

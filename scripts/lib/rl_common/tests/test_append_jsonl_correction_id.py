@@ -11,7 +11,8 @@ if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
 from rl_common import persistence
-from rl_common.correction_id import append_correction_record
+import rl_common
+from rl_common.correction_id import append_correction_record, append_unique_record
 
 
 VALID_ID = "a" * 32
@@ -65,6 +66,30 @@ def test_same_id_is_rejected_but_distinct_ids_are_preserved(tmp_path):
     assert append_correction_record(path, first).status == "duplicate_id"
     assert append_correction_record(path, second).status == "appended"
     assert [json.loads(line) for line in path.read_text().splitlines()] == [first, second]
+
+
+def test_append_unique_record_resolves_registered_store_from_data_dir(tmp_path, monkeypatch):
+    monkeypatch.setattr(rl_common, "DATA_DIR", tmp_path)
+    record = {"correction_id": VALID_ID, "event_type": "correction_skipped"}
+
+    result = append_unique_record("reflect_apply_events.jsonl", record)
+
+    assert result.status == "appended"
+    assert json.loads((tmp_path / "reflect_apply_events.jsonl").read_text()) == record
+
+
+def test_append_unique_record_rejects_duplicate_id(tmp_path, monkeypatch):
+    monkeypatch.setattr(rl_common, "DATA_DIR", tmp_path)
+    record = {"correction_id": VALID_ID}
+    assert append_unique_record("reflect_apply_events.jsonl", record).status == "appended"
+    assert append_unique_record("reflect_apply_events.jsonl", record).status == "duplicate_id"
+
+
+def test_append_unique_record_rejects_unregistered_store(tmp_path, monkeypatch):
+    monkeypatch.setattr(rl_common, "DATA_DIR", tmp_path)
+    result = append_unique_record("not-registered.jsonl", {"correction_id": VALID_ID})
+    assert result.status == "unregistered_store"
+    assert not (tmp_path / "not-registered.jsonl").exists()
 
 
 def test_fcntl_unavailable_is_rejected(monkeypatch, tmp_path):
