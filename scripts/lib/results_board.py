@@ -42,14 +42,42 @@ from measurement_result import (
 import rl_common.detection as correction_detection
 
 _WINDOW_DAYS = 30
-_CAPTURE_EVAL_PATH = Path(__file__).resolve().parents[1] / "bench" / "a0_eval_set.jsonl"
+_CAPTURE_EVAL_FILENAME = "a0_eval_set.jsonl"
+_CAPTURE_EVAL_PATH = Path(__file__).resolve().parents[1] / "bench" / _CAPTURE_EVAL_FILENAME
+
+
+def _capture_eval_candidates() -> List[Path]:
+    """評価セットの探索順を返す（checkout 同梱 → git 管理外の共有 DATA_DIR）。
+
+    評価セットは他PJの生発話を含むため git 管理外（`.gitignore:25`）で、共有 checkout に
+    しか実体が無い。参照先を checkout 相対だけにすると worktree・他マシン・fresh clone から
+    柱1が測定不能になるため、共有 DATA_DIR 配下も探す（#601）。
+
+    **DATA_DIR は import 時に固定しない。** テストの HOME 隔離が DATA_DIR を tmp へ
+    rebase するため、module import 時に解決すると隔離前の実パスを掴む。
+    """
+    import rl_common
+
+    return [
+        _CAPTURE_EVAL_PATH,
+        Path(rl_common.DATA_DIR) / "bench" / _CAPTURE_EVAL_FILENAME,
+    ]
+
+
+def _resolve_capture_eval_path() -> Optional[Path]:
+    """最初に実在した評価セットのパスを返す。どこにも無ければ None。"""
+    for candidate in _capture_eval_candidates():
+        if candidate.exists():
+            return candidate
+    return None
 
 
 def _build_capture_recall() -> Dict[str, Any]:
-    if not _CAPTURE_EVAL_PATH.exists():
+    eval_path = _resolve_capture_eval_path()
+    if eval_path is None:
         return {"measured": False, "reason": "評価セットなし"}
     try:
-        rows = load_capture_eval_set(_CAPTURE_EVAL_PATH)
+        rows = load_capture_eval_set(eval_path)
         result = evaluate_capture_recall(
             rows,
             lambda text: correction_detection._detect_correction(text, false_positive_hashes=()),

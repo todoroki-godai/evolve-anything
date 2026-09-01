@@ -897,6 +897,52 @@ class TestRenderResultsBoard:
         assert result["measured"] is True
         assert result["pattern_version"] == results_board.correction_detection.CORRECTION_PATTERN_VERSION
 
+    def test_capture_recall_falls_back_to_shared_data_dir(self, monkeypatch, tmp_path):
+        """checkout 同梱が無くても共有 DATA_DIR にあれば測れる（#601 worktree 実行）。"""
+        import rl_common
+
+        missing = tmp_path / "absent" / "eval.jsonl"
+        shared = tmp_path / "data" / "bench" / results_board._CAPTURE_EVAL_FILENAME
+        shared.parent.mkdir(parents=True)
+        shared.touch()
+        monkeypatch.setattr(results_board, "_CAPTURE_EVAL_PATH", missing)
+        monkeypatch.setattr(rl_common, "DATA_DIR", tmp_path / "data")
+        monkeypatch.setattr(
+            results_board,
+            "load_capture_eval_set",
+            lambda _path: [{"text": "違う、そこです。", "label": "TP"}],
+        )
+
+        result = results_board._build_capture_recall()
+
+        assert result["measured"] is True
+
+    def test_capture_recall_unmeasured_when_absent_everywhere(self, monkeypatch, tmp_path):
+        """どの候補にも実体が無ければ測定不能と申告する（黙って 0 件にしない）。"""
+        import rl_common
+
+        monkeypatch.setattr(results_board, "_CAPTURE_EVAL_PATH", tmp_path / "absent" / "eval.jsonl")
+        monkeypatch.setattr(rl_common, "DATA_DIR", tmp_path / "empty-data")
+
+        result = results_board._build_capture_recall()
+
+        assert result == {"measured": False, "reason": "評価セットなし"}
+
+    def test_capture_eval_prefers_checkout_over_shared(self, monkeypatch, tmp_path):
+        """両方に実体があるときは checkout 同梱を先に読む（探索順を固定する）。"""
+        import rl_common
+
+        bundled = tmp_path / "checkout" / results_board._CAPTURE_EVAL_FILENAME
+        bundled.parent.mkdir(parents=True)
+        bundled.touch()
+        shared = tmp_path / "data" / "bench" / results_board._CAPTURE_EVAL_FILENAME
+        shared.parent.mkdir(parents=True)
+        shared.touch()
+        monkeypatch.setattr(results_board, "_CAPTURE_EVAL_PATH", bundled)
+        monkeypatch.setattr(rl_common, "DATA_DIR", tmp_path / "data")
+
+        assert results_board._resolve_capture_eval_path() == bundled
+
     @pytest.mark.parametrize(
         ("content", "reason"),
         [

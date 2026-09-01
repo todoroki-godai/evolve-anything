@@ -163,8 +163,9 @@ def pillar_scopes(slug: str) -> Dict[str, Dict[str, Any]]:
         "capture_recall": {
             "kind": "local_untracked_eval_set",
             "label": (
-                "ローカル評価セット（git 管理外・環境依存。共有 checkout にのみ存在し、"
-                "worktree・他マシン・fresh clone では測定不能）"
+                "ローカル評価セット（git 管理外・マシン依存。checkout 同梱または "
+                "共有 DATA_DIR の bench/ にあれば測れる。実体を持たないマシン・"
+                "fresh clone では測定不能）"
             ),
         },
         "accepted_improvements": dict(project),
