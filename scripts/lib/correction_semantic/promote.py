@@ -25,6 +25,7 @@ from weak_signals.ttl import is_effectively_expired
 
 # #46 read 層拡張: union read（昇格候補）+ union mark（再昇格防止）の候補 dir 解決を共有する。
 from store_read_union import iter_read_store_paths as _iter_read_store_paths  # noqa: E402
+from rl_common import append_correction_record, new_correction_id
 
 
 def _normalize_project_path(value: str) -> str:
@@ -359,6 +360,7 @@ def _build_correction_record(
     prov = rec.get("provenance") or {}
     now = datetime.now(timezone.utc).isoformat()
     out = {
+        "correction_id": new_correction_id(),
         "correction_type": "semantic_idiom",
         "matched_patterns": [],
         "message": _correction_message(rec),
@@ -542,12 +544,7 @@ def promote_signals(
             "skipped": _build_skipped(),
         }
 
-    # corrections に human-source レコードを追記
-    # ADR-049 / #55: production（corrections_path 無し）は単一書込ゲート store_write、
-    # 明示 path（テスト/isolation）は store_write_raw でそのパスを尊重する。
-    from rl_common import store_write, store_write_raw
-
-    use_gate = corrections_path is None
+    # corrections に human-source レコードを専用境界から追記する。
     if corrections_path is None:
         import rl_common as _rc
 
@@ -562,12 +559,15 @@ def promote_signals(
         record = _build_correction_record(
             rec, project_path, source=source, idiom_key=idiom_keys.get(key),
         )
-        if use_gate:
-            store_write("corrections.jsonl", record)
-        else:
-            store_write_raw(corrections_path, record)
-        if key:
+        append_result = append_correction_record(corrections_path, record)
+        if append_result.status == "appended" and key:
             promoted_keys.add(key)
+        elif append_result.status != "appended":
+            print(
+                f"[evolve-anything:correction] record not saved: {append_result.status}"
+                + (f" ({append_result.reason})" if append_result.reason else ""),
+                file=sys.stderr,
+            )
 
     # weak_signal を promoted=True にマーク（再昇格防止・union dir 全て / hermetic）
     _mark_promoted(weak_signals_path, promoted_keys)

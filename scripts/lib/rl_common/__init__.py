@@ -198,6 +198,7 @@ from .detection import (  # noqa: F401, E402
 # project 識別子 / JSONL 追記 — Slice 4
 from .persistence import (  # noqa: F401, E402
     PJ_SLUG_NORMALIZATION_DATE,
+    WriteResult,
     append_jsonl,
     extract_worktree_info,
     get_preceding_tool_calls,
@@ -220,8 +221,21 @@ from .usage_schema import (  # noqa: F401, E402
 # write barrier 単一書込ゲート — ADR-049 / #55
 from .store_write import (  # noqa: F401, E402
     StoreWriteError,
+    guard_problem,
     store_write,
     store_write_raw,
+)
+
+# correction record の不変IDと専用保存境界 — #593
+from .correction_id import (  # noqa: F401, E402
+    AppendResult,
+    ResolveResult,
+    append_correction_record,
+    find_duplicate_ids,
+    has_duplicate_id,
+    new_correction_id,
+    resolve_correction_id,
+    validate_correction_id,
 )
 
 # 偽陽性フィードバック管理 — Slice 4

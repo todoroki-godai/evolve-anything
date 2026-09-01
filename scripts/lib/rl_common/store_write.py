@@ -74,6 +74,11 @@ def _guard_problem(store_name: str) -> Optional[str]:
     return None
 
 
+def guard_problem(store_name: str) -> Optional[str]:
+    """store_name の write 可否を返す公開API。判定実装は `_guard_problem` が単一ソース。"""
+    return _guard_problem(store_name)
+
+
 def store_write(
     store_name: str, record: dict, *, guard_mode: Optional[str] = None
 ) -> None:

@@ -32,7 +32,7 @@ from line_limit import check_line_limit, suggest_separation
 from semantic_detector import detect_contradictions, validate_corrections
 from similarity import jaccard_coefficient, tokenize
 
-from rl_common import cleanup_false_positives
+from rl_common import cleanup_false_positives, resolve_correction_id
 
 try:
     from episodic_retriever import find_episodic_duplicates, promote_to_episodic
@@ -122,6 +122,35 @@ def load_corrections(filepath: Path = CORRECTIONS_FILE) -> list[dict]:
         except json.JSONDecodeError:
             continue
     return records
+
+
+def resolve_source_correction_id(records: list[dict], source_correction_id: str) -> dict:
+    """既存の複合 source ID から不変 correction_id を読取専用で解決する。"""
+    candidates = []
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        session_id = record.get("session_id", "")
+        timestamp = record.get("timestamp", "")
+        if (
+            session_id
+            and timestamp
+            and make_source_correction_id(session_id, timestamp) == source_correction_id
+        ):
+            candidates.append(record)
+    if not candidates:
+        return {"status": "not_found"}
+    if len(candidates) > 1:
+        return {"status": "ambiguous", "match_count": len(candidates)}
+
+    correction_id = candidates[0].get("correction_id")
+    result = resolve_correction_id(records, correction_id)
+    if result.status != "found":
+        output = {"status": result.status}
+        if result.match_count:
+            output["match_count"] = result.match_count
+        return output
+    return {"status": "found", "correction_id": correction_id}
 
 
 def extract_pending(records: list[dict]) -> list[dict]:
@@ -968,6 +997,13 @@ def main():
     parser.add_argument("--skip-semantic", action="store_true", help="セマンティック検証をスキップ")
     parser.add_argument("--model", default="sonnet", help="セマンティック検証のモデル")
     parser.add_argument("--corrections-file", type=str, default=None, help="corrections.jsonl のパス（テスト用）")
+    parser.add_argument(
+        "--resolve-source-id",
+        type=str,
+        default=None,
+        metavar="SOURCE_CORRECTION_ID",
+        help="複合 source_correction_id に対応する不変 correction_id を読取専用で返す",
+    )
     parser.add_argument("--promote-episodic", action="store_true", help="指定 correction を episodic 層に昇格")
     parser.add_argument("--session-id", type=str, default=None, help="--promote-episodic: 昇格する correction の session_id")
     parser.add_argument("--timestamp", type=str, default=None, help="--promote-episodic: 昇格する correction の timestamp")
@@ -1044,6 +1080,13 @@ def main():
     project_root = Path(current_project) if current_project else Path.cwd()
     weak_signals_file = Path(args.weak_signals_file) if args.weak_signals_file else None
     idioms_file = Path(args.idioms_file) if args.idioms_file else None
+
+    if args.resolve_source_id is not None:
+        result = resolve_source_correction_id(
+            load_corrections(corrections_file), args.resolve_source_id
+        )
+        print(json.dumps(result, ensure_ascii=False))
+        return
 
     # --show-weak-signals: weak_signals レーンの未昇格レコードを表示（#431/#432 二層化）
     # --context が渡されたら relevance_gate（#565）で「現在の文脈」と無関係な過去経験を

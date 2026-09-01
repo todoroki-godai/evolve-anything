@@ -5,8 +5,9 @@
 """
 import json
 import sys
+from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional
+from typing import Callable, List, Optional
 
 try:
     import fcntl as _fcntl
@@ -151,16 +152,50 @@ def get_preceding_tool_calls(
     return entries[-n:] if len(entries) > n else entries
 
 
-def append_jsonl(filepath: Path, record: dict) -> None:
-    """JSONL ファイルに1行追記する。新規作成時はパーミッション 600 を設定。失敗時はサイレント。"""
+@dataclass
+class WriteResult:
+    status: str
+    reason: Optional[str] = None
+
+
+def _read_records_locked(filepath: Path) -> list[dict]:
+    """呼出側が排他ロックを保持している間に既存 dict レコードを読む。"""
+    records: list[dict] = []
+    try:
+        for line in filepath.read_text(encoding="utf-8").splitlines():
+            try:
+                value = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(value, dict):
+                records.append(value)
+    except FileNotFoundError:
+        pass
+    return records
+
+
+def append_jsonl(
+    filepath: Path,
+    record: dict,
+    *,
+    duplicate_check: Optional[Callable[[list[dict]], bool]] = None,
+) -> WriteResult:
+    """JSONLへ排他的に追記する。重複判定callbackはロック保持中に評価する。"""
     is_new = False
     try:
         with open(filepath, "a", encoding="utf-8") as f:
             if _HAVE_FCNTL:
                 _fcntl.flock(f, _fcntl.LOCK_EX)  # ブロッキング取得（意図的）
             try:
+                if duplicate_check is not None:
+                    existing = _read_records_locked(filepath)
+                    if duplicate_check(existing):
+                        return WriteResult(status="duplicate")
                 is_new = f.tell() == 0  # flock 取得後に判定し TOCTOU を回避
                 f.write(json.dumps(record, ensure_ascii=False) + "\n")
+                # buffered data を可視化してからロックを解放する。同一IDの次writerが
+                # ロック取得後に必ず直前の行を読めることが一意性保証の一部。
+                f.flush()
             finally:
                 if _HAVE_FCNTL:
                     _fcntl.flock(f, _fcntl.LOCK_UN)
@@ -169,5 +204,7 @@ def append_jsonl(filepath: Path, record: dict) -> None:
                 filepath.chmod(0o600)
             except OSError as e:
                 print(f"[evolve-anything] chmod file warning: {e}", file=sys.stderr)
+        return WriteResult(status="written")
     except OSError as e:
         print(f"[evolve-anything] write failed: {e}", file=sys.stderr)
+        return WriteResult(status="retry_required", reason=str(e))
