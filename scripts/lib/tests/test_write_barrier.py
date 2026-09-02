@@ -265,6 +265,13 @@ def test_store_write_raw_rejects_specialized_boundary_under_canonical_datadir(
     assert not target.exists()
 
 
+def test_store_write_raw_boundary_cannot_be_downgraded_to_warn(data_dir) -> None:
+    target = data_dir / "reflect_apply_events.jsonl"
+    with pytest.raises(StoreWriteError, match="専用の追記境界"):
+        store_write_raw(target, {"correction_id": "a" * 32}, guard_mode="warn")
+    assert not target.exists()
+
+
 def test_store_write_raw_keeps_explicit_path_exception_for_boundary_store(
     tmp_path_factory, data_dir
 ) -> None:
