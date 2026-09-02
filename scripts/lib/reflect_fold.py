@@ -4,7 +4,7 @@ from __future__ import annotations
 import hashlib
 import re
 import unicodedata
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -70,6 +70,7 @@ class FoldHealth:
     orphan_confirmations: int = 0
     duplicate_confirmations: int = 0
     hash_mismatch_count: int = 0
+    invalid_base_id_records: list[dict] = field(default_factory=list, repr=False)
 
 
 def _attempt_is_valid(event: dict) -> bool:
@@ -120,7 +121,8 @@ def fold_corrections(
         if not isinstance(record, dict):
             continue
         correction_id = record.get("correction_id")
-        if not isinstance(correction_id, str) or not correction_id:
+        if not validate_correction_id(correction_id):
+            health.invalid_base_id_records.append(record)
             continue
         if correction_id in duplicate_ids:
             continue

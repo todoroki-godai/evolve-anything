@@ -274,6 +274,20 @@ def _pillar2_degraded_reason(pillar2: Dict[str, Any]) -> str:
         count = int(health.get(key) or 0)
         if count:
             reasons.append(f"{label} {count} 件")
+    invalid_base_id_applied = int(
+        health.get("invalid_base_id_applied_row_count") or 0
+    )
+    if invalid_base_id_applied:
+        same_project = int(
+            health.get("invalid_base_id_applied_same_project_row_count") or 0
+        )
+        global_looking = int(
+            health.get("invalid_base_id_applied_global_looking_row_count") or 0
+        )
+        reasons.append(
+            f"不正IDの反映済み基底 {invalid_base_id_applied} 件"
+            f"（当PJ {same_project}・汎用扱い {global_looking}）"
+        )
     legacy = int(pillar2.get("legacy_unverified_count") or 0)
     if legacy:
         reasons.append(f"未照合の旧記録 {legacy} 件")

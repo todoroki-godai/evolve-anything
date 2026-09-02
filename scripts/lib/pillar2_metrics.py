@@ -92,6 +92,30 @@ def _pillar2_project_scope(correction: dict, project_root: Path) -> str:
     return _classify_project_scope(correction, project_root)
 
 
+def _count_scoped_invalid_base_ids(fold_health, project_root: Path) -> dict[str, int]:
+    """不正 ID 基底を柱2の信頼境界順に分類する。"""
+    counts = {
+        "invalid_base_id_applied_same_project_row_count": 0,
+        "invalid_base_id_applied_global_looking_row_count": 0,
+        "invalid_base_id_non_applied_same_project_row_count": 0,
+        "invalid_base_id_non_applied_global_looking_row_count": 0,
+    }
+    for correction in fold_health.invalid_base_id_records:
+        scope = _pillar2_project_scope(correction, project_root)
+        if scope not in ("same-project", "global-looking"):
+            continue
+        if correction.get("invalidated"):
+            continue
+        status = (
+            "applied"
+            if correction.get("reflect_status") == "applied"
+            else "non_applied"
+        )
+        scope_key = scope.replace("-", "_")
+        counts[f"invalid_base_id_{status}_{scope_key}_row_count"] += 1
+    return counts
+
+
 def count_applied_reflections(
     project_root: Path,
     *,
@@ -126,12 +150,28 @@ def count_applied_reflections(
         decay_grace_days=DEFAULT_DECAY_DAYS,
     )
     window_start = now - timedelta(days=window_days)
+    invalid_base_id_counts = _count_scoped_invalid_base_ids(
+        fold_health, Path(project_root)
+    )
+    invalid_base_id_applied_row_count = (
+        invalid_base_id_counts["invalid_base_id_applied_same_project_row_count"]
+        + invalid_base_id_counts["invalid_base_id_applied_global_looking_row_count"]
+    )
+    invalid_base_id_non_applied_row_count = (
+        invalid_base_id_counts["invalid_base_id_non_applied_same_project_row_count"]
+        + invalid_base_id_counts[
+            "invalid_base_id_non_applied_global_looking_row_count"
+        ]
+    )
 
     eligible = []
     legacy_unverified_count = 0
     invalidated_count = 0
     other_kind_count = 0
     for folded_correction in folded:
+        scope = _pillar2_project_scope(folded_correction.base, Path(project_root))
+        if scope not in ("same-project", "global-looking"):
+            continue
         if folded_correction.base.get("invalidated"):
             invalidated_count += 1
             continue
@@ -145,9 +185,6 @@ def count_applied_reflections(
             continue
         timestamp = _parse_iso8601_utc(folded_correction.reflect_applied_at)
         if timestamp is None or not (window_start <= timestamp <= now):
-            continue
-        scope = _pillar2_project_scope(folded_correction.base, Path(project_root))
-        if scope not in ("same-project", "global-looking"):
             continue
         eligible.append(folded_correction)
 
@@ -186,6 +223,7 @@ def count_applied_reflections(
         or fold_health.duplicate_confirmations > 0
         or fold_health.hash_mismatch_count > 0
         or legacy_unverified_count > 0
+        or invalid_base_id_applied_row_count > 0
     )
 
     return {
@@ -213,6 +251,9 @@ def count_applied_reflections(
             "orphan_confirmations": fold_health.orphan_confirmations,
             "duplicate_confirmations": fold_health.duplicate_confirmations,
             "hash_mismatch_count": fold_health.hash_mismatch_count,
+            "invalid_base_id_applied_row_count": invalid_base_id_applied_row_count,
+            "invalid_base_id_non_applied_row_count": invalid_base_id_non_applied_row_count,
+            **invalid_base_id_counts,
         },
         "not_measured": _not_measured_targets(),
         "generated_at": now.isoformat(),

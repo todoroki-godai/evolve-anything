@@ -883,6 +883,52 @@ class TestRenderResultsBoard:
         assert "実際に反映された改善（直近30日）: 7 件" not in text
         assert "イベント記録を読めません" in text
 
+    def test_pillar2_invalid_base_id_count_is_in_unmeasured_reason(self):
+        board = self._board(
+            pillar2={
+                "count": 0,
+                "measured": False,
+                "health": {
+                    "degraded": True,
+                    "invalid_base_id_applied_row_count": 1,
+                    "invalid_base_id_non_applied_row_count": 4,
+                    "invalid_base_id_applied_same_project_row_count": 1,
+                    "invalid_base_id_applied_global_looking_row_count": 0,
+                },
+                "not_measured": {},
+            },
+            measurements={
+                "pillar2": {"measured": True, "reason": None, "dropped_lines": 0},
+            },
+        )
+
+        text = "\n".join(results_board.render_results_board(board))
+
+        assert "不正IDの反映済み基底 1 件（当PJ 1・汎用扱い 0）" in text
+        assert "非反映" not in text
+
+    def test_pillar2_invalid_base_id_reason_breaks_down_global_looking(self):
+        board = self._board(
+            pillar2={
+                "count": 0,
+                "measured": False,
+                "health": {
+                    "degraded": True,
+                    "invalid_base_id_applied_row_count": 4,
+                    "invalid_base_id_applied_same_project_row_count": 1,
+                    "invalid_base_id_applied_global_looking_row_count": 3,
+                },
+                "not_measured": {},
+            },
+            measurements={
+                "pillar2": {"measured": True, "reason": None, "dropped_lines": 0},
+            },
+        )
+
+        text = "\n".join(results_board.render_results_board(board))
+
+        assert "不正IDの反映済み基底 4 件（当PJ 1・汎用扱い 3）" in text
+
     def test_pillar2_not_measured_targets_are_always_separate(self):
         text = "\n".join(results_board.render_results_board(self._board()))
 

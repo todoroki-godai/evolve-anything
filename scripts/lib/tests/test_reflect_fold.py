@@ -1,5 +1,7 @@
 from datetime import datetime, timezone
 
+import pytest
+
 from reflect_fold import _hash_correction_message, fold_corrections
 
 
@@ -7,6 +9,7 @@ NOW = datetime(2026, 9, 1, tzinfo=timezone.utc)
 BASE_ID = "a" * 32
 ATTEMPT_ID = "b" * 32
 APPLIED_ID = "c" * 32
+MISSING = object()
 
 
 def _base(**overrides):
@@ -89,6 +92,46 @@ def test_duplicate_base_rows_excluded_and_flagged():
     )
     assert folded == []
     assert health.duplicate_base_row_count == 2
+
+
+@pytest.mark.parametrize(
+    "correction_id",
+    [
+        pytest.param(MISSING, id="absent"),
+        pytest.param(None, id="none"),
+        pytest.param("", id="empty"),
+        pytest.param(0, id="integer"),
+        pytest.param([], id="list"),
+        pytest.param("abc", id="invalid-format"),
+    ],
+)
+def test_invalid_base_ids_are_excluded_and_classified(correction_id):
+    base = _base()
+    if correction_id is MISSING:
+        base.pop("correction_id")
+    else:
+        base["correction_id"] = correction_id
+
+    folded, health = fold_corrections([base], [], now=NOW)
+
+    assert folded == []
+    assert health.invalid_base_id_records == [base]
+
+
+def test_invalid_base_id_non_applied_is_classified_separately():
+    base = _base(correction_id=None, reflect_status="pending")
+
+    folded, health = fold_corrections([base], [], now=NOW)
+
+    assert folded == []
+    assert health.invalid_base_id_records == [base]
+
+
+def test_valid_base_id_is_positive_control_for_invalid_id_health():
+    folded, health = fold_corrections([_base()], [], now=NOW)
+
+    assert len(folded) == 1
+    assert health.invalid_base_id_records == []
 
 
 def test_invalid_attempt_event_rejected():
