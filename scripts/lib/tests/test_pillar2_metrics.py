@@ -166,6 +166,30 @@ def test_same_reflection_is_deduplicated_by_normalized_key(tmp_path):
     assert result["count"] == 1
 
 
+def test_duplicate_event_ids_force_not_measured(tmp_path):
+    second_base = _base(correction_id="d" * 32, extracted_learning="Second API")
+    second_events = [
+        {
+            **_events()[0],
+            "correction_id": "e" * 32,
+            "target_correction_id": second_base["correction_id"],
+            "reflect_target_path": "repo:.claude/rules/second.md",
+            "correction_message_sha256": _hash_correction_message(second_base),
+        },
+        {
+            **_events()[1],
+            "target_correction_id": second_base["correction_id"],
+            "confirms_attempt_id": "e" * 32,
+        },
+    ]
+
+    result = _count(tmp_path, [_base(), second_base], _events() + second_events)
+
+    assert result["count"] == 2
+    assert result["health"]["duplicate_event_row_count"] == 2
+    assert result["measured"] is False
+
+
 def test_other_target_kind_is_excluded(tmp_path):
     events = _events()
     events[0]["reflect_target_kind"] = "other"

@@ -266,6 +266,7 @@ def count_applied_reflections(
         or fold_health.unknown_schema_events > 0
         or fold_health.invalid_events > 0
         or fold_health.duplicate_base_row_count > 0
+        or fold_health.duplicate_event_row_count > 0
         or fold_health.orphan_confirmations > 0
         or fold_health.duplicate_confirmations > 0
         or fold_health.hash_mismatch_count > 0
@@ -296,6 +297,7 @@ def count_applied_reflections(
             "unknown_schema_events": fold_health.unknown_schema_events,
             "invalid_events": fold_health.invalid_events,
             "duplicate_base_row_count": fold_health.duplicate_base_row_count,
+            "duplicate_event_row_count": fold_health.duplicate_event_row_count,
             "orphan_confirmations": fold_health.orphan_confirmations,
             "duplicate_confirmations": fold_health.duplicate_confirmations,
             "hash_mismatch_count": fold_health.hash_mismatch_count,
