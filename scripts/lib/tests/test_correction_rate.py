@@ -211,13 +211,15 @@ class TestFreezeCutoff:
         """未確定分を締切超過・未判定・分類不能へ排他的に分け、合計を固定する。"""
         u_on_time = _utt("on-time")
         u_late = _utt("late")
+        u_late_2 = _utt("late-2")
         u_missing = _utt("missing")
         u_invalid = _utt("invalid")
         raw = _raw(
-            [u_on_time, u_late, u_missing, u_invalid],
+            [u_on_time, u_late, u_late_2, u_missing, u_invalid],
             [
                 _judged(u_on_time, judged_at=_W34_CUTOFF),
                 _judged(u_late, judged_at=_W34_CUTOFF + timedelta(microseconds=1)),
+                _judged(u_late_2, judged_at=_W34_CUTOFF + timedelta(days=1)),
                 {"key": _key(u_invalid), "judged_at": "not-a-date"},
             ],
             [],
@@ -229,7 +231,7 @@ class TestFreezeCutoff:
         assert w["judged_count"] == 1  # cutoff ちょうどは確定内（境界は >）
         assert w["coverage_gap_reason"] == {
             "measured": True,
-            "deadline_exceeded_count": 1,
+            "deadline_exceeded_count": 2,
             "unjudged_count": 1,
             "unclassified_count": 1,
             "reason": None,
@@ -275,6 +277,21 @@ class TestFreezeCutoff:
 
         assert breakdown["measured"] is False
         assert breakdown["reason"] == "内訳合計が母集団と一致しません（1/2 件）"
+
+    def test_coverage_gap_deadline_boundary_is_strictly_after_cutoff(self):
+        """締切ちょうどを超過へ含めない（内訳境界の > を >= に広げない）。"""
+        breakdown = correction_rate._coverage_gap_reason(
+            population_keys=["at-cutoff"],
+            judged_key_set=set(),  # 配線不整合を注入し、内訳関数自身の境界を直接通す
+            judged_at_by_key={"at-cutoff": _W34_CUTOFF},
+            judged_record_keys={"at-cutoff"},
+            cutoff=_W34_CUTOFF,
+            expected_gap_count=1,
+            judged_source_measured=True,
+        )
+
+        assert breakdown["deadline_exceeded_count"] == 0
+        assert breakdown["measured"] is False
 
     def test_tp_detected_after_cutoff_not_counted_but_week_can_still_be_measured(self):
         u1 = _utt("a")
