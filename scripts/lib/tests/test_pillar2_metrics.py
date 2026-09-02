@@ -184,6 +184,34 @@ def test_pre_scheme_applied_baseline_is_complete_and_excluded_from_degradation(t
 
 
 @pytest.mark.parametrize(
+    ("overrides", "expected_invalidated_count"),
+    [
+        pytest.param(
+            {
+                "project_path": "other-project",
+                "message": "Use /srv/other/project/data.sqlite only here",
+            },
+            0,
+            id="other-project",
+        ),
+        pytest.param({"invalidated": True}, 1, id="invalidated"),
+        pytest.param({"reflect_status": "pending"}, 0, id="non-applied"),
+    ],
+)
+def test_baseline_classification_runs_after_scope_invalidation_and_status(
+    tmp_path, overrides, expected_invalidated_count
+):
+    correction_id = next(iter(BASELINE_IDS))
+
+    result = _count(tmp_path, [_base(correction_id=correction_id, **overrides)], [])
+
+    assert result["legacy_unverified_count"] == 0
+    assert result["pre_scheme_excluded_count"] == 0
+    assert result["invalidated_count"] == expected_invalidated_count
+    assert result["measured"] is True
+
+
+@pytest.mark.parametrize(
     "timestamp",
     [
         "2026-08-31T00:00:00Z",
