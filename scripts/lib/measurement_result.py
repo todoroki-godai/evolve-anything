@@ -303,11 +303,12 @@ def render_pillar2_health(
     pillar2: Dict[str, Any], measurements: Dict[str, Dict[str, Any]]
 ) -> list[str]:
     """柱2の件数・測定不能・未測定反映先を混同せず表示する。"""
-    reader_health = measurements.get("pillar2") or {"measured": True}
-    if not reader_health.get("measured"):
+    reader_health = measurements.get("pillar2")
+    effective_reader_health = reader_health or {"measured": True}
+    if not effective_reader_health.get("measured"):
         main = (
             "**実際に反映された改善（直近30日）: 測定不能"
-            f"（{reader_health.get('reason') or '理由不明'}）**"
+            f"（{effective_reader_health.get('reason') or '理由不明'}）**"
         )
     elif not pillar2.get("measured"):
         main = (
@@ -322,7 +323,16 @@ def render_pillar2_health(
         f"{target}（{_pillar2_not_measured_label(target, details)}）"
         for target, details in not_measured.items()
     ]
-    lines = [main]
+    pre_scheme_count = pillar2.get("pre_scheme_excluded_count")
+    if reader_health is None or type(pre_scheme_count) is not int:
+        pre_scheme_line = "新方式で記録を始める前の旧記録: 評価不能（除外件数も評価不能）"
+    else:
+        pre_scheme_line = (
+            f"新方式で記録を始める前の旧記録: {pre_scheme_count}件"
+            "（測定不能の理由からは除外）"
+        )
+
+    lines = [main, pre_scheme_line]
     if targets:
         lines.append(f"未測定の反映先: {' / '.join(targets)}")
     return lines

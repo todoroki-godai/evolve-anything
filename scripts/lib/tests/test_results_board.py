@@ -504,6 +504,8 @@ class TestBuildResultsBoardPillar2:
             "hook": {"reason": "no_store"},
             "pitfall_memory": {"reason": "mtime_collision"},
         }
+        assert board["pillar2"]["pre_scheme_excluded_count"] is None
+        assert "新方式で記録を始める前の旧記録: 評価不能（除外件数も評価不能）" in text
         assert "未測定の反映先: hook（記録ストアなし） / pitfall_memory（mtime 衝突）" in text
 
     def test_applied_reflections_are_wired_with_project_root_and_now(
@@ -514,6 +516,7 @@ class TestBuildResultsBoardPillar2:
         expected = {
             "count": 2,
             "measured": True,
+            "pre_scheme_excluded_count": 4,
             "health": {"degraded": False},
             "applied_list": [],
             "not_measured": {
@@ -552,8 +555,12 @@ class TestBuildResultsBoardPillar2:
         )
 
         assert board["pillar2"]["measured"] is False
+        assert board["pillar2"]["pre_scheme_excluded_count"] is None
         assert board["measurements"]["pillar2"]["measured"] is False
         assert "PermissionError" in board["measurements"]["pillar2"]["reason"]
+        assert "新方式で記録を始める前の旧記録: 評価不能（除外件数も評価不能）" in "\n".join(
+            results_board.render_results_board(board)
+        )
 
 
 class TestBuildResultsBoardDecisions:
@@ -828,11 +835,15 @@ class TestRenderResultsBoard:
             "pillar2": {
                 "count": 2,
                 "measured": True,
+                "pre_scheme_excluded_count": 4,
                 "health": {"degraded": False},
                 "not_measured": {
                     "hook": {"reason": "no_store"},
                     "pitfall_memory": {"reason": "mtime_collision"},
                 },
+            },
+            "measurements": {
+                "pillar2": {"measured": True, "reason": None, "dropped_lines": 0},
             },
             "decisions": {"accepted": 1, "rejected": 2, "pending": 1, "excluded": 4},
             "accepted_list": [{"skill_name": "queue", "timestamp": _iso(1)}],
@@ -863,6 +874,96 @@ class TestRenderResultsBoard:
 
         assert "実際に反映された改善（直近30日）: 2 件" in text
         assert "採用した改善（直近30日）: accepted 1 件" in text
+        assert "新方式で記録を始める前の旧記録: 4件（測定不能の理由からは除外）" in text
+
+    def test_pillar2_exclusion_is_rendered_when_measurement_is_degraded(self):
+        board = self._board(
+            pillar2={
+                "count": 1,
+                "measured": False,
+                "legacy_unverified_count": 1,
+                "pre_scheme_excluded_count": 4,
+                "health": {"degraded": True},
+                "not_measured": {},
+            },
+            measurements={
+                "pillar2": {"measured": True, "reason": None, "dropped_lines": 0},
+            },
+        )
+
+        text = "\n".join(results_board.render_results_board(board))
+
+        assert "実際に反映された改善（直近30日）: 測定不能" in text
+        assert "未照合の旧記録 1 件" in text
+        assert "新方式で記録を始める前の旧記録: 4件（測定不能の理由からは除外）" in text
+
+    def test_pillar2_zero_exclusion_is_always_rendered(self):
+        board = self._board()
+        board["pillar2"]["pre_scheme_excluded_count"] = 0
+
+        lines = results_board.render_results_board(board)
+        text = "\n".join(lines)
+
+        assert "新方式で記録を始める前の旧記録: 0件（測定不能の理由からは除外）" in text
+        main_index = next(
+            index
+            for index, line in enumerate(lines)
+            if "実際に反映された改善（直近30日）" in line
+        )
+        exclusion_index = next(
+            index
+            for index, line in enumerate(lines)
+            if "新方式で記録を始める前の旧記録" in line
+        )
+        assert exclusion_index == main_index + 1
+
+    def test_pillar2_zero_exclusion_is_rendered_when_measurement_is_degraded(self):
+        board = self._board(
+            pillar2={
+                "count": 0,
+                "measured": False,
+                "legacy_unverified_count": 1,
+                "pre_scheme_excluded_count": 0,
+                "health": {"degraded": True},
+                "not_measured": {},
+            },
+        )
+
+        text = "\n".join(results_board.render_results_board(board))
+
+        assert "新方式で記録を始める前の旧記録: 0件（測定不能の理由からは除外）" in text
+
+    @pytest.mark.parametrize(
+        "board_transform",
+        [
+            pytest.param(lambda board: board.pop("pillar2"), id="missing-pillar2-payload"),
+            pytest.param(
+                lambda board: board["pillar2"].pop("pre_scheme_excluded_count"),
+                id="missing-exclusion-key",
+            ),
+            pytest.param(
+                lambda board: board["pillar2"].update(pre_scheme_excluded_count=None),
+                id="null-exclusion-count",
+            ),
+            pytest.param(
+                lambda board: board.pop("measurements", None),
+                id="missing-measurement-health",
+            ),
+        ],
+    )
+    def test_pillar2_exclusion_is_unmeasurable_for_incomplete_contracts(
+        self, board_transform
+    ):
+        board = self._board(
+            measurements={
+                "pillar2": {"measured": True, "reason": None, "dropped_lines": 0},
+            }
+        )
+        board_transform(board)
+
+        text = "\n".join(results_board.render_results_board(board))
+
+        assert "新方式で記録を始める前の旧記録: 評価不能（除外件数も評価不能）" in text
 
     def test_pillar2_unmeasured_never_renders_partial_count(self):
         board = self._board(

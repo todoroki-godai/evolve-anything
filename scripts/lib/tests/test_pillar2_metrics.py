@@ -13,6 +13,13 @@ NOW = datetime(2026, 9, 1, tzinfo=timezone.utc)
 BASE_ID = "a" * 32
 ATTEMPT_ID = "b" * 32
 APPLIED_ID = "c" * 32
+BASELINE_IDS = {
+    "411114e30ec74a1aacf14a1c0572daff",
+    "c25c83983e1f4a0a98b11133a02cab66",
+    "74f0215b71b847a388f3a5af55e24b22",
+    "0f94d4a14da5472c93010b644f6ce46b",
+}
+POST_SCHEME_APPLIED_ID = "6aa192618b1043c3a8afe19ecab18c85"
 
 
 def _write(path: Path, rows: list[dict]) -> None:
@@ -159,6 +166,161 @@ def test_legacy_applied_forces_not_measured(tmp_path):
     assert result["count"] == 0
     assert result["legacy_unverified_count"] == 1
     assert result["measured"] is False
+
+
+def test_pre_scheme_applied_baseline_is_complete_and_excluded_from_degradation(tmp_path):
+    bases = [
+        _base(correction_id=correction_id, timestamp=f"2026-08-{index + 1:02d}T00:00:00Z")
+        for index, correction_id in enumerate(sorted(BASELINE_IDS))
+    ]
+
+    result = _count(tmp_path, bases, [])
+
+    assert metrics.PRE_SCHEME_APPLIED_BASELINE == BASELINE_IDS
+    assert result["count"] == 0
+    assert result["applied_list"] == []
+    assert result["legacy_unverified_count"] == 0
+    assert result["pre_scheme_excluded_count"] == 4
+    assert result["measured"] is True
+    assert result["health"]["degraded"] is False
+
+
+def test_pre_scheme_baseline_mixed_with_legacy_applied_stays_unmeasured(tmp_path):
+    bases = [
+        _base(correction_id=correction_id)
+        for correction_id in sorted(BASELINE_IDS)
+    ]
+    bases.append(_base(correction_id="d" * 32))
+
+    result = _count(tmp_path, bases, [])
+
+    assert result["count"] == 0
+    assert result["applied_list"] == []
+    assert result["legacy_unverified_count"] == 1
+    assert result["pre_scheme_excluded_count"] == 4
+    assert result["measured"] is False
+
+
+def test_pre_scheme_baseline_reapplied_with_pillar2_events_is_counted(tmp_path):
+    correction_id = next(iter(BASELINE_IDS))
+    base = _base(correction_id=correction_id)
+    events = [
+        {
+            **_events()[0],
+            "target_correction_id": correction_id,
+            "correction_message_sha256": _hash_correction_message(base),
+        },
+        {
+            **_events()[1],
+            "target_correction_id": correction_id,
+        },
+    ]
+
+    result = _count(tmp_path, [base], events)
+
+    assert correction_id in metrics.PRE_SCHEME_APPLIED_BASELINE
+    assert result["count"] == 1
+    assert result["pre_scheme_excluded_count"] == 0
+    assert result["reconciled_count"] == 0
+    assert result["measured"] is True
+
+
+def test_reapplied_baseline_is_counted_beside_unreapplied_baseline(tmp_path):
+    reapplied_id, unreapplied_id = sorted(BASELINE_IDS)[:2]
+    reapplied_base = _base(correction_id=reapplied_id)
+    events = [
+        {
+            **_events()[0],
+            "target_correction_id": reapplied_id,
+            "correction_message_sha256": _hash_correction_message(reapplied_base),
+        },
+        {
+            **_events()[1],
+            "target_correction_id": reapplied_id,
+        },
+    ]
+
+    result = _count(
+        tmp_path,
+        [reapplied_base, _base(correction_id=unreapplied_id)],
+        events,
+    )
+
+    assert result["count"] == 1
+    assert result["pre_scheme_excluded_count"] == 1
+    assert result["measured"] is True
+
+
+@pytest.mark.parametrize(
+    ("overrides", "expected_invalidated_count"),
+    [
+        pytest.param(
+            {
+                "project_path": "other-project",
+                "message": "Use /srv/other/project/data.sqlite only here",
+            },
+            0,
+            id="other-project",
+        ),
+        pytest.param({"invalidated": True}, 1, id="invalidated"),
+        pytest.param({"reflect_status": "pending"}, 0, id="non-applied"),
+    ],
+)
+def test_baseline_classification_runs_after_scope_invalidation_and_status(
+    tmp_path, overrides, expected_invalidated_count
+):
+    correction_id = next(iter(BASELINE_IDS))
+
+    result = _count(tmp_path, [_base(correction_id=correction_id, **overrides)], [])
+
+    assert result["legacy_unverified_count"] == 0
+    assert result["pre_scheme_excluded_count"] == 0
+    assert result["invalidated_count"] == expected_invalidated_count
+    assert result["measured"] is True
+
+
+@pytest.mark.parametrize(
+    "timestamp",
+    [
+        "2026-08-31T00:00:00Z",
+        "2026-09-01T10:00:00Z",
+        None,
+        "2099-01-01T00:00:00Z",
+    ],
+    ids=["before-scheme", "after-scheme", "missing", "future"],
+)
+def test_non_baseline_legacy_applied_is_never_rescued_by_timestamp(tmp_path, timestamp):
+    result = _count(
+        tmp_path,
+        [_base(correction_id="d" * 32, timestamp=timestamp)],
+        [],
+    )
+
+    assert result["legacy_unverified_count"] == 1
+    assert result["pre_scheme_excluded_count"] == 0
+    assert result["measured"] is False
+
+
+def test_post_scheme_positive_control_is_counted_and_not_baseline_excluded(tmp_path):
+    base = _base(correction_id=POST_SCHEME_APPLIED_ID)
+    events = [
+        {
+            **_events()[0],
+            "target_correction_id": POST_SCHEME_APPLIED_ID,
+            "correction_message_sha256": _hash_correction_message(base),
+        },
+        {
+            **_events()[1],
+            "target_correction_id": POST_SCHEME_APPLIED_ID,
+        },
+    ]
+
+    result = _count(tmp_path, [base], events)
+
+    assert POST_SCHEME_APPLIED_ID not in metrics.PRE_SCHEME_APPLIED_BASELINE
+    assert result["count"] == 1
+    assert result["pre_scheme_excluded_count"] == 0
+    assert result["measured"] is True
 
 
 def test_same_project_invalid_id_applied_forces_not_measured(tmp_path):

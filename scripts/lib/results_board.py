@@ -345,6 +345,7 @@ def build_results_board(
     pillar2_fallback = {
         "count": 0,
         "measured": False,
+        "pre_scheme_excluded_count": None,
         "health": {"degraded": True},
         "not_measured": {
             target: {"reason": details["reason"]}
@@ -708,6 +709,7 @@ def render_results_board(board: Dict[str, Any]) -> List[str]:
     pillar2 = board.get("pillar2") or {
         "count": 0,
         "measured": False,
+        "pre_scheme_excluded_count": None,
         "health": {"degraded": True},
         "not_measured": {},
     }
