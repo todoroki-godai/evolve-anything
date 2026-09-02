@@ -505,7 +505,7 @@ class TestBuildResultsBoardPillar2:
             "pitfall_memory": {"reason": "mtime_collision"},
         }
         assert board["pillar2"]["pre_scheme_excluded_count"] is None
-        assert "制度開始前の未照合記録: 評価不能（除外件数も評価不能）" in text
+        assert "新方式で記録を始める前の旧記録: 評価不能（除外件数も評価不能）" in text
         assert "未測定の反映先: hook（記録ストアなし） / pitfall_memory（mtime 衝突）" in text
 
     def test_applied_reflections_are_wired_with_project_root_and_now(
@@ -558,7 +558,7 @@ class TestBuildResultsBoardPillar2:
         assert board["pillar2"]["pre_scheme_excluded_count"] is None
         assert board["measurements"]["pillar2"]["measured"] is False
         assert "PermissionError" in board["measurements"]["pillar2"]["reason"]
-        assert "制度開始前の未照合記録: 評価不能（除外件数も評価不能）" in "\n".join(
+        assert "新方式で記録を始める前の旧記録: 評価不能（除外件数も評価不能）" in "\n".join(
             results_board.render_results_board(board)
         )
 
@@ -874,7 +874,7 @@ class TestRenderResultsBoard:
 
         assert "実際に反映された改善（直近30日）: 2 件" in text
         assert "採用した改善（直近30日）: accepted 1 件" in text
-        assert "制度開始前の未照合記録: 4件（測定不能理由から除外）" in text
+        assert "新方式で記録を始める前の旧記録: 4件（測定不能の理由からは除外）" in text
 
     def test_pillar2_exclusion_is_rendered_when_measurement_is_degraded(self):
         board = self._board(
@@ -895,7 +895,7 @@ class TestRenderResultsBoard:
 
         assert "実際に反映された改善（直近30日）: 測定不能" in text
         assert "未照合の旧記録 1 件" in text
-        assert "制度開始前の未照合記録: 4件（測定不能理由から除外）" in text
+        assert "新方式で記録を始める前の旧記録: 4件（測定不能の理由からは除外）" in text
 
     def test_pillar2_zero_exclusion_is_always_rendered(self):
         board = self._board()
@@ -903,7 +903,7 @@ class TestRenderResultsBoard:
 
         text = "\n".join(results_board.render_results_board(board))
 
-        assert "制度開始前の未照合記録: 0件（測定不能理由から除外）" in text
+        assert "新方式で記録を始める前の旧記録: 0件（測定不能の理由からは除外）" in text
 
     def test_pillar2_zero_exclusion_is_rendered_when_measurement_is_degraded(self):
         board = self._board(
@@ -919,7 +919,7 @@ class TestRenderResultsBoard:
 
         text = "\n".join(results_board.render_results_board(board))
 
-        assert "制度開始前の未照合記録: 0件（測定不能理由から除外）" in text
+        assert "新方式で記録を始める前の旧記録: 0件（測定不能の理由からは除外）" in text
 
     @pytest.mark.parametrize(
         "board_transform",
@@ -951,7 +951,7 @@ class TestRenderResultsBoard:
 
         text = "\n".join(results_board.render_results_board(board))
 
-        assert "制度開始前の未照合記録: 評価不能（除外件数も評価不能）" in text
+        assert "新方式で記録を始める前の旧記録: 評価不能（除外件数も評価不能）" in text
 
     def test_pillar2_unmeasured_never_renders_partial_count(self):
         board = self._board(

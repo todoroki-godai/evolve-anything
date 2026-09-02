@@ -325,11 +325,11 @@ def render_pillar2_health(
     ]
     pre_scheme_count = pillar2.get("pre_scheme_excluded_count")
     if reader_health is None or type(pre_scheme_count) is not int:
-        pre_scheme_line = "制度開始前の未照合記録: 評価不能（除外件数も評価不能）"
+        pre_scheme_line = "新方式で記録を始める前の旧記録: 評価不能（除外件数も評価不能）"
     else:
         pre_scheme_line = (
-            f"制度開始前の未照合記録: {pre_scheme_count}件"
-            "（測定不能理由から除外）"
+            f"新方式で記録を始める前の旧記録: {pre_scheme_count}件"
+            "（測定不能の理由からは除外）"
         )
 
     lines = [main, pre_scheme_line]
