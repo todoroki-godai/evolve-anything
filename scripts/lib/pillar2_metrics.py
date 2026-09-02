@@ -14,6 +14,19 @@ PILLAR2_NOT_MEASURED_TARGETS = {
     "pitfall_memory": {"reason": "mtime_collision", "label": "mtime 衝突"},
 }
 
+# 新方式は PR #596（merge 9882eaef / committer time 2026-09-01T09:29:07Z）で
+# 導入された。この時刻は来歴の記録であって判定には使わない。
+# 追記時は対象 ID・基底の PJ・状態・柱2イベント不在・発見日時・承認根拠を人間が
+# 確認し、通常のコードレビューを経ること。時刻のみを根拠に追記しない。
+PRE_SCHEME_APPLIED_BASELINE = frozenset(
+    {
+        "411114e30ec74a1aacf14a1c0572daff",
+        "c25c83983e1f4a0a98b11133a02cab66",
+        "74f0215b71b847a388f3a5af55e24b22",
+        "0f94d4a14da5472c93010b644f6ce46b",
+    }
+)
+
 
 def _not_measured_targets() -> dict[str, dict[str, str]]:
     """公開定義から board の not_measured schema を生成する。"""
@@ -166,6 +179,7 @@ def count_applied_reflections(
 
     eligible = []
     legacy_unverified_count = 0
+    pre_scheme_excluded_count = 0
     invalidated_count = 0
     other_kind_count = 0
     for folded_correction in folded:
@@ -178,7 +192,13 @@ def count_applied_reflections(
         if folded_correction.base.get("reflect_status") != "applied":
             continue
         if not folded_correction.has_pillar2_fields:
-            legacy_unverified_count += 1
+            if (
+                folded_correction.base.get("correction_id")
+                in PRE_SCHEME_APPLIED_BASELINE
+            ):
+                pre_scheme_excluded_count += 1
+            else:
+                legacy_unverified_count += 1
             continue
         if folded_correction.reflect_target_kind == "other":
             other_kind_count += 1
@@ -230,6 +250,7 @@ def count_applied_reflections(
         "count": len(groups),
         "measured": not degraded,
         "legacy_unverified_count": legacy_unverified_count,
+        "pre_scheme_excluded_count": pre_scheme_excluded_count,
         "invalidated_count": invalidated_count,
         "other_kind_count": other_kind_count,
         "reconciled_count": sum(1 for item in eligible if item.reconciled),
