@@ -92,21 +92,28 @@ def _pillar2_project_scope(correction: dict, project_root: Path) -> str:
     return _classify_project_scope(correction, project_root)
 
 
-def _count_scoped_invalid_base_ids(fold_health, project_root: Path) -> tuple[int, int]:
+def _count_scoped_invalid_base_ids(fold_health, project_root: Path) -> dict[str, int]:
     """不正 ID 基底を柱2の信頼境界順に分類する。"""
-    applied = 0
-    non_applied = 0
+    counts = {
+        "invalid_base_id_applied_same_project_row_count": 0,
+        "invalid_base_id_applied_global_looking_row_count": 0,
+        "invalid_base_id_non_applied_same_project_row_count": 0,
+        "invalid_base_id_non_applied_global_looking_row_count": 0,
+    }
     for correction in fold_health.invalid_base_id_records:
         scope = _pillar2_project_scope(correction, project_root)
         if scope not in ("same-project", "global-looking"):
             continue
         if correction.get("invalidated"):
             continue
-        if correction.get("reflect_status") == "applied":
-            applied += 1
-        else:
-            non_applied += 1
-    return applied, non_applied
+        status = (
+            "applied"
+            if correction.get("reflect_status") == "applied"
+            else "non_applied"
+        )
+        scope_key = scope.replace("-", "_")
+        counts[f"invalid_base_id_{status}_{scope_key}_row_count"] += 1
+    return counts
 
 
 def count_applied_reflections(
@@ -143,10 +150,19 @@ def count_applied_reflections(
         decay_grace_days=DEFAULT_DECAY_DAYS,
     )
     window_start = now - timedelta(days=window_days)
-    (
-        invalid_base_id_applied_row_count,
-        invalid_base_id_non_applied_row_count,
-    ) = _count_scoped_invalid_base_ids(fold_health, Path(project_root))
+    invalid_base_id_counts = _count_scoped_invalid_base_ids(
+        fold_health, Path(project_root)
+    )
+    invalid_base_id_applied_row_count = (
+        invalid_base_id_counts["invalid_base_id_applied_same_project_row_count"]
+        + invalid_base_id_counts["invalid_base_id_applied_global_looking_row_count"]
+    )
+    invalid_base_id_non_applied_row_count = (
+        invalid_base_id_counts["invalid_base_id_non_applied_same_project_row_count"]
+        + invalid_base_id_counts[
+            "invalid_base_id_non_applied_global_looking_row_count"
+        ]
+    )
 
     eligible = []
     legacy_unverified_count = 0
@@ -237,6 +253,7 @@ def count_applied_reflections(
             "hash_mismatch_count": fold_health.hash_mismatch_count,
             "invalid_base_id_applied_row_count": invalid_base_id_applied_row_count,
             "invalid_base_id_non_applied_row_count": invalid_base_id_non_applied_row_count,
+            **invalid_base_id_counts,
         },
         "not_measured": _not_measured_targets(),
         "generated_at": now.isoformat(),

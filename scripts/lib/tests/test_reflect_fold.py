@@ -115,8 +115,6 @@ def test_invalid_base_ids_are_excluded_and_classified(correction_id):
     folded, health = fold_corrections([base], [], now=NOW)
 
     assert folded == []
-    assert health.invalid_base_id_applied_row_count == 1
-    assert health.invalid_base_id_non_applied_row_count == 0
     assert health.invalid_base_id_records == [base]
 
 
@@ -126,8 +124,6 @@ def test_invalid_base_id_non_applied_is_classified_separately():
     folded, health = fold_corrections([base], [], now=NOW)
 
     assert folded == []
-    assert health.invalid_base_id_applied_row_count == 0
-    assert health.invalid_base_id_non_applied_row_count == 1
     assert health.invalid_base_id_records == [base]
 
 
@@ -135,8 +131,6 @@ def test_valid_base_id_is_positive_control_for_invalid_id_health():
     folded, health = fold_corrections([_base()], [], now=NOW)
 
     assert len(folded) == 1
-    assert health.invalid_base_id_applied_row_count == 0
-    assert health.invalid_base_id_non_applied_row_count == 0
     assert health.invalid_base_id_records == []
 
 

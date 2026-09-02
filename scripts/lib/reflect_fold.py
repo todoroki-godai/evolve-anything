@@ -70,8 +70,6 @@ class FoldHealth:
     orphan_confirmations: int = 0
     duplicate_confirmations: int = 0
     hash_mismatch_count: int = 0
-    invalid_base_id_applied_row_count: int = 0
-    invalid_base_id_non_applied_row_count: int = 0
     invalid_base_id_records: list[dict] = field(default_factory=list, repr=False)
 
 
@@ -125,10 +123,6 @@ def fold_corrections(
         correction_id = record.get("correction_id")
         if not validate_correction_id(correction_id):
             health.invalid_base_id_records.append(record)
-            if record.get("reflect_status") == "applied":
-                health.invalid_base_id_applied_row_count += 1
-            else:
-                health.invalid_base_id_non_applied_row_count += 1
             continue
         if correction_id in duplicate_ids:
             continue

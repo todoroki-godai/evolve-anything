@@ -172,6 +172,10 @@ def test_same_project_invalid_id_applied_forces_not_measured(tmp_path):
     assert result["measured"] is False
     assert result["health"]["invalid_base_id_applied_row_count"] == 1
     assert result["health"]["invalid_base_id_non_applied_row_count"] == 0
+    assert result["health"]["invalid_base_id_applied_same_project_row_count"] == 1
+    assert result["health"]["invalid_base_id_applied_global_looking_row_count"] == 0
+    assert result["health"]["invalid_base_id_non_applied_same_project_row_count"] == 0
+    assert result["health"]["invalid_base_id_non_applied_global_looking_row_count"] == 0
 
 
 def test_global_looking_invalid_id_applied_forces_not_measured(tmp_path):
@@ -179,6 +183,8 @@ def test_global_looking_invalid_id_applied_forces_not_measured(tmp_path):
 
     assert result["measured"] is False
     assert result["health"]["invalid_base_id_applied_row_count"] == 1
+    assert result["health"]["invalid_base_id_applied_same_project_row_count"] == 0
+    assert result["health"]["invalid_base_id_applied_global_looking_row_count"] == 1
 
 
 def test_other_project_invalid_id_applied_does_not_degrade(tmp_path):
@@ -197,6 +203,25 @@ def test_other_project_invalid_id_applied_does_not_degrade(tmp_path):
     assert result["measured"] is True
     assert result["health"]["invalid_base_id_applied_row_count"] == 0
     assert result["health"]["invalid_base_id_non_applied_row_count"] == 0
+
+
+def test_other_project_invalid_id_non_applied_is_out_of_scope(tmp_path):
+    result = _count(
+        tmp_path,
+        [
+            _base(
+                correction_id=None,
+                reflect_status="promoted",
+                project_path="other-project",
+                message="Use /srv/other/project/data.sqlite only here",
+            )
+        ],
+        [],
+    )
+
+    assert result["health"]["invalid_base_id_non_applied_row_count"] == 0
+    assert result["health"]["invalid_base_id_non_applied_same_project_row_count"] == 0
+    assert result["health"]["invalid_base_id_non_applied_global_looking_row_count"] == 0
 
 
 def test_invalidated_invalid_id_applied_does_not_degrade(tmp_path):
@@ -220,6 +245,26 @@ def test_invalid_id_non_applied_is_visible_but_does_not_degrade(tmp_path):
     assert result["measured"] is True
     assert result["health"]["invalid_base_id_applied_row_count"] == 0
     assert result["health"]["invalid_base_id_non_applied_row_count"] == 1
+    assert result["health"]["invalid_base_id_non_applied_same_project_row_count"] == 0
+    assert result["health"]["invalid_base_id_non_applied_global_looking_row_count"] == 1
+
+
+def test_same_project_invalid_id_non_applied_is_broken_down(tmp_path):
+    result = _count(
+        tmp_path,
+        [
+            _base(
+                correction_id=None,
+                reflect_status="promoted",
+                project_path=str(tmp_path),
+            )
+        ],
+        [],
+    )
+
+    assert result["health"]["invalid_base_id_non_applied_row_count"] == 1
+    assert result["health"]["invalid_base_id_non_applied_same_project_row_count"] == 1
+    assert result["health"]["invalid_base_id_non_applied_global_looking_row_count"] == 0
 
 
 @pytest.mark.parametrize("correction_id", [0, [], "abc"])
