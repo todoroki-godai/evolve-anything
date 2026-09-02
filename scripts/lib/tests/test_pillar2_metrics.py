@@ -3,6 +3,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 
+import pytest
+
 import pillar2_metrics as metrics
 from reflect_fold import _hash_correction_message
 
@@ -157,3 +159,97 @@ def test_legacy_applied_forces_not_measured(tmp_path):
     assert result["count"] == 0
     assert result["legacy_unverified_count"] == 1
     assert result["measured"] is False
+
+
+def test_same_project_invalid_id_applied_forces_not_measured(tmp_path):
+    result = _count(
+        tmp_path,
+        [_base(correction_id=None, project_path=str(tmp_path))],
+        [],
+    )
+
+    assert result["count"] == 0
+    assert result["measured"] is False
+    assert result["health"]["invalid_base_id_applied_row_count"] == 1
+    assert result["health"]["invalid_base_id_non_applied_row_count"] == 0
+
+
+def test_global_looking_invalid_id_applied_forces_not_measured(tmp_path):
+    result = _count(tmp_path, [_base(correction_id="")], [])
+
+    assert result["measured"] is False
+    assert result["health"]["invalid_base_id_applied_row_count"] == 1
+
+
+def test_other_project_invalid_id_applied_does_not_degrade(tmp_path):
+    result = _count(
+        tmp_path,
+        [
+            _base(
+                correction_id=None,
+                project_path="other-project",
+                message="Use /srv/other/project/data.sqlite only here",
+            )
+        ],
+        [],
+    )
+
+    assert result["measured"] is True
+    assert result["health"]["invalid_base_id_applied_row_count"] == 0
+    assert result["health"]["invalid_base_id_non_applied_row_count"] == 0
+
+
+def test_invalidated_invalid_id_applied_does_not_degrade(tmp_path):
+    result = _count(
+        tmp_path,
+        [_base(correction_id=None, invalidated=True)],
+        [],
+    )
+
+    assert result["measured"] is True
+    assert result["health"]["invalid_base_id_applied_row_count"] == 0
+
+
+def test_invalid_id_non_applied_is_visible_but_does_not_degrade(tmp_path):
+    result = _count(
+        tmp_path,
+        [_base(correction_id=None, reflect_status="pending")],
+        [],
+    )
+
+    assert result["measured"] is True
+    assert result["health"]["invalid_base_id_applied_row_count"] == 0
+    assert result["health"]["invalid_base_id_non_applied_row_count"] == 1
+
+
+@pytest.mark.parametrize("correction_id", [0, [], "abc"])
+def test_invalid_id_value_classes_force_not_measured(tmp_path, correction_id):
+    result = _count(tmp_path, [_base(correction_id=correction_id)], [])
+
+    assert result["measured"] is False
+    assert result["health"]["invalid_base_id_applied_row_count"] == 1
+
+
+def test_all_applied_rows_with_valid_ids_remain_measured(tmp_path):
+    result = _count(tmp_path, [_base()], _events())
+
+    assert result["count"] == 1
+    assert result["measured"] is True
+    assert result["health"]["invalid_base_id_applied_row_count"] == 0
+    assert result["health"]["invalid_base_id_non_applied_row_count"] == 0
+
+
+def test_other_project_valid_id_legacy_row_does_not_degrade(tmp_path):
+    result = _count(
+        tmp_path,
+        [
+            _base(
+                project_path="other-project",
+                message="Use /srv/other/project/data.sqlite only here",
+            )
+        ],
+        [],
+    )
+
+    assert result["measured"] is True
+    assert result["legacy_unverified_count"] == 0

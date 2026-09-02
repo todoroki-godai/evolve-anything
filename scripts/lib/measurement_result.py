@@ -270,6 +270,7 @@ def _pillar2_degraded_reason(pillar2: Dict[str, Any]) -> str:
         ("orphan_confirmations", "孤立確認イベント"),
         ("duplicate_confirmations", "重複確認イベント"),
         ("hash_mismatch_count", "hash 不一致"),
+        ("invalid_base_id_applied_row_count", "不正IDの反映済み基底"),
     ):
         count = int(health.get(key) or 0)
         if count:
