@@ -533,7 +533,12 @@ def _render_coverage_gap_reasons(correction_rate: Dict[str, Any]) -> List[str]:
         return ["カバレッジ不足理由: 評価不能", ""]
 
     lines: List[str] = []
-    for gap in gaps:
+    sorted_gaps = sorted(
+        gaps,
+        key=lambda gap: str(gap.get("week_id") or "") if isinstance(gap, dict) else "",
+        reverse=True,
+    )
+    for gap in sorted_gaps:
         week_id = gap.get("week_id") if isinstance(gap, dict) else None
         prefix = f"- {week_id} カバレッジ不足理由" if week_id else "- カバレッジ不足理由"
         reason = gap.get("reason") if isinstance(gap, dict) else None
@@ -561,11 +566,11 @@ def _render_coverage_gap_reasons(correction_rate: Dict[str, Any]) -> List[str]:
 
         deadline_exceeded, unjudged, unclassified = counts
         line = (
-            f"{prefix}: 締切（+{FREEZE_DELAY_DAYS}日）超過で確定外: {deadline_exceeded} 件"
+            f"{prefix}: 締切（+{FREEZE_DELAY_DAYS}日）超過で集計外: {deadline_exceeded} 件"
             f"・未判定: {unjudged} 件"
         )
         if unclassified:
-            line += f"・分類不能: {unclassified} 件"
+            line += f"・判定日時なし（旧形式レコード）: {unclassified} 件"
         lines.append(line)
     if lines:
         lines.append("")
@@ -661,7 +666,7 @@ def _render_correction_rate(
 
     # #466: 分母から除外した件数は gate の開閉に関わらず常に表示する（silence != evaluated）。
     lines.extend(_render_exclusion_diagnostics(correction_rate.get("diagnostics") or {}))
-    lines.extend(_render_coverage_gap_reasons(correction_rate))
+    coverage_gap_lines = _render_coverage_gap_reasons(correction_rate)
 
     # #508 状態(ii): 系列ゲートが閉じていても、点表示できる確定週があれば1週分の点を出す。
     # I7(d): PJ 別内訳が空なら点表示そのものを行わない（状態(i)へフォールバック）。
@@ -669,6 +674,7 @@ def _render_correction_rate(
     point_week = gate.get("point_week")
     if not gate_open_effective and point_week and (point_week.get("pj_breakdown") or {}):
         lines.extend(_render_correction_rate_point(gate, correction_rate))
+        lines.extend(coverage_gap_lines)
         return lines
 
     if not gate_open_effective:
@@ -683,6 +689,7 @@ def _render_correction_rate(
         lines.append(f"**{headline}**")
         lines.append(f"全量判定の確定週が {required} 週連続で揃うまで系列は表示しません。")
         lines.append("")
+        lines.extend(coverage_gap_lines)
         return lines
 
     displayed = correction_rate.get("displayed_weeks") or []
@@ -691,6 +698,7 @@ def _render_correction_rate(
         "分子は LLM judge の意味判定です（実測 precision 80% ＝ 分子の2割は誤りを含む前提で読んでください）。"
     )
     lines.append("")
+    lines.extend(coverage_gap_lines)
     category_lines_by_week = {
         w["week_id"]: _category_breakdown_lines(w.get("category_breakdown"))
         for w in displayed

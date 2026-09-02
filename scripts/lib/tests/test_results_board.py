@@ -1787,12 +1787,17 @@ class TestRenderCoverageGapReasons:
 
         assert (
             "- 2026-W32 カバレッジ不足理由: "
-            "締切（+3日）超過で確定外: 713 件・未判定: 0 件"
+            "締切（+3日）超過で集計外: 713 件・未判定: 0 件"
         ) in lines
         assert (
             "- 2026-W34 カバレッジ不足理由: "
-            "締切（+3日）超過で確定外: 0 件・未判定: 1 件"
+            "締切（+3日）超過で集計外: 0 件・未判定: 1 件"
         ) in lines
+        reason_lines = [line for line in lines if line.startswith("- 2026-W")]
+        assert reason_lines[0].startswith("- 2026-W34 ")
+        headline_index = lines.index(next(line for line in lines if line.startswith("**指摘率")))
+        first_reason_index = lines.index(reason_lines[0])
+        assert headline_index < first_reason_index
 
     def test_unclassified_gap_is_visible_and_not_mixed_into_main_counts(self):
         summary = {
@@ -1813,8 +1818,8 @@ class TestRenderCoverageGapReasons:
         lines = results_board._render_correction_rate(summary)
         reason_line = next(line for line in lines if "カバレッジ不足理由" in line)
 
-        assert "確定外: 2 件・未判定: 1 件・分類不能: 1 件" in reason_line
-        assert "確定外: 3 件" not in reason_line
+        assert "集計外: 2 件・未判定: 1 件・判定日時なし（旧形式レコード）: 1 件" in reason_line
+        assert "集計外: 3 件" not in reason_line
         assert "判定カバレッジ 6/10" in "\n".join(lines)
 
     @pytest.mark.parametrize(
@@ -1854,3 +1859,76 @@ class TestRenderCoverageGapReasons:
         )
         assert reason_line == "- 2026-W34 カバレッジ不足理由: 評価不能（判定記録を取得できません）"
         assert "0 件" not in reason_line
+
+    def test_inconsistent_breakdown_total_renders_evaluation_impossible_without_counts(self):
+        summary = {
+            **_closed_gate_summary(),
+            "latest_coverage": {"week_id": "2026-W34", "judged": 129, "total": 842},
+            "coverage_gaps": [{
+                "week_id": "2026-W34", "judged": 129, "total": 842,
+                "reason": {
+                    "measured": True,
+                    "deadline_exceeded_count": 712,
+                    "unjudged_count": 0,
+                    "unclassified_count": 0,
+                    "reason": None,
+                },
+            }],
+        }
+
+        reason_line = next(
+            line for line in results_board._render_correction_rate(summary)
+            if "カバレッジ不足理由" in line
+        )
+
+        assert reason_line == (
+            "- 2026-W34 カバレッジ不足理由: "
+            "評価不能（内訳合計が母集団と一致しません）"
+        )
+        assert "712 件" not in reason_line
+
+    def test_missing_measured_key_renders_evaluation_impossible(self):
+        summary = {
+            **_closed_gate_summary(),
+            "coverage_gaps": [{
+                "week_id": "2026-W34", "judged": 9, "total": 10,
+                "reason": {
+                    "deadline_exceeded_count": 0,
+                    "unjudged_count": 1,
+                    "unclassified_count": 0,
+                    "reason": None,
+                },
+            }],
+        }
+
+        reason_line = next(
+            line for line in results_board._render_correction_rate(summary)
+            if "カバレッジ不足理由" in line
+        )
+
+        assert reason_line.endswith(": 評価不能")
+        assert "未判定: 1 件" not in reason_line
+
+    @pytest.mark.parametrize("missing_count", [None, True])
+    def test_non_integer_reason_count_renders_evaluation_impossible(self, missing_count):
+        summary = {
+            **_closed_gate_summary(),
+            "coverage_gaps": [{
+                "week_id": "2026-W34", "judged": 9, "total": 10,
+                "reason": {
+                    "measured": True,
+                    "deadline_exceeded_count": 0,
+                    "unjudged_count": missing_count,
+                    "unclassified_count": 0,
+                    "reason": None,
+                },
+            }],
+        }
+
+        reason_line = next(
+            line for line in results_board._render_correction_rate(summary)
+            if "カバレッジ不足理由" in line
+        )
+
+        assert "評価不能（内訳合計が母集団と一致しません）" in reason_line
+        assert "未判定:" not in reason_line
