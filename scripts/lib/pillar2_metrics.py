@@ -1,7 +1,9 @@
 """柱2「照合済み反映」の producer 集計。"""
 from __future__ import annotations
 
+import hashlib
 import importlib.util
+import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
@@ -22,12 +24,32 @@ PILLAR2_NOT_MEASURED_TARGETS = {
 # 確認し、通常のコードレビューを経ること。時刻のみを根拠に追記しない。
 PRE_SCHEME_APPLIED_BASELINE = frozenset(
     {
-        "411114e30ec74a1aacf14a1c0572daff",
-        "c25c83983e1f4a0a98b11133a02cab66",
-        "74f0215b71b847a388f3a5af55e24b22",
-        "0f94d4a14da5472c93010b644f6ce46b",
+        (
+            "0f94d4a14da5472c93010b644f6ce46b",
+            "5b3ca1f6eb6261647670a38e2dfc2fbc6a5e911dcf1e39a0ed0f30d8f9972a3e",
+        ),
+        (
+            "411114e30ec74a1aacf14a1c0572daff",
+            "7ac56098fa58b826f7afd4f98d1ae4683329d4f8d6bdb5103ebb70b3cfc5739f",
+        ),
+        (
+            "74f0215b71b847a388f3a5af55e24b22",
+            "40bea99ed326ef9a21ec7b2ee43a810ead9187186a7c7e66a8065f1a03408143",
+        ),
+        (
+            "c25c83983e1f4a0a98b11133a02cab66",
+            "908e9ee2e3bc5a4ba63e08df47d8144bce8548d9b7a5ba18d09e8a010774fca9",
+        ),
     }
 )
+
+
+def _baseline_row_sha256(base: dict) -> str:
+    # 基底行の全フィールド（柱2フィールドを含む）を key-sort・compact JSON に正規化して hash する。
+    canonical = json.dumps(
+        base, sort_keys=True, ensure_ascii=False, separators=(",", ":")
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def _not_measured_targets() -> dict[str, dict[str, str]]:
@@ -195,7 +217,10 @@ def count_applied_reflections(
             continue
         if not folded_correction.has_pillar2_fields:
             if (
-                folded_correction.base.get("correction_id")
+                (
+                    folded_correction.base.get("correction_id"),
+                    _baseline_row_sha256(folded_correction.base),
+                )
                 in PRE_SCHEME_APPLIED_BASELINE
             ):
                 pre_scheme_excluded_count += 1
