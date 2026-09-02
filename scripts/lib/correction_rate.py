@@ -186,6 +186,55 @@ def _physical_key(source_path: Any, line_no: Any) -> str:
     return f"{source_path or ''}:{line_no if line_no is not None else ''}"
 
 
+def _coverage_gap_reason(
+    *,
+    population_keys: List[str],
+    judged_key_set: Set[str],
+    judged_at_by_key: Dict[str, datetime],
+    judged_record_keys: Set[str],
+    cutoff: datetime,
+    expected_gap_count: int,
+    judged_source_measured: bool,
+) -> Dict[str, Any]:
+    """カバレッジ不足を締切超過・未判定・分類不能へ排他的に分ける。
+
+    ``unclassified_count`` は判定レコード自体は存在するものの ``judged_at`` を解釈
+    できない件数。内訳合計が呼び出し側の ``母集団 − 判定済`` と違えば、数値を正常値
+    として扱わず明示的に評価不能へ倒す。
+    """
+    if not judged_source_measured:
+        return {
+            "measured": False,
+            "deadline_exceeded_count": None,
+            "unjudged_count": None,
+            "unclassified_count": None,
+            "reason": "判定記録を取得できません",
+        }
+
+    unresolved_keys = set(population_keys) - judged_key_set
+    deadline_exceeded_count = sum(
+        1 for key in unresolved_keys
+        if (judged_at_by_key.get(key) is not None and judged_at_by_key[key] > cutoff)
+    )
+    unjudged_count = sum(1 for key in unresolved_keys if key not in judged_record_keys)
+    unclassified_count = sum(
+        1 for key in unresolved_keys
+        if key in judged_record_keys and key not in judged_at_by_key
+    )
+    classified_total = deadline_exceeded_count + unjudged_count + unclassified_count
+    measured = classified_total == expected_gap_count
+    return {
+        "measured": measured,
+        "deadline_exceeded_count": deadline_exceeded_count,
+        "unjudged_count": unjudged_count,
+        "unclassified_count": unclassified_count,
+        "reason": (
+            None if measured
+            else f"内訳合計が母集団と一致しません（{classified_total}/{expected_gap_count} 件）"
+        ),
+    }
+
+
 # ─────────────────────────────────────────────────────────────────
 # 週次集計本体
 # ─────────────────────────────────────────────────────────────────
@@ -268,11 +317,13 @@ def compute_weekly_correction_rate(
 
     # ── judged_at_by_key（最古の有効判定を採用・§2.2 競合解決） ──────
     judged_at_by_key: Dict[str, datetime] = {}
+    judged_record_keys: Set[str] = set()
     for rec in raw.get("judged", []) or []:
         key = rec.get("key")
         if key is None:
             diagnostics["judged_missing_key"] += 1
             continue
+        judged_record_keys.add(key)
         jat = _parse_iso(rec.get("judged_at"))
         if jat is None:
             diagnostics["judged_unparseable_judged_at"] += 1
@@ -361,6 +412,15 @@ def compute_weekly_correction_rate(
                 judged_keys.append(key)
         judged_count = len(judged_keys)
         judged_key_set = set(judged_keys)
+        coverage_gap_reason = _coverage_gap_reason(
+            population_keys=population_keys,
+            judged_key_set=judged_key_set,
+            judged_at_by_key=judged_at_by_key,
+            judged_record_keys=judged_record_keys,
+            cutoff=cutoff,
+            expected_gap_count=total_population - judged_count,
+            judged_source_measured=(source_health.get("judged") or {}).get("measured", True),
+        )
 
         failure_reasons: List[str] = list(source_failure_reasons)
         tp_keys: List[str] = []
@@ -420,6 +480,7 @@ def compute_weekly_correction_rate(
             "measured": measured,
             "rate": rate,
             "failure_reasons": sorted(set(failure_reasons)),
+            "coverage_gap_reason": coverage_gap_reason,
             "pj_breakdown": pj_breakdown,
             "top3_examples": top3_examples,
             "category_breakdown": category_breakdown,
@@ -660,10 +721,25 @@ def build_correction_rate_summary(
         if latest else None
     )
 
+    utterances_health = (result["diagnostics"].get("measurement_source_health", {}) or {}).get(
+        "utterances"
+    ) or {}
+    coverage_gaps = None if not utterances_health.get("measured", True) else [
+        {
+            "week_id": week["week_id"],
+            "judged": week["judged_count"],
+            "total": week["total_population"],
+            "reason": week["coverage_gap_reason"],
+        }
+        for week in weeks
+        if week["coverage"] < 1.0
+    ]
+
     summary = {
         "gate": gate,
         "displayed_weeks": displayed,
         "latest_coverage": latest_coverage,
+        "coverage_gaps": coverage_gaps,
         "diagnostics": result["diagnostics"],
         "generated_at": result["generated_at"],
     }

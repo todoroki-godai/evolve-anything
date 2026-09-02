@@ -207,6 +207,75 @@ class TestFreezeCutoff:
         assert w["judged_count"] == 0
         assert w["measured"] is False
 
+    def test_coverage_gap_reason_separates_late_unjudged_and_unclassified(self):
+        """未確定分を締切超過・未判定・分類不能へ排他的に分け、合計を固定する。"""
+        u_on_time = _utt("on-time")
+        u_late = _utt("late")
+        u_missing = _utt("missing")
+        u_invalid = _utt("invalid")
+        raw = _raw(
+            [u_on_time, u_late, u_missing, u_invalid],
+            [
+                _judged(u_on_time, judged_at=_W34_CUTOFF),
+                _judged(u_late, judged_at=_W34_CUTOFF + timedelta(microseconds=1)),
+                {"key": _key(u_invalid), "judged_at": "not-a-date"},
+            ],
+            [],
+        )
+
+        result = correction_rate.compute_weekly_correction_rate(now=_AFTER_CUTOFF, raw=raw)
+        w = next(w for w in result["weeks"] if w["week_id"] == "2026-W34")
+
+        assert w["judged_count"] == 1  # cutoff ちょうどは確定内（境界は >）
+        assert w["coverage_gap_reason"] == {
+            "measured": True,
+            "deadline_exceeded_count": 1,
+            "unjudged_count": 1,
+            "unclassified_count": 1,
+            "reason": None,
+        }
+        reason = w["coverage_gap_reason"]
+        assert (
+            reason["deadline_exceeded_count"]
+            + reason["unjudged_count"]
+            + reason["unclassified_count"]
+            == w["total_population"] - w["judged_count"]
+        )
+
+    def test_coverage_gap_reason_is_unmeasured_when_judged_source_unavailable(self):
+        """judged reader 取得不能を未判定0件/全件へ化けさせない。"""
+        u1 = _utt("a")
+        raw = _raw([u1], [], [])
+        raw["_measurement_health"] = {
+            "judged": {"measured": False, "reason": "読取失敗", "dropped_lines": 0},
+        }
+
+        result = correction_rate.compute_weekly_correction_rate(now=_AFTER_CUTOFF, raw=raw)
+        w = next(w for w in result["weeks"] if w["week_id"] == "2026-W34")
+
+        assert w["coverage_gap_reason"] == {
+            "measured": False,
+            "deadline_exceeded_count": None,
+            "unjudged_count": None,
+            "unclassified_count": None,
+            "reason": "判定記録を取得できません",
+        }
+
+    def test_coverage_gap_invariant_mismatch_is_explicitly_unmeasured(self):
+        """内訳合計と母集団−判定済が不一致なら、成功扱いせず分類不能を surface する。"""
+        breakdown = correction_rate._coverage_gap_reason(
+            population_keys=["a", "b"],
+            judged_key_set={"a"},
+            judged_at_by_key={"a": _BEFORE_CUTOFF},
+            judged_record_keys={"a"},
+            cutoff=_W34_CUTOFF,
+            expected_gap_count=2,  # 実際の未確定集合は b の1件。意図的な配線不整合。
+            judged_source_measured=True,
+        )
+
+        assert breakdown["measured"] is False
+        assert breakdown["reason"] == "内訳合計が母集団と一致しません（1/2 件）"
+
     def test_tp_detected_after_cutoff_not_counted_but_week_can_still_be_measured(self):
         u1 = _utt("a")
         raw = _raw(
@@ -663,6 +732,18 @@ class TestBuildCorrectionRateSummary:
         assert summary["latest_coverage"] == {
             "week_id": "2026-W34", "judged": 1, "total": 2, "failure_reasons": [],
         }
+        assert summary["coverage_gaps"] == [{
+            "week_id": "2026-W34",
+            "judged": 1,
+            "total": 2,
+            "reason": {
+                "measured": True,
+                "deadline_exceeded_count": 0,
+                "unjudged_count": 1,
+                "unclassified_count": 0,
+                "reason": None,
+            },
+        }]
 
     def test_gate_open_lists_measured_weeks_with_worsening_flag(self):
         # 4週分の finalized データを直接 weeks 相当で組み立てるのは大掛かりなので、

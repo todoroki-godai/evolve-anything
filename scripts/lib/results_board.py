@@ -25,7 +25,11 @@ from typing import Any, Dict, List, Optional
 
 from capture_recall import CaptureEvalIntegrityError, evaluate_capture_recall, load_capture_eval_set
 from optimize_history_store import load_effective_history, load_revert_events
-from correction_rate import build_correction_rate_summary, GATE_CONSECUTIVE_WEEKS
+from correction_rate import (
+    build_correction_rate_summary,
+    FREEZE_DELAY_DAYS,
+    GATE_CONSECUTIVE_WEEKS,
+)
 from correction_semantic.prompt import CATEGORY_ENUM, CATEGORY_LABELS_JA
 from evolve_revert import REASON_LABELS, compute_revert_availability
 from pillar2_metrics import PILLAR2_NOT_MEASURED_TARGETS, count_applied_reflections
@@ -123,6 +127,8 @@ _EMPTY_CORRECTION_RATE: Dict[str, Any] = {
     },
     "displayed_weeks": [],
     "latest_coverage": None,
+    # None は「該当なし」ではなく取得不能。通常の評価済み・該当なしは [] で区別する。
+    "coverage_gaps": None,
     "diagnostics": {},
     "generated_at": None,
 }
@@ -518,6 +524,54 @@ def _render_exclusion_diagnostics(diagnostics: Dict[str, Any]) -> List[str]:
     ]
 
 
+def _render_coverage_gap_reasons(correction_rate: Dict[str, Any]) -> List[str]:
+    """100%未満の各週について、カバレッジ不足の排他的な理由内訳を表示する。"""
+    if "coverage_gaps" not in correction_rate or correction_rate["coverage_gaps"] is None:
+        return ["カバレッジ不足理由: 評価不能", ""]
+    gaps = correction_rate["coverage_gaps"]
+    if not isinstance(gaps, list):
+        return ["カバレッジ不足理由: 評価不能", ""]
+
+    lines: List[str] = []
+    for gap in gaps:
+        week_id = gap.get("week_id") if isinstance(gap, dict) else None
+        prefix = f"- {week_id} カバレッジ不足理由" if week_id else "- カバレッジ不足理由"
+        reason = gap.get("reason") if isinstance(gap, dict) else None
+        if not isinstance(reason, dict) or reason.get("measured") is not True:
+            detail = reason.get("reason") if isinstance(reason, dict) else None
+            suffix = f"（{detail}）" if detail else ""
+            lines.append(f"{prefix}: 評価不能{suffix}")
+            continue
+
+        counts = [
+            reason.get("deadline_exceeded_count"),
+            reason.get("unjudged_count"),
+            reason.get("unclassified_count"),
+        ]
+        judged = gap.get("judged")
+        total = gap.get("total")
+        valid_ints = all(isinstance(value, int) and not isinstance(value, bool) and value >= 0 for value in counts)
+        valid_totals = all(
+            isinstance(value, int) and not isinstance(value, bool) and value >= 0
+            for value in (judged, total)
+        )
+        if not valid_ints or not valid_totals or sum(counts) != total - judged:
+            lines.append(f"{prefix}: 評価不能（内訳合計が母集団と一致しません）")
+            continue
+
+        deadline_exceeded, unjudged, unclassified = counts
+        line = (
+            f"{prefix}: 締切（+{FREEZE_DELAY_DAYS}日）超過で確定外: {deadline_exceeded} 件"
+            f"・未判定: {unjudged} 件"
+        )
+        if unclassified:
+            line += f"・分類不能: {unclassified} 件"
+        lines.append(line)
+    if lines:
+        lines.append("")
+    return lines
+
+
 def _render_point_pj_breakdown(pj_breakdown: Dict[str, Any]) -> List[str]:
     """点表示（状態(ii)）専用の PJ 別内訳（#508 I7・全 PJ 列挙・floor 込み）。
 
@@ -607,6 +661,7 @@ def _render_correction_rate(
 
     # #466: 分母から除外した件数は gate の開閉に関わらず常に表示する（silence != evaluated）。
     lines.extend(_render_exclusion_diagnostics(correction_rate.get("diagnostics") or {}))
+    lines.extend(_render_coverage_gap_reasons(correction_rate))
 
     # #508 状態(ii): 系列ゲートが閉じていても、点表示できる確定週があれば1週分の点を出す。
     # I7(d): PJ 別内訳が空なら点表示そのものを行わない（状態(i)へフォールバック）。
