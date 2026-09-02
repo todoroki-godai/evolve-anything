@@ -16,7 +16,8 @@ PILLAR2_NOT_MEASURED_TARGETS = {
 
 # 新方式は PR #596（merge 9882eaef / committer time 2026-09-01T09:29:07Z）で
 # 導入された。この時刻は来歴の記録であって判定には使わない。
-# 4件のうち3件は project_path が updater-index の基底で、evolve-anything 視点では global-looking として通過している。
+# 4件のうち3件は project_path が updater-index の基底で、evolve-anything 視点では
+# global-looking として通過している。
 # 追記時は対象 ID・基底の PJ・状態・柱2イベント不在・発見日時・承認根拠を人間が
 # 確認し、通常のコードレビューを経ること。時刻のみを根拠に追記しない。
 PRE_SCHEME_APPLIED_BASELINE = frozenset(
