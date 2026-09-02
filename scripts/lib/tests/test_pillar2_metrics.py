@@ -221,6 +221,7 @@ def test_pre_scheme_baseline_reapplied_with_pillar2_events_is_counted(tmp_path):
     assert correction_id in metrics.PRE_SCHEME_APPLIED_BASELINE
     assert result["count"] == 1
     assert result["pre_scheme_excluded_count"] == 0
+    assert result["reconciled_count"] == 0
     assert result["measured"] is True
 
 
