@@ -218,8 +218,35 @@ def test_pre_scheme_baseline_reapplied_with_pillar2_events_is_counted(tmp_path):
 
     result = _count(tmp_path, [base], events)
 
+    assert correction_id in metrics.PRE_SCHEME_APPLIED_BASELINE
     assert result["count"] == 1
     assert result["pre_scheme_excluded_count"] == 0
+    assert result["measured"] is True
+
+
+def test_reapplied_baseline_is_counted_beside_unreapplied_baseline(tmp_path):
+    reapplied_id, unreapplied_id = sorted(BASELINE_IDS)[:2]
+    reapplied_base = _base(correction_id=reapplied_id)
+    events = [
+        {
+            **_events()[0],
+            "target_correction_id": reapplied_id,
+            "correction_message_sha256": _hash_correction_message(reapplied_base),
+        },
+        {
+            **_events()[1],
+            "target_correction_id": reapplied_id,
+        },
+    ]
+
+    result = _count(
+        tmp_path,
+        [reapplied_base, _base(correction_id=unreapplied_id)],
+        events,
+    )
+
+    assert result["count"] == 1
+    assert result["pre_scheme_excluded_count"] == 1
     assert result["measured"] is True
 
 
