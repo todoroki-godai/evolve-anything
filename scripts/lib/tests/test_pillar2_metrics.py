@@ -135,6 +135,21 @@ def test_sibling_worktree_writer_slug_is_same_project(monkeypatch, tmp_path):
     assert metrics._pillar2_project_scope(correction, tmp_path / "ea-597") == "same-project"
 
 
+def test_renamed_project_alias_is_same_project(monkeypatch, tmp_path):
+    monkeypatch.setattr("pj_slug.resolve_pj_slug", lambda root: "evolve-anything")
+    monkeypatch.setattr(
+        "rl_common.persistence.project_name_from_dir",
+        lambda root: "ea-597",
+    )
+    monkeypatch.setattr(
+        "pj_slug.PJ_SLUG_ALIASES",
+        {"rl-anything": "evolve-anything"},
+    )
+    correction = {"project_path": "rl-anything", "message": "legacy project name"}
+
+    assert metrics._pillar2_project_scope(correction, tmp_path / "ea-597") == "same-project"
+
+
 def test_unrelated_writer_slug_falls_through_to_classifier(monkeypatch, tmp_path):
     """どちらの slug とも一致しない project_path は畳まず既存の判定へ落とす。
 

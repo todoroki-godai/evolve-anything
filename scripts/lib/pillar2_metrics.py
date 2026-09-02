@@ -117,14 +117,16 @@ def _classify_project_scope(correction: dict, project_root: Path) -> str:
 
 def _pillar2_project_scope(correction: dict, project_root: Path) -> str:
     """slug 表現を吸収してから既存の project scope 判定へ委譲する。"""
-    from pj_slug import resolve_pj_slug
+    from pj_slug import pj_slug_aliases_for, resolve_pj_slug
     from rl_common.persistence import project_name_from_dir
 
     project_path = correction.get("project_path")
     if isinstance(project_path, str) and project_path:
-        if project_path == resolve_pj_slug(project_root):
-            return "same-project"
-        if project_path == project_name_from_dir(str(project_root)):
+        matching_slugs = pj_slug_aliases_for(resolve_pj_slug(project_root))
+        matching_slugs.update(
+            pj_slug_aliases_for(project_name_from_dir(str(project_root)))
+        )
+        if project_path in matching_slugs:
             return "same-project"
     return _classify_project_scope(correction, project_root)
 
