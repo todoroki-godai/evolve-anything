@@ -83,6 +83,7 @@ bin/evolve-revert --list   # 柱4（採用のうち戻せる件数）
 - pitfall 自動強制: pitfalls.md の編集時 lint + commit ゲート（オプトイン）。danger 判定は commit をブロック
 - observability contract: 必ず surface すべき observability 行の単一ソース
 - `store_write` write barrier: 全ストア書込の単一ゲート。store_registry の active 登録外は既定 reject、registry 不在は fail-open（例外口 `store_write_raw`）
+- `reflect_apply_events`: reflect `--apply`/`--skip` が専用境界で追記。正準 DATA_DIR への generic/raw 直書きは常に reject
 - `outcome_attribution`: 負の転移は末尾 rollback、dry-run に before/after 順位差分を surface
 - `weak_signals`: 45日 TTL は read 時 age 導出で writer-death 非依存
 - `correction_semantic`: フェーズ昇格は human-source のみ駆動
