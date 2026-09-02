@@ -342,6 +342,12 @@ def test_pre_scheme_baseline_constants_pin_current_row_fingerprints():
     assert metrics.PRE_SCHEME_APPLIED_BASELINE == BASELINE_FINGERPRINTS
 
 
+def test_baseline_row_fingerprint_uses_documented_canonical_json():
+    assert metrics._baseline_row_sha256({"b": "雪", "a": 1}) == (
+        "f317713ac99270129844375745820bbf1f628cff9a4b11d3e67e16129ff6e0d3"
+    )
+
+
 def test_changed_baseline_row_is_legacy_unverified(tmp_path, monkeypatch):
     base = _base(correction_id=next(iter(BASELINE_IDS)))
     _install_test_baseline(monkeypatch, [base])
