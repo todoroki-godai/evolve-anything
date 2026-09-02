@@ -905,6 +905,22 @@ class TestRenderResultsBoard:
 
         assert "制度開始前の未照合記録: 0件（測定不能理由から除外）" in text
 
+    def test_pillar2_zero_exclusion_is_rendered_when_measurement_is_degraded(self):
+        board = self._board(
+            pillar2={
+                "count": 0,
+                "measured": False,
+                "legacy_unverified_count": 1,
+                "pre_scheme_excluded_count": 0,
+                "health": {"degraded": True},
+                "not_measured": {},
+            },
+        )
+
+        text = "\n".join(results_board.render_results_board(board))
+
+        assert "制度開始前の未照合記録: 0件（測定不能理由から除外）" in text
+
     @pytest.mark.parametrize(
         "board_transform",
         [

@@ -183,6 +183,20 @@ def test_pre_scheme_applied_baseline_is_complete_and_excluded_from_degradation(t
     assert result["health"]["degraded"] is False
 
 
+def test_pre_scheme_baseline_mixed_with_legacy_applied_stays_unmeasured(tmp_path):
+    bases = [
+        _base(correction_id=correction_id)
+        for correction_id in sorted(BASELINE_IDS)
+    ]
+    bases.append(_base(correction_id="d" * 32))
+
+    result = _count(tmp_path, bases, [])
+
+    assert result["legacy_unverified_count"] == 1
+    assert result["pre_scheme_excluded_count"] == 4
+    assert result["measured"] is False
+
+
 @pytest.mark.parametrize(
     ("overrides", "expected_invalidated_count"),
     [
