@@ -195,6 +195,7 @@ def _coverage_gap_reason(
     cutoff: datetime,
     expected_gap_count: int,
     judged_source_measured: bool,
+    judged_source_reason: Optional[str] = None,
 ) -> Dict[str, Any]:
     """カバレッジ不足を締切超過・未判定・分類不能へ排他的に分ける。
 
@@ -208,7 +209,7 @@ def _coverage_gap_reason(
             "deadline_exceeded_count": None,
             "unjudged_count": None,
             "unclassified_count": None,
-            "reason": "判定記録を取得できません",
+            "reason": judged_source_reason or "判定記録を取得できません",
         }
 
     unresolved_keys = set(population_keys) - judged_key_set
@@ -420,6 +421,7 @@ def compute_weekly_correction_rate(
             cutoff=cutoff,
             expected_gap_count=total_population - judged_count,
             judged_source_measured=(source_health.get("judged") or {}).get("measured", True),
+            judged_source_reason=(source_health.get("judged") or {}).get("reason"),
         )
 
         failure_reasons: List[str] = list(source_failure_reasons)
@@ -732,7 +734,7 @@ def build_correction_rate_summary(
             "reason": week["coverage_gap_reason"],
         }
         for week in weeks
-        if week["coverage"] < 1.0
+        if week["total_population"] > 0 and week["coverage"] < 1.0
     ]
 
     summary = {
