@@ -256,6 +256,23 @@ def test_store_write_raw_allows_known_basename_under_canonical_datadir(data_dir)
     assert _read_lines(target) == [{"v": 1}]
 
 
+def test_store_write_raw_rejects_specialized_boundary_under_canonical_datadir(
+    data_dir,
+) -> None:
+    target = data_dir / "reflect_apply_events.jsonl"
+    with pytest.raises(StoreWriteError, match="専用の追記境界"):
+        store_write_raw(target, {"correction_id": "a" * 32})
+    assert not target.exists()
+
+
+def test_store_write_raw_keeps_explicit_path_exception_for_boundary_store(
+    tmp_path_factory, data_dir
+) -> None:
+    target = tmp_path_factory.mktemp("explicit-boundary") / "reflect_apply_events.jsonl"
+    store_write_raw(target, {"correction_id": "a" * 32})
+    assert _read_lines(target) == [{"correction_id": "a" * 32}]
+
+
 def test_store_write_raw_ignores_unknown_basename_outside_canonical_datadir(
     tmp_path_factory, data_dir
 ) -> None:
