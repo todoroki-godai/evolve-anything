@@ -901,9 +901,21 @@ class TestRenderResultsBoard:
         board = self._board()
         board["pillar2"]["pre_scheme_excluded_count"] = 0
 
-        text = "\n".join(results_board.render_results_board(board))
+        lines = results_board.render_results_board(board)
+        text = "\n".join(lines)
 
         assert "新方式で記録を始める前の旧記録: 0件（測定不能の理由からは除外）" in text
+        main_index = next(
+            index
+            for index, line in enumerate(lines)
+            if "実際に反映された改善（直近30日）" in line
+        )
+        exclusion_index = next(
+            index
+            for index, line in enumerate(lines)
+            if "新方式で記録を始める前の旧記録" in line
+        )
+        assert exclusion_index == main_index + 1
 
     def test_pillar2_zero_exclusion_is_rendered_when_measurement_is_degraded(self):
         board = self._board(
