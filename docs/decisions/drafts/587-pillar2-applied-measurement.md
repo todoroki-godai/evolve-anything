@@ -826,6 +826,9 @@ class FoldHealth:
     orphan_confirmations: int = 0       # confirms_attempt_id が解決しないapplied（巡2 [Must]1）
     duplicate_confirmations: int = 0    # 同一attemptを複数appliedが参照（巡2 [Must]1）
     hash_mismatch_count: int = 0        # attemptのhashが基底messageと不一致（巡2 [Must]1・[Should]3）
+    # ID不正行は project scope を判定できる pillar2_metrics で集計する。
+    # FoldHealth に同名の全PJ合算カウンタは置かない。
+    invalid_base_id_records: list[dict] = field(default_factory=list, repr=False)
 
 
 def _attempt_is_valid(ev: dict) -> bool:
@@ -1123,6 +1126,15 @@ def count_applied_reflections(
         base_records, event_records, now=now, decay_grace_days=DEFAULT_DECAY_DAYS,
     )
     window_start = now - timedelta(days=window_days)
+    invalid_base_id_counts = _count_scoped_invalid_base_ids(fold_health, project_root)
+    invalid_base_id_applied_row_count = (
+        invalid_base_id_counts["invalid_base_id_applied_same_project_row_count"]
+        + invalid_base_id_counts["invalid_base_id_applied_global_looking_row_count"]
+    )
+    invalid_base_id_non_applied_row_count = (
+        invalid_base_id_counts["invalid_base_id_non_applied_same_project_row_count"]
+        + invalid_base_id_counts["invalid_base_id_non_applied_global_looking_row_count"]
+    )
 
     eligible = []
     legacy_unverified = 0
@@ -1186,6 +1198,7 @@ def count_applied_reflections(
         or fold_health.duplicate_confirmations > 0     # 巡2 [Must]1
         or fold_health.hash_mismatch_count > 0         # 巡2 [Must]1・[Should]3
         or legacy_unverified > 0                       # 巡2 [Should]2
+        or invalid_base_id_applied_row_count > 0       # #606: 数値の基底を照合不能
     )
 
     return {
@@ -1215,6 +1228,13 @@ def count_applied_reflections(
             "orphan_confirmations": fold_health.orphan_confirmations,
             "duplicate_confirmations": fold_health.duplicate_confirmations,
             "hash_mismatch_count": fold_health.hash_mismatch_count,
+            "invalid_base_id_applied_row_count": invalid_base_id_applied_row_count,
+            "invalid_base_id_non_applied_row_count": invalid_base_id_non_applied_row_count,
+            # 以下4キーは合計の内訳。0件でも必ず出力する。
+            "invalid_base_id_applied_same_project_row_count": invalid_base_id_counts["invalid_base_id_applied_same_project_row_count"],
+            "invalid_base_id_applied_global_looking_row_count": invalid_base_id_counts["invalid_base_id_applied_global_looking_row_count"],
+            "invalid_base_id_non_applied_same_project_row_count": invalid_base_id_counts["invalid_base_id_non_applied_same_project_row_count"],
+            "invalid_base_id_non_applied_global_looking_row_count": invalid_base_id_counts["invalid_base_id_non_applied_global_looking_row_count"],
         },
         "not_measured": {
             "hook": {"reason": "no_store"},
@@ -1223,6 +1243,11 @@ def count_applied_reflections(
         "generated_at": now.isoformat(),
     }
 ```
+
+`invalid_base_id_*_row_count` の6キーは public `health` の project-scope 済み集計である。
+内訳は `same-project` と `global-looking` を対象にし、`project-specific-other` と
+`invalidated` は除外する。`FoldHealth` は判定前の `invalid_base_id_records` だけを保持し、
+全PJ合算カウンタと public health の同名カウンタが同居しないようにする。
 
 **producer 契約（[Should]2 対応で確定）**: `count` は常に整数（`None` にはしない）。
 `measured=True` のときのみ「対象期間の全実反映件数」として扱ってよい。`measured=False`
