@@ -188,3 +188,19 @@ def test_runtime_order_is_lock_read_write_unlock(case, tmp_path, monkeypatch):
     assert events.index("lock_enter") < events.index("read") < events.index("write")
     assert events.index("write") < events.index("lock_exit")
     assert events[-1] == "lock_exit", events
+
+
+def test_cleanup_dry_run_preserves_bytes_mode_and_directory(tmp_path, monkeypatch):
+    module = importlib.import_module("prune.corrections")
+    target = tmp_path / "corrections.jsonl"
+    _write_jsonl(target, [{"correction_id": "8" * 32, "reflect_status": "applied",
+                          "timestamp": "2000-01-01T00:00:00+00:00", "decay_days": 1}])
+    target.chmod(0o640)
+    monkeypatch.setattr(importlib.import_module("prune"), "DATA_DIR", tmp_path)
+    before = (target.read_bytes(), target.stat().st_mode & 0o777, sorted(tmp_path.iterdir()))
+
+    result = module.cleanup_corrections(dry_run=True)
+
+    after = (target.read_bytes(), target.stat().st_mode & 0o777, sorted(tmp_path.iterdir()))
+    assert result["removed"] == 1
+    assert after == before
