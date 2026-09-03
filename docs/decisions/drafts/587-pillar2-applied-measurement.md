@@ -632,6 +632,7 @@ corrections.jsonl` の実データ範囲でしか検証していない）。網�
 | `correction_message_sha256` | str（`^[0-9a-f]{64}$`） | `correction_apply_attempted` のみ | §10。§11.3で基底のmessageハッシュと突合する |
 | `attempted_at` | str (ISO8601 UTC・**timezone省略不可**) | `event_type=="correction_apply_attempted"` のみ | **`update_reflect_status` を呼ぶ直前**の時刻（§8 手順1で捕捉） |
 | `reflect_applied_at` | str (ISO8601 UTC・**timezone省略不可**) | `event_type=="correction_applied"` のみ | `update_reflect_status` が `"applied"` を返した直後の時刻（§8 手順3で捕捉） |
+| `skipped_at` | str (ISO8601 UTC・**timezone省略不可**) | `event_type=="correction_skipped"` のみ | `update_reflect_status` が `"skipped"` を返した直後の時刻 |
 | `confirms_attempt_id` | str（32桁hex・`validate_correction_id`で検証） | `event_type=="correction_applied"` のみ | 対応する `correction_apply_attempted` イベント自身の `correction_id`（§8・§11.1） |
 
 **巡2 [Must]1 対応（`correction_applied` を名実ともに確認イベントにする）**: `reflect_target_kind`

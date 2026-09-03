@@ -1,6 +1,7 @@
 """#587 reflect CLI の2フェーズ反映イベント統合テスト。"""
 import json
 import sys
+from datetime import datetime
 from pathlib import Path
 from unittest import mock
 
@@ -148,4 +149,8 @@ def test_skip_writes_audit_event(tmp_path, capsys):
 
     output = json.loads(capsys.readouterr().out)
     assert output["status"] == "skipped"
-    assert _read_events()[0]["event_type"] == "correction_skipped"
+    event = _read_events()[0]
+    assert event["event_type"] == "correction_skipped"
+    skipped_at = datetime.fromisoformat(event["skipped_at"])
+    assert skipped_at.tzinfo is not None
+    assert skipped_at.utcoffset().total_seconds() == 0

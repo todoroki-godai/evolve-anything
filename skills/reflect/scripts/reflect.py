@@ -1447,18 +1447,23 @@ def main():
     if args.skip:
         all_records = load_corrections(corrections_file)
         source_resolution = resolve_source_correction_id(all_records, args.skip)
-        if source_resolution.get("status") != "found":
+        resolution_status = source_resolution.get("status")
+        if resolution_status not in ("found", "invalid_id"):
             status = source_resolution.get("status")
             if status == "ambiguous":
                 status = "ambiguous_source"
-            elif status == "invalid_id":
-                status = "unmigrated_source"
             print(json.dumps({
                 **source_resolution,
                 "status": status,
             }, ensure_ascii=False))
             sys.exit(1)
-        target_correction_id = source_resolution["correction_id"]
+        target_correction_id = source_resolution.get("correction_id")
+        unresolved_note = None
+        if resolution_status == "invalid_id":
+            unresolved_note = (
+                "correction_id が未移行または不正なため、skip は続行しましたが"
+                "監査イベントは記録していません"
+            )
         target_index = None
         for i, r in enumerate(all_records):
             sid = r.get("session_id", "")
@@ -1483,25 +1488,31 @@ def main():
 
         if args.dry_run:
             # --dry-run では一切書かない（--apply と同じ dry-run ゲート貫通規約）。
-            print(json.dumps({
+            output = {
                 "status": "dry_run",
                 "source_correction_id": args.skip,
-            }, ensure_ascii=False, indent=2))
+            }
+            if unresolved_note is not None:
+                output.update(event_recorded=False, note=unresolved_note)
+            print(json.dumps(output, ensure_ascii=False, indent=2))
             return
 
         result = update_reflect_status(corrections_file, [target_index], "skipped")
-        if result.get("status") == "skipped":
+        if result.get("status") == "skipped" and target_correction_id is not None:
             skipped_event = append_unique_record("reflect_apply_events.jsonl", {
                 "correction_id": new_correction_id(),
                 "schema_version": 1,
                 "event_type": "correction_skipped",
                 "target_correction_id": target_correction_id,
+                "skipped_at": datetime.now(timezone.utc).isoformat(),
             })
             if skipped_event.status != "appended":
                 result["pillar2_event"] = {
                     "status": skipped_event.status,
                     "reason": skipped_event.reason,
                 }
+        elif result.get("status") == "skipped":
+            result.update(event_recorded=False, note=unresolved_note)
         print(json.dumps({
             "source_correction_id": args.skip,
             **result,
