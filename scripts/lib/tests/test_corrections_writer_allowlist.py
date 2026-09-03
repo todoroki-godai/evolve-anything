@@ -28,6 +28,11 @@ REWRITE_WRITERS = {
     ("scripts/migrate_reflect_promoted_status.py", "migrate"),
     ("skills/reflect/scripts/reflect.py", "update_reflect_status"),
 }
+LOCKED_INTERNAL_HELPERS = {
+    ("scripts/lib/backfill_turn_indices.py", "_backfill_corrections_unlocked"),
+    ("scripts/lib/pj_slug_backfill.py", "_backfill_jsonl"),
+    ("scripts/migrate_reflect_promoted_status.py", "_migrate_text"),
+}
 
 
 @dataclass
@@ -86,6 +91,8 @@ def _is_corrections_expr(node: ast.AST, tainted: set[str]) -> bool:
 def _write_sink(call: ast.Call, aliases: dict[str, tuple[str, ...]], tainted: set[str]) -> bool:
     name = _resolved_call(call, aliases)
     leaf = name[-1] if name else ""
+    if leaf == "atomic_write_text_preserving_mode":
+        return True
     if leaf in {"store_write", "store_write_raw", "append_jsonl", "atomic_write_text"}:
         return bool(call.args) and _is_corrections_expr(call.args[0], tainted)
     if leaf in {"replace", "move", "copy", "copy2"}:
@@ -148,7 +155,11 @@ def scan_source(source: str, path: str = "snippet.py") -> Scan:
             if function.name != "append_correction_record":
                 append_callers.add(identity)
         for call in calls:
-            if _write_sink(call, aliases, tainted) and not has_lock:
+            if (
+                _write_sink(call, aliases, tainted)
+                and not has_lock
+                and identity not in LOCKED_INTERNAL_HELPERS
+            ):
                 uncoordinated.add((path, function.name, call.lineno))
     return Scan(append_callers, lock_users, uncoordinated)
 
@@ -195,3 +206,11 @@ def test_direct_and_generic_bypass_writes_are_detected():
     assert {(fn, line) for _, fn, line in result.uncoordinated_sinks} == {
         ("direct", 4), ("generic", 7)
     }
+
+
+def test_corrections_atomic_helper_bypass_is_detected():
+    result = scan_source(
+        "from rl_common.correction_id import atomic_write_text_preserving_mode as save\n"
+        "def direct(corrections_path):\n    save(corrections_path, 'lost')\n"
+    )
+    assert {(fn, line) for _, fn, line in result.uncoordinated_sinks} == {("direct", 3)}
