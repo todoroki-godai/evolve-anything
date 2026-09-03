@@ -1,11 +1,18 @@
 """#595 corrections.jsonl rewrite writer の共有ロック契約。"""
 import ast
+import importlib
+import json
+import sys
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
 
 
 ROOT = Path(__file__).resolve().parents[3]
+for import_root in (ROOT / "scripts", ROOT / "scripts/lib", ROOT / "skills/reflect/scripts"):
+    if str(import_root) not in sys.path:
+        sys.path.insert(0, str(import_root))
 
 WRITERS = (
     ("skills/reflect/scripts/reflect.py", "update_reflect_status"),
@@ -69,3 +76,115 @@ def test_rewrite_writer_has_shared_lock_region(relative_path, function_name):
         "_migrate_unlocked",
         "_migrate_text",
     }, f"{relative_path}:{function_name} lock does not contain the read/transform path"
+
+
+def _write_jsonl(path: Path, records):
+    path.write_text(
+        "".join(json.dumps(record, ensure_ascii=False) + "\n" for record in records),
+        encoding="utf-8",
+    )
+
+
+@pytest.mark.parametrize(
+    "case",
+    ("reflect", "idiom", "prune", "reflect_migration", "subagent", "id_migration",
+     "turn_index", "pj_slug"),
+)
+def test_runtime_order_is_lock_read_write_unlock(case, tmp_path, monkeypatch):
+    events: list[str] = []
+    target = tmp_path / "corrections.jsonl"
+
+    if case == "reflect":
+        module = importlib.import_module("reflect")
+        record = {"correction_id": "1" * 32, "reflect_status": "pending"}
+        _write_jsonl(target, [record])
+        invoke = lambda: module.update_reflect_status(
+            target, [module.UpdateTarget(0, ("id", "1" * 32))], "skipped"
+        )
+    elif case == "idiom":
+        module = importlib.import_module("correction_semantic.promote")
+        _write_jsonl(target, [{"correction_id": "2" * 32, "promoted_by": "idiom_dict",
+                              "idiom_key": "k"}])
+        invoke = lambda: module.invalidate_idiom_corrections(
+            {"k"}, corrections_path=target, dry_run=False
+        )
+    elif case == "prune":
+        module = importlib.import_module("prune.corrections")
+        _write_jsonl(target, [{"correction_id": "3" * 32, "reflect_status": "applied",
+                              "timestamp": "2000-01-01T00:00:00+00:00", "decay_days": 1}])
+        monkeypatch.setattr(importlib.import_module("prune"), "DATA_DIR", tmp_path)
+        invoke = lambda: module.cleanup_corrections(dry_run=False)
+    elif case == "reflect_migration":
+        module = importlib.import_module("migrate_reflect_promoted_status")
+        _write_jsonl(target, [{"correction_id": "4" * 32, "source": "reflect_confirmed",
+                              "reflect_status": "applied"}])
+        invoke = lambda: module.migrate(target, dry_run=False)
+    elif case == "subagent":
+        module = importlib.import_module("corrections_subagent_invalidation")
+        _write_jsonl(target, [{"correction_id": "5" * 32,
+                              "weak_signal_provenance": {"source_path": "/subagents/x"}}])
+        invoke = lambda: module.invalidate_subagent_contaminated_corrections(
+            target, dry_run=False
+        )
+    elif case == "id_migration":
+        module = importlib.import_module("migrate_correction_id_backfill")
+        _write_jsonl(target, [{"message": "legacy"}])
+        invoke = lambda: module.migrate(target, dry_run=False)
+    elif case == "turn_index":
+        module = importlib.import_module("backfill_turn_indices")
+        projects = tmp_path / "projects" / "p"
+        projects.mkdir(parents=True)
+        _write_jsonl(projects / "s.jsonl", [{"type": "user", "timestamp": "2026-01-01T00:00:00Z"}])
+        _write_jsonl(target, [{"correction_id": "6" * 32, "session_id": "s",
+                              "timestamp": "2026-01-02T00:00:00Z"}])
+        invoke = lambda: module.backfill_corrections(
+            target, tmp_path / "sessions.jsonl", tmp_path / "projects", dry_run=False
+        )
+    else:
+        module = importlib.import_module("pj_slug_backfill")
+        _write_jsonl(target, [{"correction_id": "7" * 32, "project_path": "/tmp/project"}])
+        invoke = lambda: module.backfill(tmp_path, apply=True)
+
+    @contextmanager
+    def lock(_path):
+        events.append("lock_enter")
+        try:
+            yield
+        finally:
+            events.append("lock_exit")
+
+    monkeypatch.setattr(module, "corrections_write_lock", lock)
+    real_read = Path.read_text
+
+    def read_spy(path, *args, **kwargs):
+        if Path(path).resolve() == target.resolve():
+            events.append("read")
+        return real_read(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", read_spy)
+    if case == "id_migration":
+        real_replace = module.os.replace
+
+        def replace_spy(source, destination):
+            if Path(destination).resolve() == target.resolve():
+                events.append("write")
+            return real_replace(source, destination)
+
+        monkeypatch.setattr(module.os, "replace", replace_spy)
+    else:
+        real_write = module.atomic_write_text_preserving_mode
+
+        def write_spy(path, text):
+            if Path(path).resolve() == target.resolve():
+                events.append("write")
+            return real_write(path, text)
+
+        monkeypatch.setattr(module, "atomic_write_text_preserving_mode", write_spy)
+
+    invoke()
+
+    assert events[0] == "lock_enter", events
+    assert "read" in events and "write" in events, events
+    assert events.index("lock_enter") < events.index("read") < events.index("write")
+    assert events.index("write") < events.index("lock_exit")
+    assert events[-1] == "lock_exit", events
