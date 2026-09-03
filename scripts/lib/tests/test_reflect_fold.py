@@ -117,6 +117,23 @@ def test_duplicate_event_ids_are_excluded_and_flagged():
     assert health.duplicate_event_row_count == 2
 
 
+def test_skipped_event_own_id_collision_is_excluded_and_flagged():
+    skipped = {
+        "correction_id": ATTEMPT_ID,
+        "schema_version": 1,
+        "event_type": "correction_skipped",
+        "target_correction_id": BASE_ID,
+        "skipped_at": "2026-08-31T10:02:00+00:00",
+    }
+
+    folded, health = fold_corrections(
+        [_base()], [_attempt(), _applied(), skipped], now=NOW
+    )
+
+    assert folded[0].has_pillar2_fields is False
+    assert health.duplicate_event_row_count == 2
+
+
 @pytest.mark.parametrize(
     "correction_id",
     [
