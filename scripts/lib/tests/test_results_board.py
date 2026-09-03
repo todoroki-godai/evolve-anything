@@ -992,7 +992,19 @@ class TestRenderResultsBoard:
         """producer が増やした数値 health を表示側が取りこぼさない。"""
         corrections = tmp_path / "corrections.jsonl"
         events = tmp_path / "reflect_apply_events.jsonl"
-        corrections.touch()
+        corrections.write_text(
+            json.dumps(
+                {
+                    "correction_id": "a" * 32,
+                    "extracted_learning": "Use the stable API",
+                    "reflect_status": "pending",
+                    "project_path": None,
+                    "timestamp": "2026-08-31T00:00:00+00:00",
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
         events.touch()
         health = count_applied_reflections(
             tmp_path,
