@@ -28,6 +28,17 @@ WRITERS = (
     ("scripts/lib/pj_slug_backfill.py", "backfill"),
 )
 
+LOSS_GUARDS = (
+    ("skills/reflect/scripts/reflect.py", "update_reflect_status"),
+    ("scripts/lib/correction_semantic/promote.py", "invalidate_idiom_corrections"),
+    ("scripts/lib/prune/corrections.py", "cleanup_corrections"),
+    ("scripts/migrate_reflect_promoted_status.py", "_migrate_text"),
+    ("scripts/lib/corrections_subagent_invalidation.py", "invalidate_subagent_contaminated_corrections"),
+    ("scripts/migrate_correction_id_backfill.py", "_migrate_unlocked"),
+    ("scripts/lib/backfill_turn_indices.py", "_backfill_corrections_unlocked"),
+    ("scripts/lib/pj_slug_backfill.py", "_backfill_jsonl"),
+)
+
 
 def _call_name(node: ast.AST) -> str | None:
     if not isinstance(node, ast.Call):
@@ -76,6 +87,20 @@ def test_rewrite_writer_has_shared_lock_region(relative_path, function_name):
         "_migrate_unlocked",
         "_migrate_text",
     }, f"{relative_path}:{function_name} lock does not contain the read/transform path"
+
+
+@pytest.mark.parametrize("relative_path,function_name", LOSS_GUARDS)
+def test_rewrite_writer_has_content_loss_guard(relative_path, function_name):
+    tree = ast.parse((ROOT / relative_path).read_text(encoding="utf-8"))
+    function = next(
+        node for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name == function_name
+    )
+    calls = {
+        _call_name(node) for node in ast.walk(function) if isinstance(node, ast.Call)
+    }
+    assert "assert_no_unexpected_content_loss" in calls
 
 
 def _write_jsonl(path: Path, records):
@@ -147,6 +172,7 @@ def test_runtime_order_is_lock_read_write_unlock(case, tmp_path, monkeypatch):
 
     @contextmanager
     def lock(_path):
+        assert Path(_path).resolve() == target.resolve()
         events.append("lock_enter")
         try:
             yield
