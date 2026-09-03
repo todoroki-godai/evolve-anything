@@ -15,6 +15,8 @@ for import_root in (ROOT / "scripts", ROOT / "scripts/lib", ROOT / "skills/refle
     if str(import_root) not in sys.path:
         sys.path.insert(0, str(import_root))
 
+from rl_common.correction_id import UnexpectedCorrectionLossError
+
 WRITERS = (
     ("skills/reflect/scripts/reflect.py", "update_reflect_status"),
     ("scripts/lib/correction_semantic/promote.py", "invalidate_idiom_corrections"),
@@ -210,6 +212,62 @@ def test_rewrite_preserves_unicode_separator_line_byte_for_byte(case, tmp_path, 
         if line
     ]
     assert len(physical_records) == (1 if case == "prune" else 2)
+
+
+@pytest.mark.parametrize(
+    "case",
+    ("reflect", "idiom", "prune", "reflect_migration", "subagent", "id_migration",
+     "turn_index", "pj_slug"),
+)
+def test_rewrite_writer_rejects_transform_that_drops_untouched_line(
+    case, tmp_path, monkeypatch
+):
+    target = tmp_path / "corrections.jsonl"
+    module, changed_record, invoke = _rewrite_case(
+        case, target, tmp_path, monkeypatch, reflect_index=2
+    )
+    untouched_with_id = json.dumps(
+        {"correction_id": "8" * 32, "message": "untouched id"}, ensure_ascii=False
+    )
+    untouched_legacy = (
+        '{"message":"malformed legacy"'
+        if case == "id_migration"
+        else json.dumps({"message": "untouched legacy"}, ensure_ascii=False)
+    )
+    target.write_text(
+        "\n".join(
+            (untouched_with_id, untouched_legacy, json.dumps(changed_record, ensure_ascii=False), "")
+        ),
+        encoding="utf-8",
+    )
+    before = target.read_bytes()
+    real_split = module.split_corrections_lines
+
+    def drop_first_physical_line(text):
+        lines = real_split(text)
+        lines[0] = ""
+        return lines
+
+    monkeypatch.setattr(module, "split_corrections_lines", drop_first_physical_line)
+
+    with pytest.raises(UnexpectedCorrectionLossError):
+        invoke()
+    assert target.read_bytes() == before
+
+
+def test_prune_preserves_malformed_legacy_line_while_removing_target(tmp_path, monkeypatch):
+    target = tmp_path / "corrections.jsonl"
+    _module, changed_record, invoke = _rewrite_case(
+        "prune", target, tmp_path, monkeypatch
+    )
+    malformed = b'{"message":"malformed legacy"\n'
+    target.write_bytes(
+        (json.dumps(changed_record, ensure_ascii=False) + "\n").encode("utf-8") + malformed
+    )
+
+    invoke()
+
+    assert target.read_bytes() == malformed
 
 
 @pytest.mark.parametrize(
