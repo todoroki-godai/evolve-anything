@@ -267,6 +267,7 @@ def _pillar2_degraded_reason(pillar2: Dict[str, Any]) -> str:
         ("unknown_schema_events", "未知 schema イベント"),
         ("invalid_events", "不正イベント"),
         ("duplicate_base_row_count", "重複 correction"),
+        ("duplicate_event_row_count", "識別子が重複した反映記録"),
         ("orphan_confirmations", "孤立確認イベント"),
         ("duplicate_confirmations", "重複確認イベント"),
         ("hash_mismatch_count", "hash 不一致"),
@@ -291,6 +292,32 @@ def _pillar2_degraded_reason(pillar2: Dict[str, Any]) -> str:
     legacy = int(pillar2.get("legacy_unverified_count") or 0)
     if legacy:
         reasons.append(f"未照合の旧記録 {legacy} 件")
+    # 次の値は単独では測定不能にしない内訳・参考値だが、producer の health 契約を
+    # 表示側が取りこぼしたときに fallback へ落ちないよう、単独入力にも説明を持たせる。
+    if not reasons:
+        for key, label in (
+            ("orphan_events_expected", "制度開始前の対応先がない記録"),
+            ("invalid_base_id_non_applied_row_count", "識別子を確認できない基底記録"),
+            (
+                "invalid_base_id_applied_same_project_row_count",
+                "このプロジェクトに属する識別子不明の反映済み基底",
+            ),
+            (
+                "invalid_base_id_applied_global_looking_row_count",
+                "共通扱いの識別子不明の反映済み基底",
+            ),
+            (
+                "invalid_base_id_non_applied_same_project_row_count",
+                "このプロジェクトに属する識別子不明の基底記録",
+            ),
+            (
+                "invalid_base_id_non_applied_global_looking_row_count",
+                "共通扱いの識別子不明の基底記録",
+            ),
+        ):
+            count = int(health.get(key) or 0)
+            if count:
+                reasons.append(f"{label} {count} 件")
     return "・".join(reasons) or "集計 health が degraded"
 
 
