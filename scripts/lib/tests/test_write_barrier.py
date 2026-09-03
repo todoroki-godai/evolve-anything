@@ -282,16 +282,41 @@ def test_store_write_raw_rejects_relative_specialized_boundary(
     assert not target.exists()
 
 
-def test_store_write_raw_rejects_same_file_alias_of_specialized_boundary(
-    data_dir,
+@pytest.mark.parametrize(
+    ("frozen", "guard_mode"),
+    [(True, "warn"), (False, None)],
+    ids=["frozen-warn", "unfrozen-default-reject"],
+)
+def test_store_write_raw_rejects_missing_case_alias_of_specialized_boundary(
+    data_dir, monkeypatch, frozen, guard_mode
 ) -> None:
+    monkeypatch.setattr(shrink_freeze, "SHRINK_FREEZE_ACTIVE", frozen)
     declared = data_dir / "reflect_apply_events.jsonl"
-    declared.touch()
     alias = data_dir / "Reflect_Apply_Events.jsonl"
 
     with pytest.raises(StoreWriteError, match="専用の追記境界"):
-        store_write_raw(alias, {"correction_id": "a" * 32}, guard_mode="warn")
-    assert declared.read_text(encoding="utf-8") == ""
+        store_write_raw(alias, {"correction_id": "a" * 32}, guard_mode=guard_mode)
+    assert not declared.exists()
+    assert not alias.exists()
+
+
+@pytest.mark.parametrize(
+    ("frozen", "guard_mode"),
+    [(True, "warn"), (False, None)],
+    ids=["frozen-warn", "unfrozen-default-reject"],
+)
+def test_store_write_raw_rejects_missing_dangling_alias_of_specialized_boundary(
+    data_dir, monkeypatch, frozen, guard_mode
+) -> None:
+    monkeypatch.setattr(shrink_freeze, "SHRINK_FREEZE_ACTIVE", frozen)
+    declared = data_dir / "reflect_apply_events.jsonl"
+    alias = data_dir / "alias.jsonl"
+    alias.symlink_to(declared.name)
+
+    with pytest.raises(StoreWriteError, match="専用の追記境界"):
+        store_write_raw(alias, {"correction_id": "a" * 32}, guard_mode=guard_mode)
+    assert not declared.exists()
+    assert alias.is_symlink()
 
 
 def test_store_write_raw_keeps_explicit_path_exception_for_boundary_store(

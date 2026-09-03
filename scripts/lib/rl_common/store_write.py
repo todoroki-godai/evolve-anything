@@ -160,8 +160,8 @@ def _raw_freeze_problem(filepath: Path) -> Optional[str]:
 def _raw_boundary_problem(filepath: Path) -> Optional[str]:
     """正準 DATA_DIR 配下の raw 書込が専用境界を迂回しないか照合する。
 
-    basename が宣言と一致しない場合も、既存ファイルなら samefile で照合する。対象が
-    未作成で samefile 不能なら fail-open とし、既存の raw 例外口の用途を狭めない。
+    symlink は解決先 basename、大小文字だけ異なる別名は casefold した宣言名で照合する。
+    対象ファイルの作成前でも専用境界の別名迂回を拒否する。
     """
     try:
         import rl_common
@@ -176,18 +176,14 @@ def _raw_boundary_problem(filepath: Path) -> Optional[str]:
         import store_registry
     except ImportError:
         return None
-    declaration = store_registry.declaration_for(Path(filepath).name)
+    declaration = store_registry.declaration_for(target.name)
     if declaration is None:
+        requested_name = Path(filepath).name.casefold()
         for declared_name in store_registry.declared_store_names():
-            candidate = store_registry.declaration_for(declared_name)
-            if getattr(candidate, "write_boundary", None) is None:
+            if declared_name.casefold() != requested_name:
                 continue
-            try:
-                if Path(filepath).samefile(canonical / declared_name):
-                    declaration = candidate
-                    break
-            except OSError:
-                continue
+            declaration = store_registry.declaration_for(declared_name)
+            break
     boundary = getattr(declaration, "write_boundary", None)
     if boundary is None:
         return None
