@@ -15,7 +15,10 @@ for import_root in (ROOT / "scripts", ROOT / "scripts/lib", ROOT / "skills/refle
     if str(import_root) not in sys.path:
         sys.path.insert(0, str(import_root))
 
-from rl_common.correction_id import UnexpectedCorrectionLossError
+from rl_common.correction_id import (
+    UnexpectedCorrectionLossError,
+    append_correction_record,
+)
 
 WRITERS = (
     ("skills/reflect/scripts/reflect.py", "update_reflect_status"),
@@ -213,6 +216,32 @@ def test_rewrite_preserves_unicode_separator_line_byte_for_byte(case, tmp_path, 
         if line
     ]
     assert len(physical_records) == (1 if case == "prune" else 2)
+
+
+def test_idiom_rewrite_preserves_canonically_appended_unicode_separator_record(tmp_path):
+    module = importlib.import_module("correction_semantic.promote")
+    target = tmp_path / "corrections.jsonl"
+    changed = {"correction_id": "2" * 32, "promoted_by": "idiom_dict", "idiom_key": "k"}
+    untouched = {
+        "correction_id": "8" * 32,
+        "message": "LS:\u2028 PS:\u2029 NEL:\u0085",
+    }
+    assert append_correction_record(target, changed).status == "appended"
+    assert append_correction_record(target, untouched).status == "appended"
+    untouched_bytes = (json.dumps(untouched, ensure_ascii=False) + "\n").encode("utf-8")
+
+    result = module.invalidate_idiom_corrections(
+        {"k"}, corrections_path=target, dry_run=False
+    )
+
+    assert result == {"invalidated": 1, "dry_run": False}
+    assert untouched_bytes in target.read_bytes()
+    records = [
+        json.loads(line)
+        for line in target.read_text(encoding="utf-8").split("\n")
+        if line
+    ]
+    assert [record["correction_id"] for record in records] == ["2" * 32, "8" * 32]
 
 
 @pytest.mark.parametrize(
