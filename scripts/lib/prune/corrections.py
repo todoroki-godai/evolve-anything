@@ -19,6 +19,7 @@ from rl_common.correction_id import (
     fcntl_unsupported_reason,
     snapshot_identities,
 )
+from rl_common.persistence import split_corrections_lines
 
 
 def load_corrections() -> Dict[str, List[Dict]]:
@@ -35,7 +36,7 @@ def load_corrections() -> Dict[str, List[Dict]]:
         return {}
 
     by_skill: Dict[str, List[Dict]] = {}
-    for line in corrections_file.read_text(encoding="utf-8").splitlines():
+    for line in split_corrections_lines(corrections_file.read_text(encoding="utf-8")):
         try:
             record = json.loads(line)
             skill = record.get("last_skill")
@@ -104,7 +105,7 @@ def _cleanup_corrections_text(text: str, *, now: datetime):
     removed_lines: List[str] = []
     removed = 0
 
-    for line in text.splitlines():
+    for line in split_corrections_lines(text):
         if not line.strip():
             continue
         try:

@@ -45,6 +45,7 @@ from rl_common.correction_id import (  # noqa: E402
     fcntl_unsupported_reason,
     snapshot_identities,
 )
+from rl_common.persistence import split_corrections_lines  # noqa: E402
 
 _SOURCE_PATH_MARKER = "/subagents/"
 _INVALIDATION_REASON = "adr054_a3_subagent_contamination"
@@ -109,7 +110,7 @@ def _invalidate_text(corrections_file: Path, text: str, *, dry_run: bool):
     candidates: List[str] = []
     touched: List[str] = []
 
-    for raw_line in text.splitlines():
+    for raw_line in split_corrections_lines(text):
         stripped = raw_line.strip()
         if not stripped:
             continue

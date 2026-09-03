@@ -111,6 +111,107 @@ def _write_jsonl(path: Path, records):
     )
 
 
+def _rewrite_case(case, target, tmp_path, monkeypatch, *, reflect_index=0):
+    """8 writer の実書換えを同じ corrections fixture へ向ける。"""
+    if case == "reflect":
+        module = importlib.import_module("reflect")
+        invoke = lambda: module.update_reflect_status(
+            target,
+            [module.UpdateTarget(reflect_index, ("id", "1" * 32))],
+            "skipped",
+        )
+        record = {"correction_id": "1" * 32, "reflect_status": "pending"}
+    elif case == "idiom":
+        module = importlib.import_module("correction_semantic.promote")
+        invoke = lambda: module.invalidate_idiom_corrections(
+            {"k"}, corrections_path=target, dry_run=False
+        )
+        record = {"correction_id": "2" * 32, "promoted_by": "idiom_dict", "idiom_key": "k"}
+    elif case == "prune":
+        module = importlib.import_module("prune.corrections")
+        monkeypatch.setattr(importlib.import_module("prune"), "DATA_DIR", tmp_path)
+        invoke = lambda: module.cleanup_corrections(dry_run=False)
+        record = {
+            "correction_id": "3" * 32,
+            "reflect_status": "applied",
+            "timestamp": "2000-01-01T00:00:00+00:00",
+            "decay_days": 1,
+        }
+    elif case == "reflect_migration":
+        module = importlib.import_module("migrate_reflect_promoted_status")
+        invoke = lambda: module.migrate(target, dry_run=False)
+        record = {
+            "correction_id": "4" * 32,
+            "source": "reflect_confirmed",
+            "reflect_status": "applied",
+        }
+    elif case == "subagent":
+        module = importlib.import_module("corrections_subagent_invalidation")
+        invoke = lambda: module.invalidate_subagent_contaminated_corrections(
+            target, dry_run=False
+        )
+        record = {
+            "correction_id": "5" * 32,
+            "weak_signal_provenance": {"source_path": "/subagents/x"},
+        }
+    elif case == "id_migration":
+        module = importlib.import_module("migrate_correction_id_backfill")
+        invoke = lambda: module.migrate(target, dry_run=False)
+        record = {"message": "needs id"}
+    elif case == "turn_index":
+        module = importlib.import_module("backfill_turn_indices")
+        projects = tmp_path / "projects" / "p"
+        projects.mkdir(parents=True, exist_ok=True)
+        _write_jsonl(
+            projects / "s.jsonl",
+            [{"type": "user", "timestamp": "2026-01-01T00:00:00Z"}],
+        )
+        invoke = lambda: module.backfill_corrections(
+            target, tmp_path / "sessions.jsonl", tmp_path / "projects", dry_run=False
+        )
+        record = {
+            "correction_id": "6" * 32,
+            "session_id": "s",
+            "timestamp": "2026-01-02T00:00:00Z",
+        }
+    else:
+        module = importlib.import_module("pj_slug_backfill")
+        invoke = lambda: module.backfill(tmp_path, apply=True)
+        record = {
+            "correction_id": "7" * 32,
+            "project_path": "/repo/.claude/worktrees/branch",
+        }
+    return module, record, invoke
+
+
+@pytest.mark.parametrize(
+    "case",
+    ("reflect", "idiom", "prune", "reflect_migration", "subagent", "id_migration",
+     "turn_index", "pj_slug"),
+)
+def test_rewrite_preserves_unicode_separator_line_byte_for_byte(case, tmp_path, monkeypatch):
+    target = tmp_path / "corrections.jsonl"
+    _module, changed_record, invoke = _rewrite_case(case, target, tmp_path, monkeypatch)
+    untouched = json.dumps(
+        {"correction_id": "8" * 32, "message": "LS:\u2028 PS:\u2029 NEL:\u0085"},
+        ensure_ascii=False,
+    )
+    target.write_bytes(
+        (json.dumps(changed_record, ensure_ascii=False) + "\n" + untouched + "\n").encode("utf-8")
+    )
+
+    invoke()
+
+    assert (json.dumps(changed_record, ensure_ascii=False) + "\n").encode("utf-8") not in target.read_bytes()
+    assert (untouched + "\n").encode("utf-8") in target.read_bytes()
+    physical_records = [
+        json.loads(line)
+        for line in target.read_text(encoding="utf-8").split("\n")
+        if line
+    ]
+    assert len(physical_records) == (1 if case == "prune" else 2)
+
+
 @pytest.mark.parametrize(
     "case",
     ("reflect", "idiom", "prune", "reflect_migration", "subagent", "id_migration",

@@ -33,6 +33,7 @@ from rl_common.correction_id import (
     fcntl_unsupported_reason,
     snapshot_identities,
 )
+from rl_common.persistence import split_corrections_lines
 
 
 def _normalize_project_path(value: str) -> str:
@@ -640,27 +641,27 @@ def _invalidate_idiom_text(text: str, target: Set[str], *, mutate: bool):
     recs: List[Any] = []
     touched: List[str] = []
     matched = 0
-    for raw_line in text.splitlines():
-            line = raw_line.strip()
-            if not line:
-                continue
-            try:
-                r = json.loads(line)
-            except (json.JSONDecodeError, ValueError):
-                recs.append(raw_line)
-                continue
-            if (
-                r.get("promoted_by") == "idiom_dict"
-                and r.get("idiom_key") in target
-                and not r.get("invalidated")
-            ):
-                matched += 1
-                touched.append(raw_line)
-                if mutate:
-                    r["invalidated"] = True
-                    recs.append(r)
-                    continue
+    for raw_line in split_corrections_lines(text):
+        line = raw_line.strip()
+        if not line:
+            continue
+        try:
+            r = json.loads(line)
+        except (json.JSONDecodeError, ValueError):
             recs.append(raw_line)
+            continue
+        if (
+            r.get("promoted_by") == "idiom_dict"
+            and r.get("idiom_key") in target
+            and not r.get("invalidated")
+        ):
+            matched += 1
+            touched.append(raw_line)
+            if mutate:
+                r["invalidated"] = True
+                recs.append(r)
+                continue
+        recs.append(raw_line)
     return "".join(
         (json.dumps(r, ensure_ascii=False) if isinstance(r, dict) else r) + "\n"
         for r in recs

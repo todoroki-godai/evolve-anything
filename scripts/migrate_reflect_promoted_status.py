@@ -27,6 +27,7 @@ from rl_common.correction_id import (
     fcntl_unsupported_reason,
     snapshot_identities,
 )
+from rl_common.persistence import split_corrections_lines
 
 CORRECTIONS_FILE = Path.home() / ".claude" / "evolve-anything" / "corrections.jsonl"
 
@@ -40,7 +41,7 @@ def _load_jsonl(filepath: Path) -> List[Dict[str, Any]]:
     if not filepath.exists():
         return []
     records = []
-    for line in filepath.read_text(encoding="utf-8").splitlines():
+    for line in split_corrections_lines(filepath.read_text(encoding="utf-8")):
         line = line.strip()
         if not line:
             continue
@@ -83,7 +84,9 @@ def _migrate_text(corrections_file: Path, *, write: bool) -> Dict[str, Any]:
     records: List[Dict[str, Any]] = []
     output_lines: List[str] = []
     touched: List[str] = []
-    for raw_line in text.splitlines():
+    for raw_line in split_corrections_lines(text):
+        if not raw_line and text.endswith("\n"):
+            continue
         if not raw_line.strip():
             output_lines.append(raw_line)
             continue

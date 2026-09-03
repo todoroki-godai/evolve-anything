@@ -45,6 +45,7 @@ from rl_common import (
     resolve_correction_id,
 )
 from rl_common import persistence
+from rl_common.persistence import split_corrections_lines
 from rl_common.correction_id import (
     assert_no_unexpected_content_loss,
     atomic_write_text_preserving_mode,
@@ -734,7 +735,10 @@ def update_reflect_status(
         matched_indices: set[int] = set()
         mismatched: list[int] = []
         touched_raw: list[str] = []
-        for physical_index, raw_line in enumerate(text.splitlines()):
+        physical_lines = split_corrections_lines(text)
+        for physical_index, raw_line in enumerate(physical_lines):
+            if physical_index == len(physical_lines) - 1 and not raw_line and text.endswith("\n"):
+                continue
             indexed = by_physical.get(physical_index)
             if indexed is None:
                 updated_lines.append(raw_line)

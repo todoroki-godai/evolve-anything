@@ -47,7 +47,7 @@ def _line_identity(raw_line: str) -> str:
 
 def snapshot_identities(text: str) -> Counter[str]:
     identities: Counter[str] = Counter()
-    for line in text.splitlines():
+    for line in persistence.split_corrections_lines(text):
         if line.strip():
             identities[_line_identity(line)] += 1
     return identities

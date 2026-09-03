@@ -23,6 +23,7 @@ from rl_common.correction_id import (
     fcntl_unsupported_reason,
     snapshot_identities,
 )
+from rl_common.persistence import split_corrections_lines
 
 
 def _parse_ts(ts_str: str) -> Optional[datetime]:
@@ -147,7 +148,7 @@ def backfill_missing_sessions(
 
     # corrections から missing session_id を収集
     missing_ids: Dict[str, dict] = {}  # session_id → correction record (for context)
-    for line in corrections_path.read_text(encoding="utf-8").splitlines():
+    for line in split_corrections_lines(corrections_path.read_text(encoding="utf-8")):
         line = line.strip()
         if not line:
             continue
@@ -244,7 +245,7 @@ def _backfill_corrections_unlocked(
     records = []
     touched = []
     added = 0
-    for raw_line in text.splitlines():
+    for raw_line in split_corrections_lines(text):
         line = raw_line.strip()
         if not line:
             continue

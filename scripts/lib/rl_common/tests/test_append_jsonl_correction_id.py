@@ -70,6 +70,17 @@ def test_same_id_is_rejected_but_distinct_ids_are_preserved(tmp_path):
     assert [json.loads(line) for line in path.read_text().splitlines()] == [first, second]
 
 
+def test_duplicate_check_reads_unicode_separators_as_record_content(tmp_path):
+    path = tmp_path / "corrections.jsonl"
+    record = {"correction_id": VALID_ID, "message": "LS:\u2028 PS:\u2029 NEL:\u0085"}
+
+    assert append_correction_record(path, record).status == "appended"
+    before = path.read_bytes()
+
+    assert append_correction_record(path, record).status == "duplicate_id"
+    assert path.read_bytes() == before
+
+
 def test_append_unique_record_resolves_registered_store_from_data_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(rl_common, "DATA_DIR", tmp_path)
     record = {"correction_id": VALID_ID, "event_type": "correction_skipped"}

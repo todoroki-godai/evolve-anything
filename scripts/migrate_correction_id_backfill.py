@@ -20,6 +20,7 @@ PLUGIN_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PLUGIN_ROOT / "scripts" / "lib"))
 
 from rl_common import persistence
+from rl_common.persistence import split_corrections_lines
 from rl_common.correction_id import (
     assert_no_unexpected_content_loss,
     corrections_write_lock,
@@ -103,7 +104,9 @@ def _migrate_unlocked(filepath: Path, *, dry_run: bool) -> MigrationResult:
         )
 
     initial_identity = _identity_of(orig_stat, raw_content)
-    raw_lines = raw_content.splitlines()
+    raw_lines = split_corrections_lines(raw_content)
+    if raw_lines and not raw_lines[-1] and raw_content.endswith("\n"):
+        raw_lines.pop()
     new_lines: list[str] = []
     final_records: list[dict] = []
     newly_assigned = 0

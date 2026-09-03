@@ -30,10 +30,15 @@ class IndexedLine:
     raw_line: str
 
 
+def split_corrections_lines(text: str) -> list[str]:
+    """corrections.jsonl を JSONL の物理改行 LF だけで分割する。"""
+    return text.split("\n")
+
+
 def iter_indexed_lines(text: str) -> Iterator[IndexedLine]:
     """JSON decode に成功した行へ、単一規約の論理・物理 index を付ける。"""
     record_index = 0
-    for physical_line_index, line in enumerate(text.splitlines()):
+    for physical_line_index, line in enumerate(split_corrections_lines(text)):
         stripped = line.strip()
         if not stripped:
             continue
@@ -193,7 +198,7 @@ def _read_records_locked(filepath: Path) -> list[dict]:
     """呼出側が排他ロックを保持している間に既存 dict レコードを読む。"""
     records: list[dict] = []
     try:
-        for line in filepath.read_text(encoding="utf-8").splitlines():
+        for line in split_corrections_lines(filepath.read_text(encoding="utf-8")):
             try:
                 value = json.loads(line)
             except json.JSONDecodeError:

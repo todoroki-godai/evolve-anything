@@ -45,6 +45,7 @@ from rl_common.correction_id import (
     fcntl_unsupported_reason,
     snapshot_identities,
 )
+from rl_common.persistence import split_corrections_lines
 
 
 def _normalize(value: Optional[str]) -> Optional[str]:
@@ -95,7 +96,7 @@ def _backfill_jsonl(
     text = path.read_text(encoding="utf-8")
     recs: List[Dict[str, Any]] = []
     original_lines: List[str] = []
-    for raw_line in text.splitlines():
+    for raw_line in split_corrections_lines(text):
         line = raw_line.strip()
         if not line:
             continue
