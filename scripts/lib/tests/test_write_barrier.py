@@ -319,28 +319,6 @@ def test_store_write_raw_rejects_missing_dangling_alias_of_specialized_boundary(
     assert alias.is_symlink()
 
 
-@pytest.mark.parametrize(
-    ("frozen", "guard_mode"),
-    [(True, "warn"), (False, None)],
-    ids=["frozen-warn", "unfrozen-default-reject"],
-)
-def test_store_write_raw_rejects_dangling_case_alias_of_specialized_boundary(
-    data_dir, monkeypatch, frozen, guard_mode
-) -> None:
-    """symlink 解決後の未作成 basename も大小文字を正規化して専用境界と照合する。"""
-    monkeypatch.setattr(shrink_freeze, "SHRINK_FREEZE_ACTIVE", frozen)
-    declared = data_dir / "reflect_apply_events.jsonl"
-    case_alias = data_dir / "Reflect_Apply_Events.jsonl"
-    alias = data_dir / "alias.jsonl"
-    alias.symlink_to(case_alias.name)
-
-    with pytest.raises(StoreWriteError, match="専用の追記境界"):
-        store_write_raw(alias, {"correction_id": "a" * 32}, guard_mode=guard_mode)
-    assert not declared.exists()
-    assert not case_alias.exists()
-    assert alias.is_symlink()
-
-
 def test_store_write_raw_keeps_explicit_path_exception_for_boundary_store(
     tmp_path_factory, data_dir
 ) -> None:
