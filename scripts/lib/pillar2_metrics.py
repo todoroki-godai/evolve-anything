@@ -22,6 +22,7 @@ PILLAR2_NOT_MEASURED_TARGETS = {
 # global-looking として通過している。
 # 追記時は対象 ID・基底の PJ・状態・柱2イベント不在・発見日時・承認根拠を人間が
 # 確認し、通常のコードレビューを経ること。時刻のみを根拠に追記しない。
+# 再 pin は実データの対象行へ `_baseline_row_sha256(row)` を実行し、対応する定数を差し替える。
 PRE_SCHEME_APPLIED_BASELINE = frozenset(
     {
         (
