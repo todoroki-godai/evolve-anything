@@ -150,7 +150,8 @@ grep -rn "corrections\.jsonl" --include="*.py" scripts hooks skills bin \
 
 この表と§1.2の再現スクリプトは既知の書込シグナルを再確認するためのadvisoryな根拠に留まる。
 sink種別を列挙するdenylist型で迂回可能なため、issue完成条件(e)「洗い出しの機械的裏付け」は
-**現状未充足**である。
+**現状未充足**である。**切り出し先: #619**（役割 allowlist への反転、および read-only consumer に残る
+`splitlines()` による過小集計）。着手前に `.claude/rules/no-denylist-checks.md` の判定を通すこと。
 
 ### 1.4 8件の rewrite writer と issue 本文の6件との差分（変更なし・再確認済み）
 

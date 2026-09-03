@@ -194,22 +194,38 @@ def _rewrite_case(case, target, tmp_path, monkeypatch, *, reflect_index=0):
     ("reflect", "idiom", "prune", "reflect_migration", "subagent", "id_migration",
      "turn_index", "pj_slug"),
 )
-def test_rewrite_preserves_unicode_separator_line_byte_for_byte(case, tmp_path, monkeypatch):
+@pytest.mark.parametrize("untouched_first", (False, True), ids=("changed_first", "untouched_first"))
+def test_rewrite_preserves_unicode_separator_line_byte_for_byte(
+    case, untouched_first, tmp_path, monkeypatch
+):
+    """untouched 行が touched 行の前後どちらにあっても byte 一致で残ること。
+
+    #618 巡4 [Should]: 並びが1通り（changed が先頭）だけだったため、
+    「touched より前の untouched 先頭行を落とす」変異が緑のまま残っていた。
+    """
     target = tmp_path / "corrections.jsonl"
-    _module, changed_record, invoke = _rewrite_case(case, target, tmp_path, monkeypatch)
+    # reflect だけは index 指定で対象行を選ぶので、並びに合わせて index を動かす。
+    _module, changed_record, invoke = _rewrite_case(
+        case, target, tmp_path, monkeypatch, reflect_index=1 if untouched_first else 0
+    )
     untouched = " " + json.dumps(
         {"correction_id": "8" * 32, "message": "LS:\u2028 PS:\u2029 NEL:\u0085"},
         ensure_ascii=False,
     ) + " "
-    target.write_bytes(
-        (json.dumps(changed_record, ensure_ascii=False) + "\n" + untouched + "\n").encode("utf-8")
-    )
+    changed_line = json.dumps(changed_record, ensure_ascii=False)
+    lines = [untouched, changed_line] if untouched_first else [changed_line, untouched]
+    target.write_bytes(("\n".join(lines) + "\n").encode("utf-8"))
 
     invoke()
 
-    assert (json.dumps(changed_record, ensure_ascii=False) + "\n").encode("utf-8") not in target.read_bytes()
+    assert (changed_line + "\n").encode("utf-8") not in target.read_bytes()
     assert (untouched + "\n").encode("utf-8") in target.read_bytes()
-    assert target.read_bytes().split(b"\n")[0 if case == "prune" else 1] == untouched.encode("utf-8")
+    if case == "prune":
+        # prune は対象行を消すので、残るのは untouched 1件だけ。
+        expected_index = 0
+    else:
+        expected_index = 0 if untouched_first else 1
+    assert target.read_bytes().split(b"\n")[expected_index] == untouched.encode("utf-8")
     physical_records = [
         json.loads(line)
         for line in target.read_text(encoding="utf-8").split("\n")
