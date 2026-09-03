@@ -1105,6 +1105,36 @@ class TestSkipCLI:
             with pytest.raises(SystemExit):
                 reflect.main()
 
+    def test_skip_unmigrated_correction_without_audit_event(
+        self, tmp_path, capsys, monkeypatch
+    ):
+        """correction_id 未移行でも skip は続行し、参照不能イベントは残さない。"""
+        corr = _make_correction(
+            reflect_status="promoted",
+            session_id="sess1",
+            timestamp="2026-08-17T00:00:00Z",
+        )
+        corr.pop("correction_id")
+        filepath = _write_corrections(tmp_path, [corr])
+        source_id = reflect.make_source_correction_id(
+            "sess1", "2026-08-17T00:00:00Z"
+        )
+        append = mock.Mock()
+        monkeypatch.setattr(reflect, "append_unique_record", append)
+
+        with mock.patch("sys.argv", [
+            "reflect.py", "--skip", source_id, "--corrections-file", str(filepath),
+        ]):
+            reflect.main()
+
+        output = json.loads(capsys.readouterr().out)
+        assert output["status"] == "skipped"
+        assert output["event_recorded"] is False
+        assert "correction_id" in output["note"]
+        assert "移行" in output["note"]
+        append.assert_not_called()
+        assert reflect.load_corrections(filepath)[0]["reflect_status"] == "skipped"
+
     def test_skip_does_not_overwrite_applied(self, tmp_path, capsys):
         """既に applied 済みのレコードは --skip で上書きしない（安全弁）。"""
         corr = _make_correction(reflect_status="applied", session_id="sess1", timestamp="2026-08-17T00:00:00Z")
