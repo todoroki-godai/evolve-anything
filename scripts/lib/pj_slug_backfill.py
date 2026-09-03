@@ -95,13 +95,13 @@ def _backfill_jsonl(
     text = path.read_text(encoding="utf-8")
     recs: List[Dict[str, Any]] = []
     original_lines: List[str] = []
-    for line in text.splitlines():
-        line = line.strip()
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
         if not line:
             continue
         try:
             recs.append(json.loads(line))
-            original_lines.append(line)
+            original_lines.append(raw_line)
         except json.JSONDecodeError:
             # 壊れた行は触らず保全したいが、原子的 rewrite では落ちてしまうため
             # 安全側に倒して何もしない（破損行があるストアは backfill 対象外と判断）。
@@ -109,18 +109,26 @@ def _backfill_jsonl(
 
     normalized = 0
     touched: List[str] = []
+    changed: List[bool] = []
     for rec, original in zip(recs, original_lines):
         raw = rec.get(field)
         if not raw:
+            changed.append(False)
             continue
         new = _normalize(raw)
         if new != raw:
             touched.append(original)
             rec[field] = new
             normalized += 1
+            changed.append(True)
+        else:
+            changed.append(False)
 
     if apply and normalized:
-        content = "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in recs)
+        content = "".join(
+            (json.dumps(rec, ensure_ascii=False) if was_changed else original) + "\n"
+            for rec, original, was_changed in zip(recs, original_lines, changed)
+        )
         if protect_corrections:
             assert_no_unexpected_content_loss(
                 snapshot_identities(text), snapshot_identities(content),

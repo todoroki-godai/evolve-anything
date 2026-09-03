@@ -80,8 +80,31 @@ def migrate(
 
 def _migrate_text(corrections_file: Path, *, write: bool) -> Dict[str, Any]:
     text = corrections_file.read_text(encoding="utf-8") if corrections_file.exists() else ""
-    records = _load_jsonl(corrections_file)
-    targets = [r for r in records if is_migration_target(r)]
+    records: List[Dict[str, Any]] = []
+    output_lines: List[str] = []
+    touched: List[str] = []
+    for raw_line in text.splitlines():
+        if not raw_line.strip():
+            output_lines.append(raw_line)
+            continue
+        try:
+            record = json.loads(raw_line.strip())
+        except json.JSONDecodeError:
+            output_lines.append(raw_line)
+            continue
+        if not isinstance(record, dict):
+            output_lines.append(raw_line)
+            continue
+        records.append(record)
+        if is_migration_target(record):
+            touched.append(raw_line)
+            if write:
+                updated = dict(record)
+                updated["reflect_status"] = _NEW_STATUS
+                output_lines.append(json.dumps(updated, ensure_ascii=False))
+                continue
+        output_lines.append(raw_line)
+    targets = [record for record in records if is_migration_target(record)]
 
     result: Dict[str, Any] = {
         "total": len(records),
@@ -93,16 +116,7 @@ def _migrate_text(corrections_file: Path, *, write: bool) -> Dict[str, Any]:
     if not write or not targets:
         return result
 
-    touched = [
-        line for line in text.splitlines()
-        if line.strip() and _raw_is_migration_target(line)
-    ]
-    for r in records:
-        if is_migration_target(r):
-            r["reflect_status"] = _NEW_STATUS
-
-    lines = [json.dumps(r, ensure_ascii=False) for r in records]
-    new_content = "\n".join(lines) + "\n" if lines else ""
+    new_content = "\n".join(output_lines) + "\n" if output_lines else ""
     assert_no_unexpected_content_loss(
         snapshot_identities(text), snapshot_identities(new_content),
         touched_before=snapshot_identities("\n".join(touched)),

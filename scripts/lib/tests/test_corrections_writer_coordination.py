@@ -230,3 +230,48 @@ def test_cleanup_dry_run_preserves_bytes_mode_and_directory(tmp_path, monkeypatc
     after = (target.read_bytes(), target.stat().st_mode & 0o777, sorted(tmp_path.iterdir()))
     assert result["removed"] == 1
     assert after == before
+
+
+@pytest.mark.parametrize(
+    "case", ("idiom", "reflect_migration", "subagent", "turn_index", "pj_slug")
+)
+def test_untouched_legacy_line_keeps_raw_unicode_and_whitespace(case, tmp_path):
+    target = tmp_path / "corrections.jsonl"
+    legacy = ' { "message" : "\\u65e5" } '
+    if case == "idiom":
+        module = importlib.import_module("correction_semantic.promote")
+        first = {"correction_id": "a" * 32, "promoted_by": "idiom_dict", "idiom_key": "k"}
+        invoke = lambda: module.invalidate_idiom_corrections(
+            {"k"}, corrections_path=target, dry_run=False
+        )
+    elif case == "reflect_migration":
+        module = importlib.import_module("migrate_reflect_promoted_status")
+        first = {"correction_id": "b" * 32, "source": "reflect_confirmed",
+                 "reflect_status": "applied"}
+        invoke = lambda: module.migrate(target, dry_run=False)
+    elif case == "subagent":
+        module = importlib.import_module("corrections_subagent_invalidation")
+        first = {"correction_id": "c" * 32,
+                 "weak_signal_provenance": {"source_path": "/subagents/x"}}
+        invoke = lambda: module.invalidate_subagent_contaminated_corrections(
+            target, dry_run=False
+        )
+    elif case == "turn_index":
+        module = importlib.import_module("backfill_turn_indices")
+        projects = tmp_path / "projects" / "p"
+        projects.mkdir(parents=True)
+        _write_jsonl(projects / "s.jsonl", [{"type": "user", "timestamp": "2026-01-01T00:00:00Z"}])
+        first = {"correction_id": "d" * 32, "session_id": "s",
+                 "timestamp": "2026-01-02T00:00:00Z"}
+        invoke = lambda: module.backfill_corrections(
+            target, tmp_path / "sessions.jsonl", tmp_path / "projects", dry_run=False
+        )
+    else:
+        module = importlib.import_module("pj_slug_backfill")
+        first = {"correction_id": "e" * 32, "project_path": "/tmp/project"}
+        invoke = lambda: module.backfill(tmp_path, apply=True)
+    target.write_text(json.dumps(first, ensure_ascii=False) + "\n" + legacy + "\n", encoding="utf-8")
+
+    invoke()
+
+    assert legacy in target.read_text(encoding="utf-8").splitlines()

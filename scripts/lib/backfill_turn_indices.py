@@ -251,22 +251,22 @@ def _backfill_corrections_unlocked(
         try:
             rec = json.loads(line)
         except json.JSONDecodeError:
-            records.append(line)
+            records.append(raw_line)
             continue
 
         if "turn_index" in rec:
-            records.append(json.dumps(rec, ensure_ascii=False))
+            records.append(raw_line)
             continue
 
         sid = rec.get("session_id", "")
         correction_ts = rec.get("timestamp", "")
         if not sid or not correction_ts:
-            records.append(json.dumps(rec, ensure_ascii=False))
+            records.append(raw_line)
             continue
 
         raw = find_session_raw_jsonl(sid, projects_dir)
         if raw is None:
-            records.append(json.dumps(rec, ensure_ascii=False))
+            records.append(raw_line)
             continue
 
         turn_idx = compute_turn_index(correction_ts, raw)
@@ -274,8 +274,9 @@ def _backfill_corrections_unlocked(
             touched.append(raw_line)
             rec["turn_index"] = turn_idx
             added += 1
-
-        records.append(json.dumps(rec, ensure_ascii=False))
+            records.append(json.dumps(rec, ensure_ascii=False))
+        else:
+            records.append(raw_line)
 
     if not dry_run and added > 0:
         new_content = "\n".join(records) + "\n"

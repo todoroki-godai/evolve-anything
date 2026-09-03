@@ -637,7 +637,7 @@ def invalidate_idiom_corrections(
 
 
 def _invalidate_idiom_text(text: str, target: Set[str], *, mutate: bool):
-    recs: List[Dict[str, Any]] = []
+    recs: List[Any] = []
     touched: List[str] = []
     matched = 0
     for raw_line in text.splitlines():
@@ -647,6 +647,7 @@ def _invalidate_idiom_text(text: str, target: Set[str], *, mutate: bool):
             try:
                 r = json.loads(line)
             except (json.JSONDecodeError, ValueError):
+                recs.append(raw_line)
                 continue
             if (
                 r.get("promoted_by") == "idiom_dict"
@@ -657,5 +658,10 @@ def _invalidate_idiom_text(text: str, target: Set[str], *, mutate: bool):
                 touched.append(raw_line)
                 if mutate:
                     r["invalidated"] = True
-            recs.append(r)
-    return "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in recs), matched, touched
+                    recs.append(r)
+                    continue
+            recs.append(raw_line)
+    return "".join(
+        (json.dumps(r, ensure_ascii=False) if isinstance(r, dict) else r) + "\n"
+        for r in recs
+    ), matched, touched

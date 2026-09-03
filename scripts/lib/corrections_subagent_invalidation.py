@@ -129,7 +129,9 @@ def _invalidate_text(corrections_file: Path, text: str, *, dry_run: bool):
                 rec["invalidated"] = True
                 rec["invalidated_at"] = now
                 rec["invalidation_reason"] = _INVALIDATION_REASON
-        lines.append(rec)
+                lines.append(rec)
+                continue
+        lines.append(raw_line)
 
     body = "".join(
         (json.dumps(line, ensure_ascii=False) if isinstance(line, dict) else line) + "\n"
