@@ -56,6 +56,14 @@ def _write_corrections(tmp_path, corrections):
     return filepath
 
 
+def _targets(filepath, indices):
+    records = reflect.load_corrections(filepath)
+    return [
+        reflect.UpdateTarget(index, reflect.persistence.record_identity(records[index]))
+        for index in indices
+    ]
+
+
 def _fresh_detected_at() -> str:
     """TTL 対象の weak signal を常に有効な時刻で seed する。"""
     return datetime.now(timezone.utc).isoformat()
@@ -293,7 +301,7 @@ class TestSkipAllMode:
         ]
         filepath = _write_corrections(tmp_path, corrections)
 
-        reflect.update_reflect_status(filepath, [0, 2], "skipped")
+        reflect.update_reflect_status(filepath, _targets(filepath, [0, 2]), "skipped")
 
         updated = reflect.load_corrections(filepath)
         assert updated[0]["reflect_status"] == "skipped"
@@ -515,7 +523,7 @@ class TestUpdateReflectStatus:
             _make_correction(message="msg2"),
         ]
         filepath = _write_corrections(tmp_path, corrections)
-        reflect.update_reflect_status(filepath, [0, 2], "skipped")
+        reflect.update_reflect_status(filepath, _targets(filepath, [0, 2]), "skipped")
 
         updated = reflect.load_corrections(filepath)
         assert updated[0]["reflect_status"] == "skipped"
@@ -526,7 +534,7 @@ class TestUpdateReflectStatus:
         """既存 --skip-all 呼び出し（target_path/draft_line 省略）が無改修で動く（MUST）。"""
         corrections = [_make_correction(message="msg0")]
         filepath = _write_corrections(tmp_path, corrections)
-        result = reflect.update_reflect_status(filepath, [0], "skipped")
+        result = reflect.update_reflect_status(filepath, _targets(filepath, [0]), "skipped")
         assert result["status"] == "skipped"
 
     def test_applied_without_target_path_raises(self, tmp_path):
@@ -534,14 +542,14 @@ class TestUpdateReflectStatus:
         corrections = [_make_correction(message="msg0")]
         filepath = _write_corrections(tmp_path, corrections)
         with pytest.raises(ValueError):
-            reflect.update_reflect_status(filepath, [0], "applied")
+            reflect.update_reflect_status(filepath, _targets(filepath, [0]), "applied")
 
     def test_applied_without_draft_line_raises(self, tmp_path):
         corrections = [_make_correction(message="msg0")]
         filepath = _write_corrections(tmp_path, corrections)
         with pytest.raises(ValueError):
             reflect.update_reflect_status(
-                filepath, [0], "applied", target_path=str(tmp_path / "rule.md"),
+                filepath, _targets(filepath, [0]), "applied", target_path=str(tmp_path / "rule.md"),
             )
 
     def test_applied_when_line_matches_target_file(self, tmp_path):
@@ -552,7 +560,7 @@ class TestUpdateReflectStatus:
         target.write_text("- 起草した行そのもの\n", encoding="utf-8")
 
         result = reflect.update_reflect_status(
-            filepath, [0], "applied",
+            filepath, _targets(filepath, [0]), "applied",
             target_path=str(target), draft_line="起草した行そのもの",
         )
 
@@ -568,7 +576,7 @@ class TestUpdateReflectStatus:
         target.write_text("- 別の行\n", encoding="utf-8")
 
         result = reflect.update_reflect_status(
-            filepath, [0], "applied",
+            filepath, _targets(filepath, [0]), "applied",
             target_path=str(target), draft_line="書いていない行",
         )
 
@@ -583,7 +591,7 @@ class TestUpdateReflectStatus:
         target = tmp_path / "does-not-exist.md"
 
         result = reflect.update_reflect_status(
-            filepath, [0], "applied",
+            filepath, _targets(filepath, [0]), "applied",
             target_path=str(target), draft_line="何かの行",
         )
 
@@ -601,6 +609,28 @@ class TestUpdateReflectStatus:
 # 書き換わる（issue #588）。
 
 class TestUpdateReflectStatusIndexAlignment:
+    def test_stale_index_identity_is_rejected_without_rewrite(self, tmp_path):
+        filepath = _write_corrections(
+            tmp_path,
+            [
+                _make_correction(message="before"),
+                _make_correction(message="target"),
+                _make_correction(message="after"),
+            ],
+        )
+        target = _targets(filepath, [1])
+        remaining = reflect.load_corrections(filepath)[1:]
+        filepath.write_text(
+            "\n".join(json.dumps(record, ensure_ascii=False) for record in remaining) + "\n",
+            encoding="utf-8",
+        )
+        before_call = filepath.read_bytes()
+
+        result = reflect.update_reflect_status(filepath, target, "skipped")
+
+        assert result["status"] == "identity_mismatch"
+        assert filepath.read_bytes() == before_call
+
     def test_blank_line_does_not_shift_target(self, tmp_path):
         """(a) 陰性試験: 空行があっても load_corrections の index と一致した
         レコードだけが更新される（別レコードが書き換わらない）。"""
@@ -615,7 +645,7 @@ class TestUpdateReflectStatusIndexAlignment:
         assert [r["id"] for r in records] == ["A", "B"]
 
         # B（load_corrections の index=1）を指定する
-        result = reflect.update_reflect_status(filepath, [1], "skipped")
+        result = reflect.update_reflect_status(filepath, _targets(filepath, [1]), "skipped")
 
         updated = reflect.load_corrections(filepath)
         by_id = {r["id"]: r["reflect_status"] for r in updated}
@@ -637,7 +667,7 @@ class TestUpdateReflectStatusIndexAlignment:
         assert [r["id"] for r in records] == ["A", "B"]
 
         # B（load_corrections の index=1）を指定する
-        result = reflect.update_reflect_status(filepath, [1], "skipped")
+        result = reflect.update_reflect_status(filepath, _targets(filepath, [1]), "skipped")
 
         updated = reflect.load_corrections(filepath)
         by_id = {r["id"]: r["reflect_status"] for r in updated}
@@ -654,7 +684,9 @@ class TestUpdateReflectStatusIndexAlignment:
         corrections = [_make_correction(message="msg0")]
         filepath = _write_corrections(tmp_path, corrections)
 
-        result = reflect.update_reflect_status(filepath, [5], "skipped")
+        result = reflect.update_reflect_status(
+            filepath, [reflect.UpdateTarget(5, ("id", "missing"))], "skipped"
+        )
 
         # #588 [Must]: != "skipped" だけでは戻り値契約を固定できない
         # （誤って "apply_unverified" を返す実装でも緑になってしまう）。
@@ -673,7 +705,9 @@ class TestUpdateReflectStatusIndexAlignment:
         filepath = tmp_path / "corrections.jsonl"
         assert not filepath.exists()
 
-        result = reflect.update_reflect_status(filepath, [0], "skipped")
+        result = reflect.update_reflect_status(
+            filepath, [reflect.UpdateTarget(0, ("id", "missing"))], "skipped"
+        )
 
         assert result["status"] == "not_found", (
             "対象ファイルが存在しないのに成功扱いを返してはいけない"
@@ -689,7 +723,7 @@ class TestUpdateReflectStatusIndexAlignment:
         assert not filepath.exists()
 
         result = reflect.update_reflect_status(
-            filepath, [0], "applied",
+            filepath, [reflect.UpdateTarget(0, ("id", "missing"))], "applied",
             target_path=str(target), draft_line="- 起草した行",
         )
 
@@ -719,7 +753,7 @@ class TestUpdateReflectStatusIndexAlignment:
         ]
         filepath = _write_corrections(tmp_path, corrections)
 
-        result = reflect.update_reflect_status(filepath, [1], "skipped")
+        result = reflect.update_reflect_status(filepath, _targets(filepath, [1]), "skipped")
 
         updated = reflect.load_corrections(filepath)
         assert updated[0]["reflect_status"] == "pending"

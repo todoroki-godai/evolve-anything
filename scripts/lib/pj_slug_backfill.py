@@ -38,6 +38,15 @@ import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from rl_common.correction_id import (
+    assert_no_unexpected_content_loss,
+    atomic_write_text_preserving_mode,
+    corrections_write_lock,
+    fcntl_unsupported_reason,
+    snapshot_identities,
+)
+from rl_common.persistence import split_corrections_lines
+
 
 def _normalize(value: Optional[str]) -> Optional[str]:
     """PJ 識別子（フルパス / worktree フルパス / basename）を worktree 安全 slug に正規化する。
@@ -73,7 +82,9 @@ def _atomic_write(path: Path, content: str) -> None:
         raise
 
 
-def _backfill_jsonl(path: Path, field: str, *, apply: bool) -> Dict[str, int]:
+def _backfill_jsonl(
+    path: Path, field: str, *, apply: bool, protect_corrections: bool = False
+) -> Dict[str, int]:
     """jsonl の各行 ``field`` を正規化する。
 
     Returns: {"normalized": 正規化により値が変わった行数, "total": 総行数}。
@@ -82,31 +93,51 @@ def _backfill_jsonl(path: Path, field: str, *, apply: bool) -> Dict[str, int]:
     if not path.exists():
         return {"normalized": 0, "total": 0}
 
+    text = path.read_text(encoding="utf-8")
     recs: List[Dict[str, Any]] = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
+    original_lines: List[str] = []
+    for raw_line in split_corrections_lines(text):
+        line = raw_line.strip()
         if not line:
             continue
         try:
             recs.append(json.loads(line))
+            original_lines.append(raw_line)
         except json.JSONDecodeError:
             # 壊れた行は触らず保全したいが、原子的 rewrite では落ちてしまうため
             # 安全側に倒して何もしない（破損行があるストアは backfill 対象外と判断）。
             return {"normalized": 0, "total": len(recs)}
 
     normalized = 0
-    for rec in recs:
+    touched: List[str] = []
+    changed: List[bool] = []
+    for rec, original in zip(recs, original_lines):
         raw = rec.get(field)
         if not raw:
+            changed.append(False)
             continue
         new = _normalize(raw)
         if new != raw:
+            touched.append(original)
             rec[field] = new
             normalized += 1
+            changed.append(True)
+        else:
+            changed.append(False)
 
     if apply and normalized:
-        content = "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in recs)
-        _atomic_write(path, content)
+        content = "".join(
+            (json.dumps(rec, ensure_ascii=False) if was_changed else original) + "\n"
+            for rec, original, was_changed in zip(recs, original_lines, changed)
+        )
+        if protect_corrections:
+            assert_no_unexpected_content_loss(
+                snapshot_identities(text), snapshot_identities(content),
+                touched_before=snapshot_identities("\n".join(touched)),
+            )
+            atomic_write_text_preserving_mode(path, content)
+        else:
+            _atomic_write(path, content)
 
     return {"normalized": normalized, "total": len(recs)}
 
@@ -199,7 +230,18 @@ def backfill(data_dir: Path, *, apply: bool = False) -> Dict[str, Any]:
         "data_dir": str(data_dir),
     }
     for key, filename, field in _JSONL_STORES:
-        result[key] = _backfill_jsonl(data_dir / filename, field, apply=apply)
+        path = data_dir / filename
+        if filename == "corrections.jsonl" and apply:
+            reason = fcntl_unsupported_reason()
+            if reason is not None:
+                result[key] = {"normalized": 0, "total": 0, "error": reason}
+                continue
+            with corrections_write_lock(path):
+                result[key] = _backfill_jsonl(
+                    path, field, apply=True, protect_corrections=True
+                )
+        else:
+            result[key] = _backfill_jsonl(path, field, apply=apply)
     result["sessions_db"] = _backfill_sessions_db(data_dir / "sessions.db", apply=apply)
     return result
 

@@ -17,6 +17,18 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List
 
+PLUGIN_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(PLUGIN_ROOT / "scripts" / "lib"))
+
+from rl_common.correction_id import (
+    assert_no_unexpected_content_loss,
+    atomic_write_text_preserving_mode,
+    corrections_write_lock,
+    fcntl_unsupported_reason,
+    snapshot_identities,
+)
+from rl_common.persistence import split_corrections_lines
+
 CORRECTIONS_FILE = Path.home() / ".claude" / "evolve-anything" / "corrections.jsonl"
 
 # この移行の対象になる旧レコードの条件（#475 §4.6）。
@@ -29,7 +41,7 @@ def _load_jsonl(filepath: Path) -> List[Dict[str, Any]]:
     if not filepath.exists():
         return []
     records = []
-    for line in filepath.read_text(encoding="utf-8").splitlines():
+    for line in split_corrections_lines(filepath.read_text(encoding="utf-8")):
         line = line.strip()
         if not line:
             continue
@@ -57,27 +69,73 @@ def migrate(
     Returns:
         {"total": int, "migrated": int, "dry_run": bool, "already_migrated": bool}
     """
-    records = _load_jsonl(corrections_file)
-    targets = [r for r in records if is_migration_target(r)]
+    if dry_run:
+        return _migrate_text(corrections_file, write=False)
+    reason = fcntl_unsupported_reason()
+    if reason is not None:
+        return {"total": 0, "migrated": 0, "dry_run": False,
+                "already_migrated": False, "error": reason}
+    with corrections_write_lock(corrections_file):
+        return _migrate_text(corrections_file, write=True)
+
+
+def _migrate_text(corrections_file: Path, *, write: bool) -> Dict[str, Any]:
+    text = corrections_file.read_text(encoding="utf-8") if corrections_file.exists() else ""
+    records: List[Dict[str, Any]] = []
+    output_lines: List[str] = []
+    touched: List[str] = []
+    physical_lines = split_corrections_lines(text)
+    for physical_index, raw_line in enumerate(physical_lines):
+        if physical_index == len(physical_lines) - 1 and not raw_line and text.endswith("\n"):
+            continue
+        if not raw_line.strip():
+            output_lines.append(raw_line)
+            continue
+        try:
+            record = json.loads(raw_line.strip())
+        except json.JSONDecodeError:
+            output_lines.append(raw_line)
+            continue
+        if not isinstance(record, dict):
+            output_lines.append(raw_line)
+            continue
+        records.append(record)
+        if is_migration_target(record):
+            touched.append(raw_line)
+            if write:
+                updated = dict(record)
+                updated["reflect_status"] = _NEW_STATUS
+                output_lines.append(json.dumps(updated, ensure_ascii=False))
+                continue
+        output_lines.append(raw_line)
+    targets = [record for record in records if is_migration_target(record)]
 
     result: Dict[str, Any] = {
         "total": len(records),
         "migrated": len(targets),
-        "dry_run": dry_run,
+        "dry_run": not write,
         "already_migrated": len(targets) == 0,
     }
 
-    if dry_run or not targets:
+    if not write or not targets:
         return result
 
-    for r in records:
-        if is_migration_target(r):
-            r["reflect_status"] = _NEW_STATUS
-
-    lines = [json.dumps(r, ensure_ascii=False) for r in records]
-    corrections_file.write_text("\n".join(lines) + "\n" if lines else "", encoding="utf-8")
+    new_content = "\n".join(output_lines) + "\n" if output_lines else ""
+    assert_no_unexpected_content_loss(
+        snapshot_identities(text), snapshot_identities(new_content),
+        touched_before=snapshot_identities("\n".join(touched)),
+    )
+    atomic_write_text_preserving_mode(corrections_file, new_content)
 
     return result
+
+
+def _raw_is_migration_target(line: str) -> bool:
+    try:
+        record = json.loads(line.strip())
+    except json.JSONDecodeError:
+        return False
+    return isinstance(record, dict) and is_migration_target(record)
 
 
 def main() -> None:

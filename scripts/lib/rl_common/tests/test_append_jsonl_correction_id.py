@@ -1,6 +1,8 @@
 import json
 import multiprocessing
+import os
 import sys
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -68,6 +70,17 @@ def test_same_id_is_rejected_but_distinct_ids_are_preserved(tmp_path):
     assert [json.loads(line) for line in path.read_text().splitlines()] == [first, second]
 
 
+def test_duplicate_check_reads_unicode_separators_as_record_content(tmp_path):
+    path = tmp_path / "corrections.jsonl"
+    record = {"correction_id": VALID_ID, "message": "LS:\u2028 PS:\u2029 NEL:\u0085"}
+
+    assert append_correction_record(path, record).status == "appended"
+    before = path.read_bytes()
+
+    assert append_correction_record(path, record).status == "duplicate_id"
+    assert path.read_bytes() == before
+
+
 def test_append_unique_record_resolves_registered_store_from_data_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(rl_common, "DATA_DIR", tmp_path)
     record = {"correction_id": VALID_ID, "event_type": "correction_skipped"}
@@ -113,7 +126,9 @@ def _append_pausing_after_unlock(path, record, unlocked, may_close, queue):
 
     def controlled_flock(file_obj, operation):
         result = real_flock(file_obj, operation)
-        if operation == persistence._fcntl.LOCK_UN:
+        # file_lock は int fd、append_jsonl は file object を渡す。新設した外側
+        # sidecar lock ではなく、データファイル自身の unlock だけを同期点にする。
+        if operation == persistence._fcntl.LOCK_UN and hasattr(file_obj, "fileno"):
             unlocked.set()
             assert may_close.wait(5)
         return result
@@ -141,9 +156,11 @@ def test_two_processes_cannot_append_the_same_id(tmp_path):
     # P1は既にunlock済みだがclose前。flushがunlock前ならP2は必ずduplicateを見る。
     second = ctx.Process(target=_concurrent_append, args=(path, record, queue))
     second.start()
-    second.join(5)
+    second.join(0.2)
+    assert second.is_alive(), "P2 must wait for the outer corrections sidecar lock"
     may_close.set()
     first.join(5)
+    second.join(5)
     for process in (first, second):
         process.join(5)
         assert process.exitcode == 0
@@ -275,3 +292,109 @@ def test_write_happens_inside_the_same_lock_as_the_duplicate_check(tmp_path, mon
         "duplicate_check:1",
         "lock_un",
     ], f"ロック区間と判定・書込みの順序が崩れている: {calls}"
+
+
+def test_corrections_lock_path_resolves_symlink_alias(tmp_path):
+    from rl_common.correction_id import _corrections_lock_path
+
+    real = tmp_path / "real" / "corrections.jsonl"
+    real.parent.mkdir()
+    real.write_text("", encoding="utf-8")
+    alias = tmp_path / "alias.jsonl"
+    alias.symlink_to(real)
+
+    assert _corrections_lock_path(real) == _corrections_lock_path(alias)
+
+
+def test_snapshot_identities_detects_legacy_same_count_replacement():
+    from rl_common.correction_id import (
+        UnexpectedCorrectionLossError,
+        assert_no_unexpected_content_loss,
+        snapshot_identities,
+    )
+
+    before = snapshot_identities('{"message":"A"}\n{"message":"B"}\n')
+    after = snapshot_identities('{"message":"B"}\n{"message":"B"}\n')
+
+    with pytest.raises(UnexpectedCorrectionLossError):
+        assert_no_unexpected_content_loss(before, after)
+
+
+def test_snapshot_identities_preserves_duplicate_multiplicity():
+    from rl_common.correction_id import snapshot_identities
+
+    identity = next(iter(snapshot_identities('{"message":"same"}\n')))
+    assert snapshot_identities('{"message":"same"}\n{"message":"same"}\n') == Counter(
+        {identity: 2}
+    )
+
+
+def test_declared_touched_identity_allows_intended_change():
+    from rl_common.correction_id import assert_no_unexpected_content_loss, snapshot_identities
+
+    before_text = '{"correction_id":"' + VALID_ID + '","status":"old"}\n'
+    after_text = '{"correction_id":"' + VALID_ID + '","status":"new"}\n'
+    before = snapshot_identities(before_text)
+    assert_no_unexpected_content_loss(
+        before,
+        snapshot_identities(after_text),
+        touched_before=snapshot_identities(before_text),
+    )
+
+
+def test_atomic_write_preserves_existing_mode(tmp_path):
+    from rl_common.correction_id import atomic_write_text_preserving_mode
+
+    path = tmp_path / "corrections.jsonl"
+    path.write_text("old", encoding="utf-8")
+    path.chmod(0o640)
+    atomic_write_text_preserving_mode(path, "new")
+    assert path.read_text(encoding="utf-8") == "new"
+    assert os.stat(path).st_mode & 0o777 == 0o640
+
+
+def test_iter_indexed_lines_has_one_record_index_contract():
+    text = '\n{"name":"zero"}\nbroken\n[1]\n {"name":"two"} \n'
+    lines = list(persistence.iter_indexed_lines(text))
+    assert [(x.record_index, x.physical_line_index, x.record, x.raw_line) for x in lines] == [
+        (0, 1, {"name": "zero"}, '{"name":"zero"}'),
+        (1, 3, [1], '[1]'),
+        (2, 4, {"name": "two"}, ' {"name":"two"} '),
+    ]
+
+
+def test_record_identity_prefers_correction_id_and_supports_legacy():
+    assert persistence.record_identity({"correction_id": VALID_ID, "session_id": "ignored"}) == (
+        "id",
+        VALID_ID,
+    )
+    assert persistence.record_identity({"session_id": "s", "timestamp": "t"}) == (
+        "legacy",
+        "s",
+        "t",
+    )
+
+
+def test_append_acquires_sidecar_before_file_lock(tmp_path, monkeypatch):
+    from rl_common import correction_id
+
+    calls = []
+
+    class Lock:
+        def __enter__(self):
+            calls.append("sidecar_enter")
+
+        def __exit__(self, *_args):
+            calls.append("sidecar_exit")
+
+    monkeypatch.setattr(correction_id, "corrections_write_lock", lambda _path: Lock())
+    real_append = persistence.append_jsonl
+
+    def append(*args, **kwargs):
+        calls.append("append_jsonl")
+        return real_append(*args, **kwargs)
+
+    monkeypatch.setattr(persistence, "append_jsonl", append)
+    result = append_correction_record(tmp_path / "corrections.jsonl", {"correction_id": VALID_ID})
+    assert result.status == "appended"
+    assert calls == ["sidecar_enter", "append_jsonl", "sidecar_exit"]
