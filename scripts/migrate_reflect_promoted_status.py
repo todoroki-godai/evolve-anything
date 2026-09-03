@@ -84,8 +84,9 @@ def _migrate_text(corrections_file: Path, *, write: bool) -> Dict[str, Any]:
     records: List[Dict[str, Any]] = []
     output_lines: List[str] = []
     touched: List[str] = []
-    for raw_line in split_corrections_lines(text):
-        if not raw_line and text.endswith("\n"):
+    physical_lines = split_corrections_lines(text)
+    for physical_index, raw_line in enumerate(physical_lines):
+        if physical_index == len(physical_lines) - 1 and not raw_line and text.endswith("\n"):
             continue
         if not raw_line.strip():
             output_lines.append(raw_line)

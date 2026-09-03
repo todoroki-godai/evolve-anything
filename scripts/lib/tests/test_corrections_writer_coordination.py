@@ -271,6 +271,21 @@ def test_prune_preserves_malformed_legacy_line_while_removing_target(tmp_path, m
     assert target.read_bytes() == malformed
 
 
+def test_reflect_migration_preserves_internal_blank_line(tmp_path, monkeypatch):
+    target = tmp_path / "corrections.jsonl"
+    _module, changed_record, invoke = _rewrite_case(
+        "reflect_migration", target, tmp_path, monkeypatch
+    )
+    untouched = json.dumps({"correction_id": "8" * 32, "message": "untouched"})
+    target.write_text(
+        json.dumps(changed_record) + "\n\n" + untouched + "\n", encoding="utf-8"
+    )
+
+    invoke()
+
+    assert target.read_text(encoding="utf-8").split("\n")[1] == ""
+
+
 @pytest.mark.parametrize(
     "case",
     ("reflect", "idiom", "prune", "reflect_migration", "subagent", "id_migration",
