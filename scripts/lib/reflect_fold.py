@@ -67,6 +67,7 @@ class FoldHealth:
     unknown_schema_events: int = 0
     invalid_events: int = 0
     duplicate_base_row_count: int = 0
+    duplicate_event_row_count: int = 0
     orphan_confirmations: int = 0
     duplicate_confirmations: int = 0
     hash_mismatch_count: int = 0
@@ -135,6 +136,12 @@ def fold_corrections(
         for correction_id in order
     }
 
+    duplicate_event_counts = find_duplicate_ids(
+        [record for record in event_records if isinstance(record, dict)]
+    )
+    duplicate_event_ids = set(duplicate_event_counts)
+    health.duplicate_event_row_count = sum(duplicate_event_counts.values())
+
     attempts_by_own_id: dict[str, dict] = {}
     attempted_by_target: dict[str, list[dict]] = {}
     applied_events: list[dict] = []
@@ -143,6 +150,8 @@ def fold_corrections(
             continue
         event_type = event.get("event_type")
         if event_type not in ("correction_apply_attempted", "correction_applied"):
+            continue
+        if event.get("correction_id") in duplicate_event_ids:
             continue
         if event.get("schema_version") != 1:
             health.unknown_schema_events += 1

@@ -157,10 +157,46 @@ def _raw_freeze_problem(filepath: Path) -> Optional[str]:
     return None
 
 
+def _raw_boundary_problem(filepath: Path) -> Optional[str]:
+    """正準 DATA_DIR 配下の raw 書込が専用境界を迂回しないか照合する。
+
+    symlink は解決先 basename、大小文字だけ異なる別名は casefold した宣言名で照合する。
+    対象ファイルの作成前でも専用境界の別名迂回を拒否する。
+    """
+    try:
+        import rl_common
+
+        target = Path(filepath).resolve()
+        canonical = Path(rl_common.DATA_DIR).resolve()
+        if not target.is_relative_to(canonical):
+            return None
+    except (OSError, ValueError):
+        return None
+    try:
+        import store_registry
+    except ImportError:
+        return None
+    declaration = store_registry.declaration_for(target.name)
+    if declaration is None:
+        requested_name = Path(filepath).name.casefold()
+        for declared_name in store_registry.declared_store_names():
+            if declared_name.casefold() != requested_name:
+                continue
+            declaration = store_registry.declaration_for(declared_name)
+            break
+    boundary = getattr(declaration, "write_boundary", None)
+    if boundary is None:
+        return None
+    return (
+        f"ストア '{Path(filepath).name}' は専用の追記境界 '{boundary}' を経由する必要があります"
+        "（store_write_raw からの直接書込みは拒否・#597）"
+    )
+
+
 def store_write_raw(
     filepath: Path, record: dict, *, guard_mode: Optional[str] = None
 ) -> None:
-    """明示パス指定の例外口（ADR-049 決定5）。store_registry 照合を通さない直接書込。
+    """明示パス指定の例外口（ADR-049 決定5）。通常の registry guard を通さない直接書込。
 
     テスト / 特殊ケース用。フラグでなく別名関数にすることで、raw を使う diff が
     静的 advisory（store_write 非経由の DATA_DIR 参照）の検出対象に上がる。
@@ -176,6 +212,10 @@ def store_write_raw(
         if mode == "reject":
             raise StoreWriteError(msg)
         print(msg + "（warn-only: 書込は継続）", file=sys.stderr)
+
+    boundary_problem = _raw_boundary_problem(filepath)
+    if boundary_problem is not None:
+        raise StoreWriteError(f"[evolve-anything:write-barrier] {boundary_problem}")
 
     from rl_common import append_jsonl
 

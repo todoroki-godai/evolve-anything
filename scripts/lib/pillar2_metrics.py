@@ -1,7 +1,9 @@
 """柱2「照合済み反映」の producer 集計。"""
 from __future__ import annotations
 
+import hashlib
 import importlib.util
+import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
@@ -20,14 +22,35 @@ PILLAR2_NOT_MEASURED_TARGETS = {
 # global-looking として通過している。
 # 追記時は対象 ID・基底の PJ・状態・柱2イベント不在・発見日時・承認根拠を人間が
 # 確認し、通常のコードレビューを経ること。時刻のみを根拠に追記しない。
+# 再 pin は実データの対象行へ `_baseline_row_sha256(row)` を実行し、対応する定数を差し替える。
 PRE_SCHEME_APPLIED_BASELINE = frozenset(
     {
-        "411114e30ec74a1aacf14a1c0572daff",
-        "c25c83983e1f4a0a98b11133a02cab66",
-        "74f0215b71b847a388f3a5af55e24b22",
-        "0f94d4a14da5472c93010b644f6ce46b",
+        (
+            "0f94d4a14da5472c93010b644f6ce46b",
+            "5b3ca1f6eb6261647670a38e2dfc2fbc6a5e911dcf1e39a0ed0f30d8f9972a3e",
+        ),
+        (
+            "411114e30ec74a1aacf14a1c0572daff",
+            "7ac56098fa58b826f7afd4f98d1ae4683329d4f8d6bdb5103ebb70b3cfc5739f",
+        ),
+        (
+            "74f0215b71b847a388f3a5af55e24b22",
+            "40bea99ed326ef9a21ec7b2ee43a810ead9187186a7c7e66a8065f1a03408143",
+        ),
+        (
+            "c25c83983e1f4a0a98b11133a02cab66",
+            "908e9ee2e3bc5a4ba63e08df47d8144bce8548d9b7a5ba18d09e8a010774fca9",
+        ),
     }
 )
+
+
+def _baseline_row_sha256(base: dict) -> str:
+    # 基底行の全フィールド（柱2フィールドを含む）を key-sort・compact JSON に正規化して hash する。
+    canonical = json.dumps(
+        base, sort_keys=True, ensure_ascii=False, separators=(",", ":")
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def _not_measured_targets() -> dict[str, dict[str, str]]:
@@ -95,14 +118,16 @@ def _classify_project_scope(correction: dict, project_root: Path) -> str:
 
 def _pillar2_project_scope(correction: dict, project_root: Path) -> str:
     """slug 表現を吸収してから既存の project scope 判定へ委譲する。"""
-    from pj_slug import resolve_pj_slug
+    from pj_slug import pj_slug_aliases_for, resolve_pj_slug
     from rl_common.persistence import project_name_from_dir
 
     project_path = correction.get("project_path")
     if isinstance(project_path, str) and project_path:
-        if project_path == resolve_pj_slug(project_root):
-            return "same-project"
-        if project_path == project_name_from_dir(str(project_root)):
+        matching_slugs = pj_slug_aliases_for(resolve_pj_slug(project_root))
+        matching_slugs.update(
+            pj_slug_aliases_for(project_name_from_dir(str(project_root)))
+        )
+        if project_path in matching_slugs:
             return "same-project"
     return _classify_project_scope(correction, project_root)
 
@@ -195,7 +220,10 @@ def count_applied_reflections(
             continue
         if not folded_correction.has_pillar2_fields:
             if (
-                folded_correction.base.get("correction_id")
+                (
+                    folded_correction.base.get("correction_id"),
+                    _baseline_row_sha256(folded_correction.base),
+                )
                 in PRE_SCHEME_APPLIED_BASELINE
             ):
                 pre_scheme_excluded_count += 1
@@ -241,6 +269,7 @@ def count_applied_reflections(
         or fold_health.unknown_schema_events > 0
         or fold_health.invalid_events > 0
         or fold_health.duplicate_base_row_count > 0
+        or fold_health.duplicate_event_row_count > 0
         or fold_health.orphan_confirmations > 0
         or fold_health.duplicate_confirmations > 0
         or fold_health.hash_mismatch_count > 0
@@ -271,6 +300,7 @@ def count_applied_reflections(
             "unknown_schema_events": fold_health.unknown_schema_events,
             "invalid_events": fold_health.invalid_events,
             "duplicate_base_row_count": fold_health.duplicate_base_row_count,
+            "duplicate_event_row_count": fold_health.duplicate_event_row_count,
             "orphan_confirmations": fold_health.orphan_confirmations,
             "duplicate_confirmations": fold_health.duplicate_confirmations,
             "hash_mismatch_count": fold_health.hash_mismatch_count,

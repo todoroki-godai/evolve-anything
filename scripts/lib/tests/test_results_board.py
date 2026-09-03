@@ -37,6 +37,8 @@ if str(_lib_dir) not in sys.path:
     sys.path.insert(0, str(_lib_dir))
 
 import results_board  # noqa: E402
+from measurement_result import _pillar2_degraded_reason  # noqa: E402
+from pillar2_metrics import count_applied_reflections  # noqa: E402
 
 
 # ── classify_decision ──────────────────────────────────────────────
@@ -983,6 +985,39 @@ class TestRenderResultsBoard:
         assert "実際に反映された改善（直近30日）: 測定不能" in text
         assert "実際に反映された改善（直近30日）: 7 件" not in text
         assert "イベント記録を読めません" in text
+
+    def test_every_numeric_pillar2_health_key_has_a_reader_facing_reason(
+        self, tmp_path
+    ):
+        """producer が増やした数値 health を表示側が取りこぼさない。"""
+        corrections = tmp_path / "corrections.jsonl"
+        events = tmp_path / "reflect_apply_events.jsonl"
+        corrections.write_text(
+            json.dumps(
+                {
+                    "correction_id": "a" * 32,
+                    "extracted_learning": "Use the stable API",
+                    "reflect_status": "pending",
+                    "project_path": None,
+                    "timestamp": "2026-08-31T00:00:00+00:00",
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        events.touch()
+        health = count_applied_reflections(
+            tmp_path,
+            corrections_path=corrections,
+            events_path=events,
+            now=_NOW,
+        )["health"]
+
+        numeric_keys = [key for key, value in health.items() if type(value) is int]
+        assert numeric_keys
+        for key in numeric_keys:
+            reason = _pillar2_degraded_reason({"health": {key: 1}})
+            assert reason != "集計 health が degraded", key
 
     def test_pillar2_invalid_base_id_count_is_in_unmeasured_reason(self):
         board = self._board(

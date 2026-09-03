@@ -94,6 +94,46 @@ def test_duplicate_base_rows_excluded_and_flagged():
     assert health.duplicate_base_row_count == 2
 
 
+def test_duplicate_event_ids_are_excluded_and_flagged():
+    second_base = _base(correction_id="d" * 32, extracted_learning="Second API")
+    second_attempt = _attempt(
+        correction_id="e" * 32,
+        target_correction_id=second_base["correction_id"],
+        correction_message_sha256=_hash_correction_message(second_base),
+    )
+    duplicate_applied = _applied(
+        target_correction_id=second_base["correction_id"],
+        confirms_attempt_id=second_attempt["correction_id"],
+    )
+
+    folded, health = fold_corrections(
+        [_base(), second_base],
+        [_attempt(), _applied(), second_attempt, duplicate_applied],
+        now=NOW,
+    )
+
+    assert [item.has_pillar2_fields for item in folded] == [True, True]
+    assert [item.reconciled for item in folded] == [True, True]
+    assert health.duplicate_event_row_count == 2
+
+
+def test_skipped_event_own_id_collision_is_excluded_and_flagged():
+    skipped = {
+        "correction_id": ATTEMPT_ID,
+        "schema_version": 1,
+        "event_type": "correction_skipped",
+        "target_correction_id": BASE_ID,
+        "skipped_at": "2026-08-31T10:02:00+00:00",
+    }
+
+    folded, health = fold_corrections(
+        [_base()], [_attempt(), _applied(), skipped], now=NOW
+    )
+
+    assert folded[0].has_pillar2_fields is False
+    assert health.duplicate_event_row_count == 2
+
+
 @pytest.mark.parametrize(
     "correction_id",
     [
