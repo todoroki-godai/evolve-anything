@@ -38,7 +38,13 @@ _LIB = Path(__file__).resolve().parent
 if str(_LIB) not in sys.path:
     sys.path.insert(0, str(_LIB))
 
-from rl_common.file_lock import atomic_write_text  # noqa: E402
+from rl_common.correction_id import (  # noqa: E402
+    assert_no_unexpected_content_loss,
+    atomic_write_text_preserving_mode,
+    corrections_write_lock,
+    fcntl_unsupported_reason,
+    snapshot_identities,
+)
 
 _SOURCE_PATH_MARKER = "/subagents/"
 _INVALIDATION_REASON = "adr054_a3_subagent_contamination"
@@ -73,11 +79,37 @@ def invalidate_subagent_contaminated_corrections(
             "invalidated": 0,
         }
 
+    if dry_run:
+        return _invalidate_text(
+            corrections_file,
+            corrections_file.read_text(encoding="utf-8"),
+            dry_run=True,
+        )[0]
+    reason = fcntl_unsupported_reason()
+    if reason is not None:
+        return {
+            "corrections_file": str(corrections_file), "dry_run": False,
+            "candidates": [], "invalidated": 0, "error": reason,
+        }
+    with corrections_write_lock(corrections_file):
+        text = corrections_file.read_text(encoding="utf-8")
+        report, body, touched = _invalidate_text(corrections_file, text, dry_run=False)
+        if touched:
+            assert_no_unexpected_content_loss(
+                snapshot_identities(text), snapshot_identities(body),
+                touched_before=snapshot_identities("\n".join(touched)),
+            )
+            atomic_write_text_preserving_mode(corrections_file, body)
+        return report
+
+
+def _invalidate_text(corrections_file: Path, text: str, *, dry_run: bool):
     now = datetime.now(timezone.utc).isoformat()
     lines: List[Union[str, Dict[str, Any]]] = []
     candidates: List[str] = []
+    touched: List[str] = []
 
-    for raw_line in corrections_file.read_text(encoding="utf-8").splitlines():
+    for raw_line in text.splitlines():
         stripped = raw_line.strip()
         if not stripped:
             continue
@@ -92,25 +124,24 @@ def invalidate_subagent_contaminated_corrections(
 
         if _is_subagent_contaminated_candidate(rec):
             candidates.append(str(rec.get("weak_signal_key")))
+            touched.append(raw_line)
             if not dry_run:
                 rec["invalidated"] = True
                 rec["invalidated_at"] = now
                 rec["invalidation_reason"] = _INVALIDATION_REASON
         lines.append(rec)
 
-    if not dry_run and candidates:
-        body = "".join(
-            (json.dumps(line, ensure_ascii=False) if isinstance(line, dict) else line) + "\n"
-            for line in lines
-        )
-        atomic_write_text(corrections_file, body)
-
-    return {
+    body = "".join(
+        (json.dumps(line, ensure_ascii=False) if isinstance(line, dict) else line) + "\n"
+        for line in lines
+    )
+    report = {
         "corrections_file": str(corrections_file),
         "dry_run": dry_run,
         "candidates": candidates,
         "invalidated": len(candidates) if not dry_run else 0,
     }
+    return report, body, touched
 
 
 def main() -> int:

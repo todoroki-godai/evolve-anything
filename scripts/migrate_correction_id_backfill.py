@@ -21,8 +21,11 @@ sys.path.insert(0, str(PLUGIN_ROOT / "scripts" / "lib"))
 
 from rl_common import persistence
 from rl_common.correction_id import (
+    assert_no_unexpected_content_loss,
+    corrections_write_lock,
     find_duplicate_ids,
     new_correction_id,
+    snapshot_identities,
     validate_correction_id,
 )
 
@@ -68,6 +71,19 @@ def migrate(filepath: Path, *, dry_run: bool = True) -> MigrationResult:
             status="retry_required",
             reason="fcntl unavailable: migration is not supported",
         )
+    if dry_run:
+        return _migrate_unlocked(filepath, dry_run=True)
+    with corrections_write_lock(filepath):
+        return _migrate_unlocked(filepath, dry_run=False)
+
+
+def _migrate_unlocked(filepath: Path, *, dry_run: bool) -> MigrationResult:
+    filepath = Path(filepath)
+    if not persistence._HAVE_FCNTL:
+        return MigrationResult(
+            status="retry_required",
+            reason="fcntl unavailable: migration is not supported",
+        )
     if not filepath.exists():
         return MigrationResult(status="completed", total=0, newly_assigned=0)
     if filepath.is_symlink():
@@ -92,6 +108,7 @@ def migrate(filepath: Path, *, dry_run: bool = True) -> MigrationResult:
     final_records: list[dict] = []
     newly_assigned = 0
     malformed = 0
+    touched_lines: list[str] = []
 
     for line in raw_lines:
         stripped = line.strip()
@@ -113,6 +130,7 @@ def migrate(filepath: Path, *, dry_run: bool = True) -> MigrationResult:
         if validate_correction_id(correction_id):
             new_lines.append(line)
         else:
+            touched_lines.append(line)
             record = dict(record)
             record["correction_id"] = new_correction_id()
             newly_assigned += 1
@@ -163,6 +181,11 @@ def migrate(filepath: Path, *, dry_run: bool = True) -> MigrationResult:
                 final_identity=current_identity,
                 **common,
             )
+        assert_no_unexpected_content_loss(
+            snapshot_identities(raw_content),
+            snapshot_identities(new_content),
+            touched_before=snapshot_identities("\n".join(touched_lines)),
+        )
         os.replace(tmp_path, filepath)
     except (OSError, UnicodeDecodeError) as error:
         try:

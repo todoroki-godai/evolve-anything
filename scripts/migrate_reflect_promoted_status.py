@@ -17,6 +17,17 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List
 
+PLUGIN_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(PLUGIN_ROOT / "scripts" / "lib"))
+
+from rl_common.correction_id import (
+    assert_no_unexpected_content_loss,
+    atomic_write_text_preserving_mode,
+    corrections_write_lock,
+    fcntl_unsupported_reason,
+    snapshot_identities,
+)
+
 CORRECTIONS_FILE = Path.home() / ".claude" / "evolve-anything" / "corrections.jsonl"
 
 # この移行の対象になる旧レコードの条件（#475 §4.6）。
@@ -57,27 +68,56 @@ def migrate(
     Returns:
         {"total": int, "migrated": int, "dry_run": bool, "already_migrated": bool}
     """
+    if dry_run:
+        return _migrate_text(corrections_file, write=False)
+    reason = fcntl_unsupported_reason()
+    if reason is not None:
+        return {"total": 0, "migrated": 0, "dry_run": False,
+                "already_migrated": False, "error": reason}
+    with corrections_write_lock(corrections_file):
+        return _migrate_text(corrections_file, write=True)
+
+
+def _migrate_text(corrections_file: Path, *, write: bool) -> Dict[str, Any]:
+    text = corrections_file.read_text(encoding="utf-8") if corrections_file.exists() else ""
     records = _load_jsonl(corrections_file)
     targets = [r for r in records if is_migration_target(r)]
 
     result: Dict[str, Any] = {
         "total": len(records),
         "migrated": len(targets),
-        "dry_run": dry_run,
+        "dry_run": not write,
         "already_migrated": len(targets) == 0,
     }
 
-    if dry_run or not targets:
+    if not write or not targets:
         return result
 
+    touched = [
+        line for line in text.splitlines()
+        if line.strip() and _raw_is_migration_target(line)
+    ]
     for r in records:
         if is_migration_target(r):
             r["reflect_status"] = _NEW_STATUS
 
     lines = [json.dumps(r, ensure_ascii=False) for r in records]
-    corrections_file.write_text("\n".join(lines) + "\n" if lines else "", encoding="utf-8")
+    new_content = "\n".join(lines) + "\n" if lines else ""
+    assert_no_unexpected_content_loss(
+        snapshot_identities(text), snapshot_identities(new_content),
+        touched_before=snapshot_identities("\n".join(touched)),
+    )
+    atomic_write_text_preserving_mode(corrections_file, new_content)
 
     return result
+
+
+def _raw_is_migration_target(line: str) -> bool:
+    try:
+        record = json.loads(line.strip())
+    except json.JSONDecodeError:
+        return False
+    return isinstance(record, dict) and is_migration_target(record)
 
 
 def main() -> None:

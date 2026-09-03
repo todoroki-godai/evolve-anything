@@ -16,6 +16,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from rl_common.correction_id import (
+    assert_no_unexpected_content_loss,
+    atomic_write_text_preserving_mode,
+    corrections_write_lock,
+    fcntl_unsupported_reason,
+    snapshot_identities,
+)
+
 
 def _parse_ts(ts_str: str) -> Optional[datetime]:
     """ISO 8601 文字列を UTC aware datetime に変換する。失敗時は None。"""
@@ -215,11 +223,29 @@ def backfill_corrections(
     """
     if not corrections_path.exists():
         return 0
+    if dry_run:
+        return _backfill_corrections_unlocked(
+            corrections_path, projects_dir, dry_run=True
+        )
+    reason = fcntl_unsupported_reason()
+    if reason is not None:
+        raise RuntimeError(reason)
+    with corrections_write_lock(corrections_path):
+        return _backfill_corrections_unlocked(
+            corrections_path, projects_dir, dry_run=False
+        )
+
+
+def _backfill_corrections_unlocked(
+    corrections_path: Path, projects_dir: Path, *, dry_run: bool
+) -> int:
+    text = corrections_path.read_text(encoding="utf-8")
 
     records = []
+    touched = []
     added = 0
-    for line in corrections_path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
         if not line:
             continue
         try:
@@ -245,13 +271,19 @@ def backfill_corrections(
 
         turn_idx = compute_turn_index(correction_ts, raw)
         if turn_idx is not None:
+            touched.append(raw_line)
             rec["turn_index"] = turn_idx
             added += 1
 
         records.append(json.dumps(rec, ensure_ascii=False))
 
     if not dry_run and added > 0:
-        _atomic_write(corrections_path, "\n".join(records) + "\n")
+        new_content = "\n".join(records) + "\n"
+        assert_no_unexpected_content_loss(
+            snapshot_identities(text), snapshot_identities(new_content),
+            touched_before=snapshot_identities("\n".join(touched)),
+        )
+        atomic_write_text_preserving_mode(corrections_path, new_content)
 
     return added
 

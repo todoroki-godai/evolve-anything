@@ -26,6 +26,13 @@ from weak_signals.ttl import is_effectively_expired
 # #46 read 層拡張: union read（昇格候補）+ union mark（再昇格防止）の候補 dir 解決を共有する。
 from store_read_union import iter_read_store_paths as _iter_read_store_paths  # noqa: E402
 from rl_common import append_correction_record, new_correction_id
+from rl_common.correction_id import (
+    assert_no_unexpected_content_loss,
+    atomic_write_text_preserving_mode,
+    corrections_write_lock,
+    fcntl_unsupported_reason,
+    snapshot_identities,
+)
 
 
 def _normalize_project_path(value: str) -> str:
@@ -607,11 +614,34 @@ def invalidate_idiom_corrections(
     if not target or not corrections_path.exists():
         return {"invalidated": 0, "dry_run": dry_run}
 
+    if dry_run:
+        text = corrections_path.read_text(encoding="utf-8", errors="replace")
+        _, matched, _ = _invalidate_idiom_text(text, target, mutate=False)
+        return {"invalidated": matched, "dry_run": True}
+
+    reason = fcntl_unsupported_reason()
+    if reason is not None:
+        return {"invalidated": 0, "dry_run": False, "error": reason}
+
+    with corrections_write_lock(corrections_path):
+        text = corrections_path.read_text(encoding="utf-8", errors="replace")
+        new_content, matched, touched = _invalidate_idiom_text(text, target, mutate=True)
+        if matched:
+            assert_no_unexpected_content_loss(
+                snapshot_identities(text),
+                snapshot_identities(new_content),
+                touched_before=snapshot_identities("\n".join(touched)),
+            )
+            atomic_write_text_preserving_mode(corrections_path, new_content)
+    return {"invalidated": matched, "dry_run": False}
+
+
+def _invalidate_idiom_text(text: str, target: Set[str], *, mutate: bool):
     recs: List[Dict[str, Any]] = []
+    touched: List[str] = []
     matched = 0
-    with open(corrections_path, "r", encoding="utf-8", errors="replace") as f:
-        for line in f:
-            line = line.strip()
+    for raw_line in text.splitlines():
+            line = raw_line.strip()
             if not line:
                 continue
             try:
@@ -624,26 +654,8 @@ def invalidate_idiom_corrections(
                 and not r.get("invalidated")
             ):
                 matched += 1
-                if not dry_run:
+                touched.append(raw_line)
+                if mutate:
                     r["invalidated"] = True
             recs.append(r)
-
-    if dry_run:
-        return {"invalidated": matched, "dry_run": True}
-
-    if matched:
-        new_content = "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in recs)
-        tmp_fd, tmp_path = tempfile.mkstemp(
-            dir=str(corrections_path.parent), suffix=".tmp"
-        )
-        try:
-            with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
-                f.write(new_content)
-            os.replace(tmp_path, corrections_path)
-        except Exception:
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
-
-    return {"invalidated": matched, "dry_run": False}
+    return "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in recs), matched, touched

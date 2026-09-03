@@ -12,6 +12,13 @@ from datetime import datetime, timezone
 from typing import Dict, List
 
 from .config import DEFAULT_DECAY_DAYS
+from rl_common.correction_id import (
+    assert_no_unexpected_content_loss,
+    atomic_write_text_preserving_mode,
+    corrections_write_lock,
+    fcntl_unsupported_reason,
+    snapshot_identities,
+)
 
 
 def load_corrections() -> Dict[str, List[Dict]]:
@@ -68,11 +75,36 @@ def cleanup_corrections(dry_run: bool = False) -> Dict[str, int]:
     if not corrections_file.exists():
         return {"removed": 0, "kept": 0}
 
-    now = datetime.now(timezone.utc)
+    if dry_run:
+        return _cleanup_corrections_text(
+            corrections_file.read_text(encoding="utf-8"), now=datetime.now(timezone.utc)
+        )[0]
+
+    reason = fcntl_unsupported_reason()
+    if reason is not None:
+        return {"removed": 0, "kept": 0, "error": reason}
+
+    with corrections_write_lock(corrections_file):
+        text = corrections_file.read_text(encoding="utf-8")
+        result, kept_lines, removed_lines = _cleanup_corrections_text(
+            text, now=datetime.now(timezone.utc)
+        )
+        new_content = "\n".join(kept_lines) + "\n" if kept_lines else ""
+        assert_no_unexpected_content_loss(
+            snapshot_identities(text),
+            snapshot_identities(new_content),
+            touched_before=snapshot_identities("\n".join(removed_lines)),
+        )
+        atomic_write_text_preserving_mode(corrections_file, new_content)
+        return result
+
+
+def _cleanup_corrections_text(text: str, *, now: datetime):
     kept_lines: List[str] = []
+    removed_lines: List[str] = []
     removed = 0
 
-    for line in corrections_file.read_text(encoding="utf-8").splitlines():
+    for line in text.splitlines():
         if not line.strip():
             continue
         try:
@@ -104,14 +136,7 @@ def cleanup_corrections(dry_run: bool = False) -> Dict[str, int]:
 
         if age_days > decay_days:
             removed += 1
+            removed_lines.append(line)
         else:
             kept_lines.append(line)
-
-    # ファイルを書き戻し（dry_run 時はスキップ）
-    if not dry_run:
-        corrections_file.write_text(
-            "\n".join(kept_lines) + "\n" if kept_lines else "",
-            encoding="utf-8",
-        )
-
-    return {"removed": removed, "kept": len(kept_lines)}
+    return {"removed": removed, "kept": len(kept_lines)}, kept_lines, removed_lines
