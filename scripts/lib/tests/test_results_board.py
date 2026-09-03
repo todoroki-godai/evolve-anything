@@ -407,6 +407,7 @@ def _closed_gate_summary():
         },
         "displayed_weeks": [],
         "latest_coverage": None,
+        "coverage_gaps": [],
         "diagnostics": {},
         "generated_at": None,
     }
@@ -441,6 +442,7 @@ def _point_gate_summary(point_week=None, current_run_length=1, latest_coverage=N
             "week_id": pw["week_id"], "judged": pw["judged_count"], "total": pw["judged_count"],
             "failure_reasons": [],
         },
+        "coverage_gaps": [],
         "diagnostics": {},
         "generated_at": _NOW.isoformat(),
     }
@@ -464,6 +466,7 @@ class TestBuildResultsBoardCorrectionRate:
                  "top3_examples": []},
             ],
             "latest_coverage": {"week_id": "2026-W10", "judged": 10, "total": 10},
+            "coverage_gaps": [],
             "diagnostics": {},
             "generated_at": _NOW.isoformat(),
         }
@@ -486,6 +489,7 @@ class TestBuildResultsBoardCorrectionRate:
 
         assert board["correction_rate"]["gate"]["gate_open"] is False
         assert board["correction_rate"]["displayed_weeks"] == []
+        assert board["correction_rate"]["coverage_gaps"] is None
 
 
 class TestBuildResultsBoardPillar2:
@@ -1354,6 +1358,7 @@ class TestRenderResultsBoard:
                  "top3_examples": [{"text": "四国めたんじゃなくて", "reason": "呼称の訂正", "idiom": ""}]},
             ],
             "latest_coverage": {"week_id": "2026-W10", "judged": 10, "total": 10},
+            "coverage_gaps": [],
             "diagnostics": {},
             "generated_at": _NOW.isoformat(),
         })
@@ -1625,6 +1630,7 @@ class TestRenderCorrectionRatePointState:
                  "top3_examples": []},
             ],
             "latest_coverage": {"week_id": "2026-W10", "judged": 10, "total": 10},
+            "coverage_gaps": [],
             "diagnostics": {},
             "generated_at": _NOW.isoformat(),
         }
@@ -1690,7 +1696,6 @@ class TestRenderCorrectionRatePointState:
         summary = _point_gate_summary(point_week=pw, current_run_length=1, latest_coverage=latest)
         text = "\n".join(results_board._render_correction_rate(summary))
         assert "最新候補週 2026-W34: 判定カバレッジ 50/90・未測定・理由: tp_conflict" in text
-
     def test_i7ab_all_pj_listed_and_sums_match_total(self):
         """I7(a)(b)/N6: judged>=1 の PJ を全件列挙し、PJ 別合計が全体分母/分子と一致する。"""
         pj_breakdown = {
@@ -1782,3 +1787,183 @@ class TestRenderCorrectionRatePointState:
         text = "\n".join(results_board._render_correction_rate(summary))
         assert "指摘率（2026-W12）" in text
         assert "連続 run の進捗: 3/4 週連続" in text
+
+
+class TestRenderCoverageGapReasons:
+    def test_all_low_coverage_weeks_show_both_zero_inclusive_reasons(self):
+        summary = {
+            **_closed_gate_summary(),
+            "latest_coverage": {"week_id": "2026-W34", "judged": 9, "total": 10},
+            "coverage_gaps": [
+                {
+                    "week_id": "2026-W32", "judged": 129, "total": 842,
+                    "reason": {
+                        "measured": True,
+                        "deadline_exceeded_count": 713,
+                        "unjudged_count": 0,
+                        "unclassified_count": 0,
+                        "reason": None,
+                    },
+                },
+                {
+                    "week_id": "2026-W34", "judged": 9, "total": 10,
+                    "reason": {
+                        "measured": True,
+                        "deadline_exceeded_count": 0,
+                        "unjudged_count": 1,
+                        "unclassified_count": 0,
+                        "reason": None,
+                    },
+                },
+            ],
+        }
+
+        lines = results_board._render_correction_rate(summary)
+
+        assert (
+            "- 2026-W32 カバレッジ不足理由: "
+            "締切（+3日）超過で集計外: 713 件・未判定: 0 件"
+        ) in lines
+        assert (
+            "- 2026-W34 カバレッジ不足理由: "
+            "締切（+3日）超過で集計外: 0 件・未判定: 1 件"
+        ) in lines
+        reason_lines = [line for line in lines if line.startswith("- 2026-W")]
+        assert reason_lines[0].startswith("- 2026-W34 ")
+        headline_index = lines.index(next(line for line in lines if line.startswith("**指摘率")))
+        first_reason_index = lines.index(reason_lines[0])
+        assert headline_index < first_reason_index
+
+    def test_unclassified_gap_is_visible_and_not_mixed_into_main_counts(self):
+        summary = {
+            **_closed_gate_summary(),
+            "latest_coverage": {"week_id": "2026-W34", "judged": 6, "total": 10},
+            "coverage_gaps": [{
+                "week_id": "2026-W34", "judged": 6, "total": 10,
+                "reason": {
+                    "measured": True,
+                    "deadline_exceeded_count": 2,
+                    "unjudged_count": 1,
+                    "unclassified_count": 1,
+                    "reason": None,
+                },
+            }],
+        }
+
+        lines = results_board._render_correction_rate(summary)
+        reason_line = next(line for line in lines if "カバレッジ不足理由" in line)
+
+        assert "集計外: 2 件・未判定: 1 件・判定日時なし（旧形式レコード）: 1 件" in reason_line
+        assert "集計外: 3 件" not in reason_line
+        assert "判定カバレッジ 6/10" in "\n".join(lines)
+
+    @pytest.mark.parametrize(
+        "coverage_gaps",
+        [None, pytest.param("missing", id="missing-key")],
+    )
+    def test_unavailable_or_missing_breakdown_renders_evaluation_impossible(self, coverage_gaps):
+        summary = _closed_gate_summary()
+        if coverage_gaps == "missing":
+            del summary["coverage_gaps"]
+        else:
+            summary["coverage_gaps"] = coverage_gaps
+
+        text = "\n".join(results_board._render_correction_rate(summary))
+
+        assert "カバレッジ不足理由: 評価不能" in text
+
+    def test_week_level_unmeasured_breakdown_renders_evaluation_impossible_without_zeroes(self):
+        summary = {
+            **_closed_gate_summary(),
+            "latest_coverage": {"week_id": "2026-W34", "judged": 0, "total": 10},
+            "coverage_gaps": [{
+                "week_id": "2026-W34", "judged": 0, "total": 10,
+                "reason": {
+                    "measured": False,
+                    "deadline_exceeded_count": None,
+                    "unjudged_count": None,
+                    "unclassified_count": None,
+                    "reason": "判定記録を取得できません",
+                },
+            }],
+        }
+
+        reason_line = next(
+            line for line in results_board._render_correction_rate(summary)
+            if "カバレッジ不足理由" in line
+        )
+        assert reason_line == "- 2026-W34 カバレッジ不足理由: 評価不能（判定記録を取得できません）"
+        assert "0 件" not in reason_line
+
+    def test_inconsistent_breakdown_total_renders_evaluation_impossible_without_counts(self):
+        summary = {
+            **_closed_gate_summary(),
+            "latest_coverage": {"week_id": "2026-W34", "judged": 129, "total": 842},
+            "coverage_gaps": [{
+                "week_id": "2026-W34", "judged": 129, "total": 842,
+                "reason": {
+                    "measured": True,
+                    "deadline_exceeded_count": 712,
+                    "unjudged_count": 0,
+                    "unclassified_count": 0,
+                    "reason": None,
+                },
+            }],
+        }
+
+        reason_line = next(
+            line for line in results_board._render_correction_rate(summary)
+            if "カバレッジ不足理由" in line
+        )
+
+        assert reason_line == (
+            "- 2026-W34 カバレッジ不足理由: "
+            "評価不能（内訳合計が母集団と一致しません）"
+        )
+        assert "712 件" not in reason_line
+
+    def test_missing_measured_key_renders_evaluation_impossible(self):
+        summary = {
+            **_closed_gate_summary(),
+            "coverage_gaps": [{
+                "week_id": "2026-W34", "judged": 9, "total": 10,
+                "reason": {
+                    "deadline_exceeded_count": 0,
+                    "unjudged_count": 1,
+                    "unclassified_count": 0,
+                    "reason": None,
+                },
+            }],
+        }
+
+        reason_line = next(
+            line for line in results_board._render_correction_rate(summary)
+            if "カバレッジ不足理由" in line
+        )
+
+        assert reason_line.endswith(": 評価不能")
+        assert "未判定: 1 件" not in reason_line
+
+    @pytest.mark.parametrize("missing_count", [None, True])
+    def test_non_integer_reason_count_renders_evaluation_impossible(self, missing_count):
+        summary = {
+            **_closed_gate_summary(),
+            "coverage_gaps": [{
+                "week_id": "2026-W34", "judged": 9, "total": 10,
+                "reason": {
+                    "measured": True,
+                    "deadline_exceeded_count": 0,
+                    "unjudged_count": missing_count,
+                    "unclassified_count": 0,
+                    "reason": None,
+                },
+            }],
+        }
+
+        reason_line = next(
+            line for line in results_board._render_correction_rate(summary)
+            if "カバレッジ不足理由" in line
+        )
+
+        assert "評価不能（内訳合計が母集団と一致しません）" in reason_line
+        assert "未判定:" not in reason_line
