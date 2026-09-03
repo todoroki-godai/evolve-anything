@@ -194,10 +194,10 @@ def _rewrite_case(case, target, tmp_path, monkeypatch, *, reflect_index=0):
 def test_rewrite_preserves_unicode_separator_line_byte_for_byte(case, tmp_path, monkeypatch):
     target = tmp_path / "corrections.jsonl"
     _module, changed_record, invoke = _rewrite_case(case, target, tmp_path, monkeypatch)
-    untouched = json.dumps(
+    untouched = " " + json.dumps(
         {"correction_id": "8" * 32, "message": "LS:\u2028 PS:\u2029 NEL:\u0085"},
         ensure_ascii=False,
-    )
+    ) + " "
     target.write_bytes(
         (json.dumps(changed_record, ensure_ascii=False) + "\n" + untouched + "\n").encode("utf-8")
     )
@@ -206,6 +206,7 @@ def test_rewrite_preserves_unicode_separator_line_byte_for_byte(case, tmp_path, 
 
     assert (json.dumps(changed_record, ensure_ascii=False) + "\n").encode("utf-8") not in target.read_bytes()
     assert (untouched + "\n").encode("utf-8") in target.read_bytes()
+    assert target.read_bytes().split(b"\n")[0 if case == "prune" else 1] == untouched.encode("utf-8")
     physical_records = [
         json.loads(line)
         for line in target.read_text(encoding="utf-8").split("\n")
