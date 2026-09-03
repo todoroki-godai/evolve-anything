@@ -406,12 +406,10 @@ def store_write(store_name: str, record: dict, *, guard_mode=None) -> None:
    専用拒否テストの新設も同ファイルへ行う**（§3.4 参照。二重管理を避けるため手順の
    詳細は §3.4 側だけに書く）。
 
-5. **【第7版で追加・巡2 [Should]4】`spec/components-observability.md:16`**:
-   `shrink_freeze` の説明行が「実装時点（#379 Step 1 PR）の各レジストリの正規スナップショット」
-   と記述しているため（2026-09-01 実測: `sed -n '16p' spec/components-observability.md`
-   で該当行を確認）、コードと `CLAUDE.md` だけでなくこの仕様記述にも #587 の1件例外を
-   追記する。追記案（同行末尾へ1文追加）: 「（#587・2026-09-01: `reflect_apply_events.jsonl`
-   の1件のみ、ユーザー裁定により凍結スナップショットへの追加例外として認められている）」
+5. **【第7版で追加・巡2 [Should]4】`spec/components-observability.md`**:
+   コードと `CLAUDE.md` だけでなく、この仕様記述のコンポーネント表より前に独立段落を置き、
+   #587 の `reflect_apply_events.jsonl` 1件だけがユーザー裁定による凍結スナップショットの
+   追加例外であることを明記する。
 
 ### 4.2 CLAUDE.md・仕様記述の同時更新
 
@@ -1492,6 +1490,7 @@ invalid healthへ計上する分岐を`continue`のみに戻す変異——revie
   `reconciled=False` かつ確認済み）は監査目的の価値が下がるため優先的に compaction
   するか、を実装時に判断する（本設計では決定しない・次回改訂の入口条件として記録する）
 - **`append_unique_record` が `"retry_required"` を返した場合の呼出側の扱いは未定義**
+- **`append_unique_record` は追記ごとに既存全行を読むため、連続追記の累積 O(N²) 成長は未計測**
 - **§12 の集計関数のパフォーマンスは未計測**
 - **本設計のレビュー巡数は新規系列の総上限2巡の設計側2巡目（最終）を消費する**
 
