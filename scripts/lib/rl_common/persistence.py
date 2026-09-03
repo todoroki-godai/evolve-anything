@@ -7,7 +7,7 @@ import json
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, List, Optional
+from typing import Callable, Iterator, List, Optional
 
 try:
     import fcntl as _fcntl
@@ -20,6 +20,37 @@ except ImportError:
 # おり、フルパスが無いため本体 repo 名に遡及復元できない（#489 レビュー）。以後の書込は
 # worktree cwd でも本体 repo 名で記録される。#478 の USAGE_RECORDING_FIX_DATE と同型。
 PJ_SLUG_NORMALIZATION_DATE = "2026-06-12"
+
+
+@dataclass
+class IndexedLine:
+    record_index: int
+    physical_line_index: int
+    record: object
+    raw_line: str
+
+
+def iter_indexed_lines(text: str) -> Iterator[IndexedLine]:
+    """JSON decode に成功した行へ、単一規約の論理・物理 index を付ける。"""
+    record_index = 0
+    for physical_line_index, line in enumerate(text.splitlines()):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        try:
+            record = json.loads(stripped)
+        except json.JSONDecodeError:
+            continue
+        yield IndexedLine(record_index, physical_line_index, record, line)
+        record_index += 1
+
+
+def record_identity(record: dict) -> tuple:
+    """更新対象を lock 取得後に再確認するための位置非依存 identity。"""
+    correction_id = record.get("correction_id")
+    if isinstance(correction_id, str) and correction_id:
+        return ("id", correction_id)
+    return ("legacy", record.get("session_id", ""), record.get("timestamp", ""))
 
 
 def project_name_from_dir(project_dir: str) -> str:
