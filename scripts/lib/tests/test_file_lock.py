@@ -88,6 +88,18 @@ def _same_open_file(fd, path):
     return (held.st_dev, held.st_ino) == (current.st_dev, current.st_ino)
 
 
+def test_unlink_during_held_lock_can_create_a_distinct_lock_inode(tmp_path):
+    """#595 §6: 保持中 unlink の残存窓を、閉じたと誤報しないための実測。"""
+    lock = tmp_path / "state.lock"
+    with file_lock(lock):
+        held_inode = lock.stat().st_ino
+        lock.unlink()
+        lock.touch()
+        assert lock.stat().st_ino != held_inode
+        with try_file_lock(lock) as acquired:
+            assert acquired is True
+
+
 _WORKER = """
 import sys, time
 sys.path.insert(0, {lib!r})
