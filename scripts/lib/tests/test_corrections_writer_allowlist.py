@@ -1,4 +1,8 @@
-"""#595 corrections.jsonl writer の AST/data-flow allowlist 回帰検査。"""
+"""#595 corrections.jsonl writer の既知sink向け advisory AST検査。
+
+列挙済みのcall形だけを検出するdenylist型であり、helper・動的path・未列挙sinkによる
+迂回は可能。新しい書込経路の不存在や完全なwriter allowlistは保証しない。
+"""
 from __future__ import annotations
 
 import ast
@@ -178,7 +182,7 @@ def scan_repository() -> Scan:
     return combined
 
 
-def test_repository_writer_allowlist_is_exact():
+def test_known_writer_sets_and_detected_sinks_match_baseline():
     result = scan_repository()
     assert result.append_callers == APPEND_WRITERS
     assert result.lock_users == REWRITE_WRITERS

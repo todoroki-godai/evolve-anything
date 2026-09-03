@@ -10,6 +10,8 @@
   lock取得後の identity 再確認、§4 「古いworktree/中断セッション」をローリングデプロイ対象外から
   切り離し明示的リスク受容、§5 陰性試験を全8 writer対象へ拡張＋レビュー提案6変異を追加、
   §6/§7 を全面更新
+- **2026-09-03 巡3裁定追記**: U+2028/U+2029/U+0085 の物理行分割をLFへ限定。
+  AST検査は既知sinkだけを検出するadvisoryであり迂回可能と訂正し、blocking (e) は未充足と明記。
 
 ---
 
@@ -146,7 +148,9 @@ grep -rn "corrections\.jsonl" --include="*.py" scripts hooks skills bin \
 | `bench/golden_extractor.py:129` | 同上 | 前後を Read | `output`（CLI引数の抽出結果ファイル） |
 | `migrate_correction_id_backfill.py:58` `shutil.copy2(filepath, backup_path)` | corrections.jsonl のバックアップ | 前後を Read | バックアップ**コピー**（別ファイル名へ複製するだけで `corrections.jsonl` 自体は書き換えない。本設計の対象は corrections.jsonl 自体への書込みなので対象外） |
 
-**この表と§1.2の再現スクリプトが、issue完成条件(e)「洗い出しの機械的裏付け」の実体**である。前版は「71ファイルへの複数patternをOR」という不可検証な記述だったため、本版はスクリプト全文＋実行結果＋曖昧候補の個別確認記録に置き換えた。
+この表と§1.2の再現スクリプトは既知の書込シグナルを再確認するためのadvisoryな根拠に留まる。
+sink種別を列挙するdenylist型で迂回可能なため、issue完成条件(e)「洗い出しの機械的裏付け」は
+**現状未充足**である。
 
 ### 1.4 8件の rewrite writer と issue 本文の6件との差分（変更なし・再確認済み）
 
@@ -161,7 +165,9 @@ grep -rn "corrections\.jsonl" --include="*.py" scripts hooks skills bin \
 | 7 | `backfill_corrections`（turn_index付与） | `scripts/lib/backfill_turn_indices.py:202-256`（`_atomic_write`実体`:65-72`） | 全読取→tmp+`Path.replace` | **× issue本文の棚卸し表に記載無し。設計文書で新規発見（巡1レビューが独立再走査し追加無しと確認）** |
 | 8 | `_backfill_jsonl`（pj_slug正規化・`corrections`分） | `scripts/lib/pj_slug_backfill.py:76-111`（`_atomic_write`実体`:60-73`） | 全読取→tmp+`os.replace` | **× 同上** |
 
-**9件目が存在しないと言い切れる根拠**: §1.2のスクリプトは `*.py` 全文を対象に、`write_text`/`os.replace`/`atomic_write_text`/`append_jsonl`/`append_correction_record`/`store_write`/`store_write_raw`/`open(..., "w"/"a")`/`fdopen(..., "w")`/`Path.open`/`write_bytes`/`shutil.move`/`shutil.copy2` の**書込み手段を尽くしてOR検索**し、64件のシグナル行を**1件も除外せず全件人手で追跡**した。巡1レビュー自身も独立に71ファイルを再走査し「9件目は見つからず、表の8件は現HEADのrewrite経路としては揃っている」と確認している（レビュー本文Q2）。**ただし以下は確認範囲外であり「絶対に0件」の証明ではない**（§7 未実測に明記）:
+**既知8件の根拠と限界**: §1.2のスクリプトは列挙した書込シグナルをOR検索し、64件を
+人手で追跡した。これは現HEADの既知8件を確認する棚卸しであり、9件目が存在しないことの証明ではない。
+特に以下は確認範囲外である（§6・§7にも明記）:
 - shell/CLI経由の間接呼出し（`.py` 以外の呼出し）
 - 動的 `getattr` / 文字列結合によるモジュール参照
 - `*.py` の実行時にのみ組み立てられる Path（例: f-string で `"correc" + "tions.jsonl"` のような難読化）は未探索
@@ -326,7 +332,7 @@ def _line_identity(raw_line: str) -> str:
 def snapshot_identities(text: str) -> "Counter[str]":
     """corrections.jsonl テキストの行ごと identity を多重集合として返す（空行は数えない）。"""
     counter: "Counter[str]" = Counter()
-    for line in text.splitlines():
+    for line in split_corrections_lines(text):
         if line.strip():
             counter[_line_identity(line)] += 1
     return counter
@@ -561,7 +567,7 @@ def iter_indexed_lines(text: str) -> Iterator[IndexedLine]:
     record が dict であることはここでは強制しない（呼出側が isinstance チェックする）。
     """
     record_index = 0
-    for physical_line_index, line in enumerate(text.splitlines()):
+    for physical_line_index, line in enumerate(split_corrections_lines(text)):
         stripped = line.strip()
         if not stripped:
             continue
@@ -622,7 +628,7 @@ def update_reflect_status(
         mismatched: list[int] = []
         touched_raw: list[str] = []
         record_idx = 0
-        physical_lines = text.splitlines()
+        physical_lines = split_corrections_lines(text)
         for phys_idx, raw in enumerate(physical_lines):
             il = by_index.get(record_idx) if record_idx in by_index and by_index[record_idx].physical_line_index == phys_idx else None
             # ↑ iter_indexed_lines の出力を physical_line_index で突合する
@@ -723,7 +729,7 @@ def update_reflect_status(
 | N-d-1 | (d) | CLIのindex決定後・`update_reflect_status`のlock取得前に、別プロセス相当の処理で対象より前のレコードを削除する変異。identity再確認（§3.2b）がこれを`identity_mismatch`として拒否することを確認 | Q5 [Must]・Q6 [Must]⑤の核心を解消 |
 | N-d-2 | (d) | `iter_indexed_lines` を使わず「空行もカウントする」独自実装に戻す変異（#588再現） | 前版N-d-1継続 |
 | N-e-1 | (e) | §1.2のスクリプトから `atomic_write_text(` パターンを外す変異を実際に適用し、再実行結果の変化を報告する（前版は「#5・#8が消えて6件」と誤った予測をしていた。**予測でなく実際にスクリプトを改変して実行し、結果をそのまま報告する**） | Q6 [Must]「#8は`_atomic_write`内の`os.replace`なので`atomic_write_text`パターンだけでは落ちない」を解消 |
-| N-e-2 | (e) | §1.3で「対象外」と確認した曖昧候補（例: `store_write_raw` の呼出しに `"corrections.jsonl"` を直接渡すテスト用の変異を仮に追加）が、洗い出しスクリプトで検出されることを確認する | Q2 [Must]「12経路の明示allowlistをAST/data-flowで照合し新規経路で落ちる回帰テストが必要」への一次対応（完全なAST実装は実装PRで詳細化） |
+| N-e-2 | (e) | 既知sink種別（例: `store_write_raw` へ `"corrections.jsonl"` を直接渡す形）がadvisory AST検査で検出されることを確認する。helper・未列挙sink・動的pathの迂回は検出しない | blocking (e) の充足には使えない既知パターンの回帰確認 |
 
 ### 5.2 陽性対照（巡1レビュー[Should]反映）
 
@@ -779,6 +785,13 @@ def update_reflect_status(
 - 可用性（`file_lock`の無期限待機によるハング）は §0③で対象外と明記済み。ハング時の観測・中断方法は運用手順に委ねる
 - `fsync`欠如によるOS/マシン障害後のdurabilityは §0③で対象外と明記済み
 - 真の追記オンリー化（イベントfold）は#587が改めて設計する
+- U+2028/U+2029/U+0085を含む正常レコードは、8 rewrite writer・`iter_indexed_lines`・
+  `snapshot_identities`・追記時のlock内readerではLFだけを物理改行として扱うよう修正した。
+  それ以外のread-only consumerには`splitlines()`利用が残り、恒久破壊はしないものの当該レコードを
+  読み飛ばして集計を過小表示する可能性がある。
+- AST検査は既知のsink種別を列挙するadvisoryであり、helper経由、`os.open`+`os.write`、動的mode・
+  動的path、rename/unlink等で迂回できる。`scan_repository()`は`rglob("*.py")`のため、`bin/`の
+  拡張子なしPythonスクリプトも走査対象外である。検査の作り直しは別issueへ切り出す。
 
 ---
 
@@ -788,5 +801,5 @@ def update_reflect_status(
 - §5の陰性試験・陽性対照・呼出順アサーション試験は実装前のため未実行（実装PRで実測結果を報告する）
 - §2.2の inode 再検証によるロック取得の待ち時間への影響（リトライループが発生する頻度・レイテンシ）は測っていない
 - §2.5の内容identity（sha256）計算コストが、8 writerの通常運用（多くは数十〜数百件規模）で問題になるかは測っていない
-- **§5.1 N-e-2（`corrections.jsonl` へ書く12経路のAST/data-flowベース静的allowlist回帰テスト）は、本設計文書では一次対応（§1.3の手作業確認・既存パターンでの検出確認）までしか示していない。真のAST実装（新規経路が追加されたら機械的に落ちる回帰テスト）は着手していない。これを実装PRの完了条件に含める**（頭の裁定・2026-09-01。設計段階でAST実装まで求めるのは過剰と判断し、実装PRへ回す）
-- §5.1 N-e-2（AST/data-flowによる完全な回帰テスト）は本設計文書では一次対応（既存パターンでの検出確認）のみを示しており、真にAST解析ベースの静的allowlist照合の実装は次のステップとして残る（巡1レビューQ2[Must]の完全な解消には実装PRでの追加設計が必要）
+- blocking (e) は未充足。現行AST検査は既知sinkのadvisory検査で、新しい書込経路を足せば
+  必ず落ちる完全なallowlistではない。収束形への反転は別issueで扱う。
