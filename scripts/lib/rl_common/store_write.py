@@ -158,7 +158,11 @@ def _raw_freeze_problem(filepath: Path) -> Optional[str]:
 
 
 def _raw_boundary_problem(filepath: Path) -> Optional[str]:
-    """正準 DATA_DIR 配下の raw 書込が専用境界を迂回しないか照合する。"""
+    """正準 DATA_DIR 配下の raw 書込が専用境界を迂回しないか照合する。
+
+    basename が宣言と一致しない場合も、既存ファイルなら samefile で照合する。対象が
+    未作成で samefile 不能なら fail-open とし、既存の raw 例外口の用途を狭めない。
+    """
     try:
         import rl_common
 
@@ -173,6 +177,17 @@ def _raw_boundary_problem(filepath: Path) -> Optional[str]:
     except ImportError:
         return None
     declaration = store_registry.declaration_for(Path(filepath).name)
+    if declaration is None:
+        for declared_name in store_registry.declared_store_names():
+            candidate = store_registry.declaration_for(declared_name)
+            if getattr(candidate, "write_boundary", None) is None:
+                continue
+            try:
+                if Path(filepath).samefile(canonical / declared_name):
+                    declaration = candidate
+                    break
+            except OSError:
+                continue
     boundary = getattr(declaration, "write_boundary", None)
     if boundary is None:
         return None

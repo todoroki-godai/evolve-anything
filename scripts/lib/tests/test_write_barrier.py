@@ -272,6 +272,28 @@ def test_store_write_raw_boundary_cannot_be_downgraded_to_warn(data_dir) -> None
     assert not target.exists()
 
 
+def test_store_write_raw_rejects_relative_specialized_boundary(
+    data_dir, monkeypatch
+) -> None:
+    monkeypatch.chdir(data_dir)
+    target = Path("reflect_apply_events.jsonl")
+    with pytest.raises(StoreWriteError, match="専用の追記境界"):
+        store_write_raw(target, {"correction_id": "a" * 32})
+    assert not target.exists()
+
+
+def test_store_write_raw_rejects_same_file_alias_of_specialized_boundary(
+    data_dir,
+) -> None:
+    declared = data_dir / "reflect_apply_events.jsonl"
+    declared.touch()
+    alias = data_dir / "Reflect_Apply_Events.jsonl"
+
+    with pytest.raises(StoreWriteError, match="専用の追記境界"):
+        store_write_raw(alias, {"correction_id": "a" * 32}, guard_mode="warn")
+    assert declared.read_text(encoding="utf-8") == ""
+
+
 def test_store_write_raw_keeps_explicit_path_exception_for_boundary_store(
     tmp_path_factory, data_dir
 ) -> None:
