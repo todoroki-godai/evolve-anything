@@ -178,9 +178,12 @@ def _raw_boundary_problem(filepath: Path) -> Optional[str]:
         return None
     declaration = store_registry.declaration_for(target.name)
     if declaration is None:
-        requested_name = Path(filepath).name.casefold()
+        candidate_names = {
+            Path(filepath).name.casefold(),
+            target.name.casefold(),
+        }
         for declared_name in store_registry.declared_store_names():
-            if declared_name.casefold() != requested_name:
+            if declared_name.casefold() not in candidate_names:
                 continue
             declaration = store_registry.declaration_for(declared_name)
             break
