@@ -197,6 +197,17 @@ PROPOSAL_KINDS: Tuple[ProposalKind, ...] = (
         lane_connected=False,
     ),
     ProposalKind(
+        kind="recommended_artifacts_covered",
+        # 同じ内容が別名・別ディレクトリに既にある推奨（discover/artifacts.py の
+        # _find_same_name / _find_marker がヒットしたもの）。提示から下げた分を
+        # 消さずにここへ残す（silence != evaluated）。各エントリは covered_by に
+        # 根拠 file:line を持つ。判定は名前とファイル本文の文字列一致であり、
+        # 言い回しが違えば当たらない（.claude/rules/no-denylist-checks.md）。
+        source_path="phases.discover.recommended_artifacts_covered",
+        selector="list_of_dict",
+        lane_connected=False,
+    ),
+    ProposalKind(
         kind="stall_recovery_patterns",
         # tool_usage_analyzer/stall.py:81-92 detect_stall_recovery_patterns が List[Dict] を
         # 返す（runner.py:474-475）。phases_remediate.py:153-156 で

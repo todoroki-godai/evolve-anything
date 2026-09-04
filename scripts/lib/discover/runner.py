@@ -371,9 +371,17 @@ def run_discover(
     # 推奨アーティファクト未導入チェック（tool_usage データを証拠として付加）
     recommended_missing = detect_recommended_artifacts(
         tool_usage_patterns=tool_result,
+        project_root=project_root,
     )
-    if recommended_missing:
-        result["recommended_artifacts"] = recommended_missing
+    # 同じ内容が別名・別ディレクトリに既にあるものは提案から下げる。
+    # **消さずに件数と内訳を必ず surface する**（silence != evaluated）。
+    covered = [e for e in recommended_missing if e.get("covered_by")]
+    fresh = [e for e in recommended_missing if not e.get("covered_by")]
+    if fresh:
+        result["recommended_artifacts"] = fresh
+    if covered:
+        # 下げた事実は必ず残す（silence != evaluated）。各エントリの covered_by が根拠。
+        result["recommended_artifacts_covered"] = covered
 
     # 導入済みアーティファクトの状態
     installed = detect_installed_artifacts(

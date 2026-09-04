@@ -97,6 +97,7 @@ phases.discover.error_patterns
 phases.discover.installed_artifacts
 phases.discover.missed_skill_message
 phases.discover.recommended_artifacts
+phases.discover.recommended_artifacts_covered
 phases.discover.reflect_data_count
 phases.discover.rejection_patterns
 phases.discover.stall_recovery_patterns

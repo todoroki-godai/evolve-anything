@@ -7,6 +7,7 @@ trajectory_skill_candidate
 missed_skill_opportunities
 verification_needs
 recommended_artifacts
+recommended_artifacts_covered
 stall_recovery_patterns
 workflow_checkpoint_gaps
 constraint_decay_warnings
