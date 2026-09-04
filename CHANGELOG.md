@@ -12,8 +12,13 @@
   backtick の内側に引用されたキーワード（「`MUST NOT` という表現が残っていないか検索する」等）は
   禁止の宣言として扱わない。修正後の実測は 10 spec で、`cd` と `while pgrep -f "script.py"` は
   陽性として残り `git log` / `git status` は消えた。**判定に使う識別は文字位置の近さであり、
-  既知の並びのみ検出でき迂回可能な advisory**（blocking 保証には使わない・
-  `.claude/rules/no-denylist-checks.md`）。
+  既知の種別のみ検出・迂回可能な advisory**（blocking 保証には使わない・
+  `.claude/rules/no-denylist-checks.md`）。作動しない条件4種（対比文で推奨側も拾う／
+  キーワードより後ろの対象を拾わない／否定されたキーワードを禁止として拾う／
+  英文の終止符を文境界にしない）は `TestKnownLimitations` で現状挙動を固定した。
+  いずれも実 rules に該当0件。**外部レビュー2巡で同一の欠陥族（範囲の取り方）への
+  後追い修正が続いたため族2巡打ち切りを発動し、人間の裁定により
+  「未修正の blocking 欠陥が無い状態まで縮小してマージ」を選択した。**
 
 ### Added
 - **feat(evolve): 提案の必須提示項目に「推奨」を追加し4点提示にする（#582）** — 朝の y/n を含む

@@ -113,7 +113,8 @@ class TestExtractProhibitedCommandHeads:
         遠くの禁止キーワードに引きずられて禁止扱いしない。
 
         既知の並びのみ検出する advisory であり、判定に使うのは
-        「キーワードの直前に閉じる backtick 1 個」という文字位置の近さ。
+        「キーワードと同じ文に属し、キーワードより前に閉じた backtick」という
+        文字位置の近さ。
         """
         rules_dir = tmp_path / "rules"
         rules_dir.mkdir()
@@ -229,6 +230,72 @@ class TestExtractProhibitedCommandHeads:
         heads = extract_prohibited_command_heads([rules_dir])
         assert "git status" not in heads
         assert "rm -rf" in heads
+
+
+class TestKnownLimitations:
+    """文字位置の近さで判定する方式の、既知の作動しない条件を現状挙動として固定する。
+
+    これらは「正しい振る舞い」ではなく「いまこう振る舞う」の記録である。
+    方式を明示的な禁止 spec へ置き換えて解消した時点で、このクラスは赤くなるので
+    そのとき削除または更新する（外部レビュー巡2 で構成された反例）。
+
+    実 rules（`~/.claude/rules` と当PJ `.claude/rules`）に該当する文面は
+    2026-09-04 時点で 0 件。
+    """
+
+    def test_contrast_sentence_also_captures_the_recommended_command(self, tmp_path):
+        """1 つの文で推奨と禁止を対比すると、推奨側も抽出する（既知の限界）。"""
+        rules_dir = tmp_path / "rules"
+        rules_dir.mkdir()
+        (rules_dir / "x.md").write_text(
+            "- 状態は `git status` で確認し、`rm` は禁止する。\n", encoding="utf-8"
+        )
+        heads = extract_prohibited_command_heads([rules_dir])
+        assert heads == {"git status", "rm"}
+
+    def test_target_written_after_the_keyword_is_not_captured(self, tmp_path):
+        """禁止対象をキーワードより後ろに書く文型は拾わない（既知の限界）。"""
+        rules_dir = tmp_path / "rules"
+        rules_dir.mkdir()
+        (rules_dir / "x.md").write_text(
+            "- 禁止コマンドは `rm` とする。\n", encoding="utf-8"
+        )
+        heads = extract_prohibited_command_heads([rules_dir])
+        assert heads == set()
+
+    def test_negated_keyword_is_still_treated_as_a_prohibition(self, tmp_path):
+        """キーワードが否定される文型でも禁止として抽出する（既知の限界）。"""
+        rules_dir = tmp_path / "rules"
+        rules_dir.mkdir()
+        (rules_dir / "x.md").write_text(
+            "- `git status` は禁止対象外。\n", encoding="utf-8"
+        )
+        heads = extract_prohibited_command_heads([rules_dir])
+        assert heads == {"git status"}
+
+    def test_ascii_period_is_not_a_sentence_boundary(self, tmp_path):
+        """英文の終止符は文境界として扱わない（既知の限界）。
+
+        ASCII `.` を境界へ加えると `script.py` / `python3.12` のような
+        トークン内の点まで境界になり、真の陽性を落とすため加えていない。
+        """
+        rules_dir = tmp_path / "rules"
+        rules_dir.mkdir()
+        (rules_dir / "x.md").write_text(
+            "- Use `git status` first. `rm` is MUST NOT.\n", encoding="utf-8"
+        )
+        heads = extract_prohibited_command_heads([rules_dir])
+        assert "git status" in heads
+
+    def test_version_like_token_is_still_captured(self, tmp_path):
+        """陽性対照: トークン内に点を含む禁止対象は落とさない。"""
+        rules_dir = tmp_path / "rules"
+        rules_dir.mkdir()
+        (rules_dir / "x.md").write_text(
+            "- `python3.12` は禁止。\n", encoding="utf-8"
+        )
+        heads = extract_prohibited_command_heads([rules_dir])
+        assert "python3.12" in heads
 
 
 class TestPartitionRuleViolations:
