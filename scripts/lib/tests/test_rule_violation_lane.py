@@ -108,6 +108,87 @@ class TestExtractProhibitedCommandHeads:
         assert "git checkout -b" in heads
         assert "git" not in heads
 
+    def test_recommended_command_far_from_keyword_is_not_prohibited(self, tmp_path):
+        """実測回帰: 1 行の長文 rule で、推奨として書かれたコマンドを
+        遠くの禁止キーワードに引きずられて禁止扱いしない。
+
+        既知の並びのみ検出する advisory であり、判定に使うのは
+        「キーワードの直前に閉じる backtick 1 個」という文字位置の近さ。
+        """
+        rules_dir = tmp_path / "rules"
+        rules_dir.mkdir()
+        (rules_dir / "delegate.md").write_text(
+            "- **同一タスクに2体目を spawn しない**。回復手順は有界にする: "
+            "頭が次に作業先の実体（`git log`/`git status`）を見た時点までに"
+            "指示が反映されていなければ、同じ worker へ 1 回だけ再送する。"
+            "**不達の判定に `ListAgents` の在否を使わない**\n",
+            encoding="utf-8",
+        )
+        heads = extract_prohibited_command_heads([rules_dir])
+        assert "git log" not in heads
+        assert "git status" not in heads
+
+    def test_multiple_keywords_each_take_their_own_preceding_token(self, tmp_path):
+        """1 行に禁止表現が複数あるとき、各キーワードの直前をそれぞれ拾う。"""
+        rules_dir = tmp_path / "rules"
+        rules_dir.mkdir()
+        (rules_dir / "x.md").write_text(
+            "- `cd` は禁止。代わりに `git -C` を使う。なお `sudo` も使わない。\n",
+            encoding="utf-8",
+        )
+        heads = extract_prohibited_command_heads([rules_dir])
+        assert "cd" in heads
+        assert "sudo" in heads
+        assert "git -C" not in heads
+
+    def test_keyword_without_preceding_backtick_yields_nothing(self, tmp_path):
+        """キーワードの前に backtick が無い行からは何も抽出しない。"""
+        rules_dir = tmp_path / "rules"
+        rules_dir.mkdir()
+        (rules_dir / "x.md").write_text(
+            "- 破壊的な操作は禁止。確認してから `rm` を実行する。\n",
+            encoding="utf-8",
+        )
+        heads = extract_prohibited_command_heads([rules_dir])
+        assert heads == set()
+
+    def test_keyword_inside_backtick_does_not_select_that_backtick(self, tmp_path):
+        """backtick の内側に禁止キーワードが現れる行で、その backtick 自身を
+        「キーワードの直前のトークン」として採用しない。
+
+        採用判定は backtick の**閉じ位置**がキーワード開始位置以下であること。
+        開始位置で比較すると、キーワードをまたぐ backtick が自分自身を選ぶ。
+        """
+        rules_dir = tmp_path / "rules"
+        rules_dir.mkdir()
+        (rules_dir / "x.md").write_text(
+            "- 説明文に `MUST NOT` という表現を含めてよい\n",
+            encoding="utf-8",
+        )
+        heads = extract_prohibited_command_heads([rules_dir])
+        assert heads == set()
+
+    def test_same_keyword_repeated_in_one_line_is_scanned_every_time(self, tmp_path):
+        """同一の禁止キーワードが 1 行に複数回現れるとき、2 回目以降も走査する。"""
+        rules_dir = tmp_path / "rules"
+        rules_dir.mkdir()
+        (rules_dir / "x.md").write_text(
+            "- `cd` は禁止。同様に `sudo` も禁止。\n", encoding="utf-8"
+        )
+        heads = extract_prohibited_command_heads([rules_dir])
+        assert "cd" in heads
+        assert "sudo" in heads
+
+    def test_symbol_only_backtick_is_not_a_command(self, tmp_path):
+        """コマンド名の形をしない backtick（記号のみ）は禁止コマンドにしない。"""
+        rules_dir = tmp_path / "rules"
+        rules_dir.mkdir()
+        (rules_dir / "x.md").write_text(
+            "- パイプ `|` の乱用は禁止\n", encoding="utf-8"
+        )
+        heads = extract_prohibited_command_heads([rules_dir])
+        assert heads == set()
+
 
 class TestPartitionRuleViolations:
     def test_splits_prohibited_pattern_into_violation_lane(self):

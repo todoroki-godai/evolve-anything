@@ -149,11 +149,22 @@ def extract_prohibited_command_heads(rule_dirs: Iterable[Path]) -> Set[str]:
     return heads
 
 
-def _first_keyword_pos(line: str) -> int:
-    """禁止キーワードのうち最も早い出現位置を返す（無ければ -1）。"""
-    positions = [line.find(kw) for kw in _PROHIBITION_KEYWORDS]
-    positions = [p for p in positions if p >= 0]
-    return min(positions) if positions else -1
+def _keyword_positions(line: str) -> List[int]:
+    """行内の禁止キーワードの全出現位置を昇順で返す（無ければ空リスト）。
+
+    1 行に複数の禁止表現が並ぶ rules 本文（1 項目 1 行の長文）に対応するため、
+    最も早い 1 件ではなく全出現を返す。
+    """
+    positions: List[int] = []
+    for kw in _PROHIBITION_KEYWORDS:
+        start = 0
+        while True:
+            idx = line.find(kw, start)
+            if idx < 0:
+                break
+            positions.append(idx)
+            start = idx + 1
+    return sorted(positions)
 
 
 def _prohibited_heads_in_line(line: str) -> Set[str]:
@@ -165,16 +176,30 @@ def _prohibited_heads_in_line(line: str) -> Set[str]:
     これにより「禁止行に同居する推奨コマンド」の誤検出を防ぐ（#522-3 FP 対策）。
 
     複数語トークン（例: `` `git checkout -b` ``）は先頭語への縮約をしない（#222）。
+
+    **判定に使う識別**: 禁止キーワードと backtick トークンの「文字位置の近さ」
+    （キーワードの直前に閉じる backtick 1 個だけ）。名前・意味ではない。
+    既知の並び（キーワードの直前にコマンドを置く書き方）のみ検出でき、迂回可能。
+    ゆえにこのレーンは advisory であり blocking 保証には使わない
+    （`.claude/rules/no-denylist-checks.md`）。
+
+    キーワードより前の backtick を**すべて**拾う旧実装は、rules が 1 項目 1 行の
+    長文であるため、同じ行の無関係な推奨コマンドまで禁止扱いにしていた
+    （実測 2026-09-03: 実 rules から抽出した 17 spec のうち 8 spec が誤り。
+    `git log` / `git status` は「頭が作業先の実体（`git log`/`git status`）を見る」
+    という**推奨**の記述から、646 文字離れた位置の「使わない」に引きずられていた）。
     """
-    kw_pos = _first_keyword_pos(line)
-    if kw_pos < 0:
+    positions = _keyword_positions(line)
+    if not positions:
         return set()
+    spans = [(m.start(), m.end(), m.group(1)) for m in _BACKTICK_RE.finditer(line)]
     heads: Set[str] = set()
-    for m in _BACKTICK_RE.finditer(line):
-        # 禁止キーワードより後ろに開始する backtick は代替手段とみなし除外
-        if m.start() > kw_pos:
+    for kw_pos in positions:
+        # そのキーワードの直前に閉じている backtick を 1 個だけ採用する。
+        before = [s for s in spans if s[1] <= kw_pos]
+        if not before:
             continue
-        spec = _prohibited_spec(m.group(1))
+        spec = _prohibited_spec(before[-1][2])
         if spec:
             heads.add(spec)
     return heads
