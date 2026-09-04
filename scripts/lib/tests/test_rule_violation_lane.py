@@ -127,6 +127,8 @@ class TestExtractProhibitedCommandHeads:
         heads = extract_prohibited_command_heads([rules_dir])
         assert "git log" not in heads
         assert "git status" not in heads
+        # 同じ fixture で真陽性の維持も固定する（抽出そのものが空になる退行を検出）。
+        assert "ListAgents" in heads
 
     def test_multiple_keywords_each_take_their_own_preceding_token(self, tmp_path):
         """1 行に禁止表現が複数あるとき、各キーワードの直前をそれぞれ拾う。"""
@@ -188,6 +190,45 @@ class TestExtractProhibitedCommandHeads:
         )
         heads = extract_prohibited_command_heads([rules_dir])
         assert heads == set()
+
+    def test_one_keyword_governs_parallel_targets_in_same_sentence(self, tmp_path):
+        """1 つの禁止キーワードが同じ文の複数の対象を支配する並列文型で、
+        列挙されたすべてを保持する（外部レビュー巡1 [Must]）。"""
+        rules_dir = tmp_path / "rules"
+        rules_dir.mkdir()
+        (rules_dir / "x.md").write_text(
+            "- `rm` と `sudo` は禁止する。\n", encoding="utf-8"
+        )
+        heads = extract_prohibited_command_heads([rules_dir])
+        assert heads == {"rm", "sudo"}
+
+    def test_quoted_keyword_does_not_arm_earlier_tokens(self, tmp_path):
+        """backtick の内側に引用された禁止キーワードは、禁止の宣言として扱わない。
+
+        その backtick 自身だけでなく、同じ文の**手前**の backtick も
+        禁止扱いにしない（外部レビュー巡1 [Must]（追加））。
+        """
+        rules_dir = tmp_path / "rules"
+        rules_dir.mkdir()
+        (rules_dir / "x.md").write_text(
+            "- `git status` でログを確認し、`MUST NOT` という表現が"
+            "残っていないか検索する。\n",
+            encoding="utf-8",
+        )
+        heads = extract_prohibited_command_heads([rules_dir])
+        assert heads == set()
+
+    def test_previous_sentence_tokens_are_out_of_scope(self, tmp_path):
+        """前の文に現れた推奨コマンドは、後続の文の禁止キーワードに支配されない。"""
+        rules_dir = tmp_path / "rules"
+        rules_dir.mkdir()
+        (rules_dir / "x.md").write_text(
+            "- 状態は `git status` で確認する。破壊的な操作は `rm -rf` を含め禁止。\n",
+            encoding="utf-8",
+        )
+        heads = extract_prohibited_command_heads([rules_dir])
+        assert "git status" not in heads
+        assert "rm -rf" in heads
 
 
 class TestPartitionRuleViolations:

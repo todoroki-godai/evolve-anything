@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### Fixed
+- **fix(rule-violation): 禁止コマンド抽出を「同じ文の中」に限定する（#622）** — rules から
+  禁止コマンドを抽出する処理が、行内で禁止キーワードより前にある backtick を**すべて**
+  禁止扱いにしていた。rules は1項目1行の長文のため、同じ行に書かれた**推奨**コマンドまで
+  巻き込まれ、実データで `git status` 8回・`git log` 7回が「ルール違反」として提示されていた
+  （実測 2026-09-03: 実 rules 2ディレクトリからの抽出 17 spec のうち 8 spec が誤り）。
+  採用範囲を「そのキーワードと同じ文に属し、キーワードより前に閉じた backtick」へ変更し、
+  backtick の内側に引用されたキーワード（「`MUST NOT` という表現が残っていないか検索する」等）は
+  禁止の宣言として扱わない。修正後の実測は 10 spec で、`cd` と `while pgrep -f "script.py"` は
+  陽性として残り `git log` / `git status` は消えた。**判定に使う識別は文字位置の近さであり、
+  既知の並びのみ検出でき迂回可能な advisory**（blocking 保証には使わない・
+  `.claude/rules/no-denylist-checks.md`）。
+
 ### Added
 - **feat(evolve): 提案の必須提示項目に「推奨」を追加し4点提示にする（#582）** — 朝の y/n を含む
   全 AskUserQuestion で、対象・根拠・変更内容に加えて「どの選択肢を選ぶべきかと理由1行」を

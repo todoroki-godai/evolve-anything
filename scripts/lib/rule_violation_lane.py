@@ -61,6 +61,9 @@ _PROHIBITION_KEYWORDS = (
     "不可",
 )
 
+# 文の区切り。禁止キーワードが支配する範囲をこの手前までに限る。
+_SENTENCE_DELIMITERS = ("。", "．", "!", "?", "！", "？")
+
 # backtick で囲まれたトークン（コマンド断片）を抽出する。
 _BACKTICK_RE = re.compile(r"`([^`]+)`")
 
@@ -178,12 +181,13 @@ def _prohibited_heads_in_line(line: str) -> Set[str]:
     複数語トークン（例: `` `git checkout -b` ``）は先頭語への縮約をしない（#222）。
 
     **判定に使う識別**: 禁止キーワードと backtick トークンの「文字位置の近さ」
-    （キーワードの直前に閉じる backtick 1 個だけ）。名前・意味ではない。
+    （キーワードと同じ文に属し、かつキーワードより前に閉じた backtick）。
+    名前・意味ではない。
     既知の並び（キーワードの直前にコマンドを置く書き方）のみ検出でき、迂回可能。
     ゆえにこのレーンは advisory であり blocking 保証には使わない
     （`.claude/rules/no-denylist-checks.md`）。
 
-    キーワードより前の backtick を**すべて**拾う旧実装は、rules が 1 項目 1 行の
+    行内でキーワードより前の backtick を**すべて**拾う旧実装は、rules が 1 項目 1 行の
     長文であるため、同じ行の無関係な推奨コマンドまで禁止扱いにしていた
     （実測 2026-09-03: 実 rules から抽出した 17 spec のうち 8 spec が誤り。
     `git log` / `git status` は「頭が作業先の実体（`git log`/`git status`）を見る」
@@ -195,13 +199,22 @@ def _prohibited_heads_in_line(line: str) -> Set[str]:
     spans = [(m.start(), m.end(), m.group(1)) for m in _BACKTICK_RE.finditer(line)]
     heads: Set[str] = set()
     for kw_pos in positions:
-        # そのキーワードの直前に閉じている backtick を 1 個だけ採用する。
-        before = [s for s in spans if s[1] <= kw_pos]
-        if not before:
+        # backtick の内側に現れたキーワードは、禁止の宣言ではなく引用（例:
+        # 「`MUST NOT` という表現が残っていないか検索する」）。無効化する。
+        if any(start <= kw_pos < end for start, end, _ in spans):
             continue
-        spec = _prohibited_spec(before[-1][2])
-        if spec:
-            heads.add(spec)
+        # そのキーワードと同じ文に属する backtick を採用する
+        # （「`rm` と `sudo` は禁止する」のように 1 つのキーワードが
+        #  複数の対象を支配する並列文型を落とさないため）。
+        sentence_start = max(
+            [line.rfind(delim, 0, kw_pos) for delim in _SENTENCE_DELIMITERS] + [-1]
+        )
+        for start, _end, token in spans:
+            if not (sentence_start < start and _end <= kw_pos):
+                continue
+            spec = _prohibited_spec(token)
+            if spec:
+                heads.add(spec)
     return heads
 
 
