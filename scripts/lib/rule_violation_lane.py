@@ -61,6 +61,9 @@ _PROHIBITION_KEYWORDS = (
     "不可",
 )
 
+# 文の区切り。禁止キーワードが支配する範囲をこの手前までに限る。
+_SENTENCE_DELIMITERS = ("。", "．", "!", "?", "！", "？")
+
 # backtick で囲まれたトークン（コマンド断片）を抽出する。
 _BACKTICK_RE = re.compile(r"`([^`]+)`")
 
@@ -149,11 +152,22 @@ def extract_prohibited_command_heads(rule_dirs: Iterable[Path]) -> Set[str]:
     return heads
 
 
-def _first_keyword_pos(line: str) -> int:
-    """禁止キーワードのうち最も早い出現位置を返す（無ければ -1）。"""
-    positions = [line.find(kw) for kw in _PROHIBITION_KEYWORDS]
-    positions = [p for p in positions if p >= 0]
-    return min(positions) if positions else -1
+def _keyword_positions(line: str) -> List[int]:
+    """行内の禁止キーワードの全出現位置を昇順で返す（無ければ空リスト）。
+
+    1 行に複数の禁止表現が並ぶ rules 本文（1 項目 1 行の長文）に対応するため、
+    最も早い 1 件ではなく全出現を返す。
+    """
+    positions: List[int] = []
+    for kw in _PROHIBITION_KEYWORDS:
+        start = 0
+        while True:
+            idx = line.find(kw, start)
+            if idx < 0:
+                break
+            positions.append(idx)
+            start = idx + 1
+    return sorted(positions)
 
 
 def _prohibited_heads_in_line(line: str) -> Set[str]:
@@ -165,18 +179,51 @@ def _prohibited_heads_in_line(line: str) -> Set[str]:
     これにより「禁止行に同居する推奨コマンド」の誤検出を防ぐ（#522-3 FP 対策）。
 
     複数語トークン（例: `` `git checkout -b` ``）は先頭語への縮約をしない（#222）。
+
+    **判定に使う識別**: 禁止キーワードと backtick トークンの「文字位置の近さ」
+    （キーワードと同じ文に属し、かつキーワードより前に閉じた backtick）。
+    名前・意味ではない。**既知の種別のみ検出・迂回可能**であり、このレーンは
+    advisory である。blocking 保証には使わない
+    （`.claude/rules/no-denylist-checks.md`）。
+
+    **作動しない条件（既知・`TestKnownLimitations` で現状挙動を固定）**:
+    ①1 つの文で推奨と禁止を対比すると推奨側も拾う
+    （「状態は `git status` で確認し、`rm` は禁止する。」）
+    ②禁止対象をキーワードより後ろに書く文型を拾わない
+    （「禁止コマンドは `rm` とする。」）
+    ③キーワードが否定される文型を禁止として拾う（「`git status` は禁止対象外。」）
+    ④英文の終止符を文境界として扱わない（ASCII `.` を境界に加えると
+    `script.py` / `python3.12` のようなトークン内の点まで境界になり真陽性を落とす）。
+    いずれも実 rules に該当 0 件（2026-09-04 実測）。
+
+    行内でキーワードより前の backtick を**すべて**拾う旧実装は、rules が 1 項目 1 行の
+    長文であるため、同じ行の無関係な推奨コマンドまで禁止扱いにしていた
+    （実測 2026-09-03: 実 rules から抽出した 17 spec のうち 8 spec が誤り。
+    `git log` / `git status` は「頭が作業先の実体（`git log`/`git status`）を見る」
+    という**推奨**の記述から、646 文字離れた位置の「使わない」に引きずられていた）。
     """
-    kw_pos = _first_keyword_pos(line)
-    if kw_pos < 0:
+    positions = _keyword_positions(line)
+    if not positions:
         return set()
+    spans = [(m.start(), m.end(), m.group(1)) for m in _BACKTICK_RE.finditer(line)]
     heads: Set[str] = set()
-    for m in _BACKTICK_RE.finditer(line):
-        # 禁止キーワードより後ろに開始する backtick は代替手段とみなし除外
-        if m.start() > kw_pos:
+    for kw_pos in positions:
+        # backtick の内側に現れたキーワードは、禁止の宣言ではなく引用（例:
+        # 「`MUST NOT` という表現が残っていないか検索する」）。無効化する。
+        if any(start <= kw_pos < end for start, end, _ in spans):
             continue
-        spec = _prohibited_spec(m.group(1))
-        if spec:
-            heads.add(spec)
+        # そのキーワードと同じ文に属する backtick を採用する
+        # （「`rm` と `sudo` は禁止する」のように 1 つのキーワードが
+        #  複数の対象を支配する並列文型を落とさないため）。
+        sentence_start = max(
+            [line.rfind(delim, 0, kw_pos) for delim in _SENTENCE_DELIMITERS] + [-1]
+        )
+        for start, _end, token in spans:
+            if not (sentence_start < start and _end <= kw_pos):
+                continue
+            spec = _prohibited_spec(token)
+            if spec:
+                heads.add(spec)
     return heads
 
 
