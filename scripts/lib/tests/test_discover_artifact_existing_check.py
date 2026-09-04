@@ -208,3 +208,116 @@ class TestHookIsNotCoveredByProse:
         assert got is not None, "hook が未導入なら一覧から消えてはならない"
         assert "hook" in [m["type"] for m in got["missing"]]
         assert got.get("covered_by"), "rule 側のカバー根拠は残る"
+
+
+class TestNameCollisionDoesNotHideMissingArtifacts:
+    """外部レビュー巡1 [Must]: 総称的なファイル名で別物を根拠にしない。"""
+
+    def test_unrelated_skill_md_is_not_a_cover(
+        self, monkeypatch, tmp_path, no_suppression
+    ):
+        """skill の実体は常に `SKILL.md`。basename 一致だと別 skill に当たる。"""
+        home = tmp_path / "home"
+        skills = home / ".claude" / "skills"
+        (skills / "unrelated").mkdir(parents=True)
+        (skills / "unrelated" / "SKILL.md").write_text("別物\n", encoding="utf-8")
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+
+        art = _artifact(
+            id="commit-skill", type="skill", path=skills / "commit" / "SKILL.md"
+        )
+        monkeypatch.setattr(discover, "RECOMMENDED_ARTIFACTS", [art])
+        got = _by_id(detect_recommended_artifacts(), "commit-skill")
+        assert got is not None, "本当に無い skill が提示から消えてはならない"
+        assert "covered_by" not in got
+
+    def test_same_skill_name_in_project_is_a_cover(
+        self, monkeypatch, tmp_path, no_suppression
+    ):
+        """陽性対照: 同じ skill 名なら PJ 側にあっても covered。"""
+        home = tmp_path / "home"
+        (home / ".claude" / "skills").mkdir(parents=True)
+        proj = tmp_path / "proj"
+        (proj / ".claude" / "skills" / "commit").mkdir(parents=True)
+        (proj / ".claude" / "skills" / "commit" / "SKILL.md").write_text(
+            "本文\n", encoding="utf-8"
+        )
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+
+        art = _artifact(
+            id="commit-skill",
+            type="skill",
+            path=home / ".claude" / "skills" / "commit" / "SKILL.md",
+        )
+        monkeypatch.setattr(discover, "RECOMMENDED_ARTIFACTS", [art])
+        got = _by_id(detect_recommended_artifacts(project_root=proj), "commit-skill")
+        assert got is not None
+        assert got["covered_by"].endswith("commit/SKILL.md")
+
+    def test_same_basename_under_a_different_parent_is_not_a_cover(
+        self, monkeypatch, tmp_path, no_suppression
+    ):
+        """rules 直下を探す artifact が、別ディレクトリの同名ファイルに当たらない。"""
+        home = tmp_path / "home"
+        refs = home / ".claude" / "rules" / "refs"
+        refs.mkdir(parents=True)
+        (refs / "deploy-lock.md").write_text("外出しした記録\n", encoding="utf-8")
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+
+        art = _artifact(
+            id="deploy-lock", path=home / ".claude" / "rules" / "deploy-lock.md"
+        )
+        monkeypatch.setattr(discover, "RECOMMENDED_ARTIFACTS", [art])
+        got = _by_id(detect_recommended_artifacts(), "deploy-lock")
+        assert got is not None
+        assert "covered_by" not in got
+
+
+class TestUnreadableFileDoesNotBreakTheScan:
+    def test_non_utf8_markdown_is_skipped(self, monkeypatch, tmp_path, no_suppression):
+        """非 UTF-8 の *.md が1件あっても、探索は落ちず次のファイルへ進む。"""
+        home = tmp_path / "home"
+        rules = home / ".claude" / "rules"
+        rules.mkdir(parents=True)
+        (rules / "aaa_broken.md").write_bytes(b"\xff\xfe not utf-8 \x00\x9c")
+        (rules / "zzz_good.md").write_text("- 正常系E2Eテストを最初に書く\n", encoding="utf-8")
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+
+        art = _artifact(
+            id="test-happy-path-first",
+            path=rules / "test-happy-path-first.md",
+            equivalent_markers=["正常系E2Eテスト"],
+        )
+        monkeypatch.setattr(discover, "RECOMMENDED_ARTIFACTS", [art])
+        got = _by_id(detect_recommended_artifacts(), "test-happy-path-first")
+        assert got is not None
+        assert "zzz_good.md" in got["covered_by"]
+
+
+class TestCoveredByFormat:
+    def test_marker_hit_carries_a_line_number(self, monkeypatch, tmp_path, no_suppression):
+        home = tmp_path / "home"
+        rules = home / ".claude" / "rules"
+        rules.mkdir(parents=True)
+        (rules / "x.md").write_text("1行目\n- 目印\n", encoding="utf-8")
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+
+        art = _artifact(id="a", path=rules / "a.md", equivalent_markers=["目印"])
+        monkeypatch.setattr(discover, "RECOMMENDED_ARTIFACTS", [art])
+        got = _by_id(detect_recommended_artifacts(), "a")
+        assert got["covered_by"].endswith("x.md:2")
+
+    def test_same_name_hit_has_no_line_number(self, monkeypatch, tmp_path, no_suppression):
+        """契約は `file[:line]`。同名一致はファイル全体が根拠なので位置を持たない。"""
+        home = tmp_path / "home"
+        (home / ".claude" / "rules").mkdir(parents=True)
+        proj = tmp_path / "proj"
+        (proj / ".claude" / "rules").mkdir(parents=True)
+        (proj / ".claude" / "rules" / "a.md").write_text("本文\n", encoding="utf-8")
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+
+        art = _artifact(id="a", path=home / ".claude" / "rules" / "a.md")
+        monkeypatch.setattr(discover, "RECOMMENDED_ARTIFACTS", [art])
+        got = _by_id(detect_recommended_artifacts(project_root=proj), "a")
+        assert got["covered_by"].endswith("a.md")
+        assert not got["covered_by"].split("/")[-1].count(":")

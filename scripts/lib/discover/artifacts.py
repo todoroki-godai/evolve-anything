@@ -190,25 +190,39 @@ def _search_roots(project_root: Optional[Path] = None) -> List[Path]:
     if project_root:
         roots.append(Path(project_root) / ".claude" / "rules")
         roots.append(Path(project_root) / ".claude" / "hooks")
+        roots.append(Path(project_root) / ".claude" / "skills")
     return roots
 
 
 def _find_same_name(path: Optional[Path], roots: List[Path]) -> Optional[Path]:
-    """決め打ちパスと同じファイル名を、探索範囲から再帰的に探す。"""
+    """決め打ちパスと同じ「親ディレクトリ名 / ファイル名」を探索範囲から再帰的に探す。
+
+    **ファイル名だけで照合してはいけない**。skill の実体は常に `SKILL.md` なので、
+    basename 一致では無関係な skill が根拠になり、**本当に無い artifact が
+    提示から消える**（外部レビュー巡1 [Must]。再現: `~/.claude/skills/unrelated/SKILL.md`
+    だけが在る環境で `skills/commit/SKILL.md` を探すと unrelated に当たる）。
+
+    親ディレクトリ名まで見れば `commit/SKILL.md` と `unrelated/SKILL.md` は別物になり、
+    `rules/commit-version.md` はグローバルでも PJ でも親が `rules` なので一致する。
+    """
     if not path:
         return None
     name = path.name
+    parent_name = path.parent.name
     for root in roots:
         if not root.is_dir():
             continue
         for found in root.rglob(name):
-            if found.is_file():
+            if found.is_file() and found.parent.name == parent_name:
                 return found
     return None
 
 
 def _find_marker(markers: List[str], roots: List[Path]) -> Optional[str]:
     """本文の特徴語で既存 artifact を探し、最初のヒットを `file:line` で返す。
+
+    （同名一致の `_find_same_name` はファイルパスのみを返すため、
+    `covered_by` 全体の書式は `file[:line]` である）
 
     **判定に使う識別**: 本文に現れる文字列。名前でも実体でもない。
     既知の言い回しのみ検出でき、書き換えられれば当たらなくなる。
@@ -223,7 +237,9 @@ def _find_marker(markers: List[str], roots: List[Path]) -> Optional[str]:
         for f in sorted(root.rglob("*.md")):
             try:
                 lines = f.read_text(encoding="utf-8").splitlines()
-            except OSError:
+            except (OSError, UnicodeError):
+                # 読めないファイルは飛ばして次へ。1 件の非 UTF-8 で
+                # 推奨 artifact フェーズ全体を落とさない（外部レビュー巡1 [Should]）。
                 continue
             for i, line in enumerate(lines, 1):
                 if any(m in line for m in markers):
@@ -284,8 +300,11 @@ def detect_recommended_artifacts(
             "missing": [],
         }
         if covered_by:
-            # 「既に書かれている可能性」の根拠。呼び出し側はこれを持つ提案を
-            # 既定で提示から下げ、下げた件数と内訳を必ず 1 行 surface する。
+            # 「既に書かれている可能性」の根拠。書式は `file[:line]` で、
+            # 行番号が付くのは本文の特徴語で見つけた場合のみ（同名一致は
+            # ファイル全体が根拠なので位置を持たない・外部レビュー巡1 [Must]）。
+            # 呼び出し側はこれを持つ提案を既定で提示から下げ、
+            # 下げた件数と内訳を必ず surface する。
             entry["covered_by"] = covered_by
         if not rule_exists and rule_path:
             entry["missing"].append({"type": "rule", "path": str(rule_path)})
