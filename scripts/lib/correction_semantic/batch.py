@@ -66,7 +66,7 @@ _CHARS_PER_TOKEN = 2.0
 # （estimate_tokens の固定費と reserve_batch_cost の予約額の両方がこの1定数を共有する単一ソース）。
 #
 # #625 [Should]: judge_runner.call_haiku は毎バッチ ``prompt.VERDICT_JSON_SCHEMA``
-# （467字前後）を safe_llm_call の json_schema 引数として送るが、旧実装は本体プロンプト
+# を safe_llm_call の json_schema 引数として送るが、旧実装は本体プロンプト
 # （build_batch_prompt）の長さしか見積もっておらず schema 分が予約から漏れていた
 # （呼ぼうとした時点で必ず予約する reserved_batches の思想＝#410 round4 と矛盾する隙間）。
 # schema 側も同じ _CHARS_PER_TOKEN で換算して加算する。

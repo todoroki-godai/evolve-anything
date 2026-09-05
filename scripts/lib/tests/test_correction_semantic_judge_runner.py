@@ -897,6 +897,7 @@ def test_call_haiku_delegates_to_safe_llm_call(monkeypatch):
     assert out == "ok"
     assert captured["prompt"] == "prompt text"
     assert captured["model"] == "haiku"
+    assert captured["json_schema"] == cs_prompt.VERDICT_JSON_SCHEMA
     schema = json.loads(captured["json_schema"])
     assert schema["type"] == "object"
     assert schema["required"] == ["verdicts"]
