@@ -14,10 +14,9 @@ allowed-tools: Bash, Read, AskUserQuestion
 # /evolve-anything:tier — モデルティア正典の対話変更
 
 model-routing のティア（HEAD/HARD/NORMAL/MECH/REVIEW ↔ model/effort）の正典は
-`~/.claude/model-tiers.json`（CLI: `bin/evolve-tier`、#193）が一元管理する。以前は
-model-routing rule・各 PJ の agent frontmatter・settings.json に散在し、モデル変更のたびに
-手動で全ファイルを追従する必要があった（2026-07-10 opus 4.8 廃止時に HEAD が fable⇄sonnet を
-同日中に往来した実例）。**このスキル自体はファイルを直接編集しない** — 全ての変更は
+`~/.claude/model-tiers.json`（CLI: `bin/evolve-tier`、#193）が一元管理する。分散管理（rule・
+各 PJ の agent frontmatter・settings.json に個別記載）だとモデル変更のたびに全ファイルへの
+手動追従が必要になり、取りこぼしによる設定ズレが起きる。**このスキル自体はファイルを直接編集しない** — 全ての変更は
 `bin/evolve-tier` CLI 経由で行い、このスキルは「何をどう変えるか」の対話的な聞き取りと、
 sync 適用前の diff 提示・承認取得を担う UX レイヤーに徹する。
 
