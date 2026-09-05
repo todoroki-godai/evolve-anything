@@ -1,133 +1,145 @@
 # 設計: 朝の「ルールに書く」を書く工程と `--apply` 記録まで一続きにする（#631）
 
-- 起票: #631／関連: #587 #622 #467 #632
-- 状態: 設計案（暫定含む・レビュー未通過）
+- 起票: #631／関連: #587 #622 #467 #632 #412
+- 状態: 設計案 v2（レビュー巡1で問題定義を訂正。案C撤回・案D採用）
+
+## 0. レビュー巡1での訂正点（v1→v2）
+
+- v1 は「未反映N日の表示」を新規案として提案したが、**既に実装済み**だった。
+  `correction_backlog.py:70-74` の `_format_backlog_item` が `age_days` を返し、
+  `skills/evolve/references/correction-review.md:173` の在庫3択の設問文が
+  `「{message}」（{age_days}日前から在庫）` を実際に出している。→ **案C は取り下げ**。
+- v1 は「同一指摘に何度も『書く』と答える往復」を問題として書いたが、実測では**そのような往復は
+  0件**。問題は「`promote` した38件のうち37件が `--apply` まで到達していない」という**1方向の脱落**
+  だった。→ 問題定義を書き換える（1節・2節）。
+- v1 は「在庫3択（`correction_backlog`）がSessionStart通知に出る」ことを前提にしていたが、
+  実際は**SessionStart経路（`daily/proposal_digest.py`）は `correction_backlog` を一切参照しない**。
+  在庫3択が出るのは `/evolve-anything:evolve` スキル実行時（`skills/evolve/SKILL.md:257`）のみ。
+  → 経路図を3節で書き直す。
 
 ## 1. 完成条件
 
-① **守る対象**: 朝の y/n で「ルールに書く」を選んだ指摘が、実際にルールへ反映され、かつその反映が
-`reflect_apply_events.jsonl` に記録されること（記録がなければ柱2は測定できない＝#587）。
-② **信頼境界**: 脅威ではなく運用ミスを対象とする。手順を実行するのは常に Claude（agent）と人間の
-y/n で、悪意ある入力は数えない。
-③ **対象外**: `--apply` 自体の実装（既存・`skills/reflect/scripts/reflect.py:1044-1470` で完成済み）。
-`target_kind` の集計対象拡張（memory/refs を柱2に数えるか）は #632 が別途裁定するので、本設計は
-「#632 でどちらに決まっても壊れない」形にするだけで、値自体は決めない。
-④ **blocking の定義**: 「`promoted` のまま `--apply` 記録が一切ない件が、同じ内容のまま2回目の朝提示に
-達すること」をこの設計が防げているか。防げない場合は可視化で代替する。
-⑤ **検証方法**: 下記「7. 検証」の陽性・陽性対照・陰性試験。
-⑥ **目的文の物差しで削る量**: 目的文は CLAUDE.md「朝の30秒」「週1の数字」。
-直接観測値: 30日で「書く」38回・反映記録1件（#631 本文、`bin/evolve-audit --growth` と
-`corrections.jsonl` の status Counter 突合、取得日 2026-09-05T01:33Z）。
-本設計が削れる量は**推定であり直接観測値ではないため 0 と書く**（新規メカニズムの効果は
-運用してみないと測れない。事前に「往復が何%減る」と書かない）。
+① **守る対象**: 朝（または `/evolve` 実行時）の y/n で「ルールに書く」を選んだ指摘が、実際に
+ルールへ反映され、`reflect_apply_events.jsonl` に `correction_applied` として記録されること。
+② **信頼境界**: 運用ミスのみを対象とする（agentの多段手順の脱落・悪意ある入力は数えない）。
+③ **対象外**: `--apply` 自体の実装（`skills/reflect/scripts/reflect.py:1044-1470` で完成済み）。
+`reflect_target_kind` の集計対象拡張は #632 が別途裁定するため、本設計はそれに依存しない形にする。
+④ **blocking の定義**: 「`decision=promoted` の件が、同セッション内で `--apply` 記録
+（`reflect_apply_events.jsonl` の `correction_applied`）に達しない経路が残ること」。
+⑤ **検証方法**: 7節の陽性・陽性対照・陰性試験。
+⑥ **目的文の物差しで削る量**: 実装前のため **0**。基準値は下記2節の 1/38（3.5%）。
+本設計の効果（この比率がどこまで上がるか）は運用実績でしか測れないため見積もりを書かない。
 
-## 2. 前提の evidence
+## 2. 問題定義（訂正後）と evidence
 
-| # | 主張 | 値／コマンド | 取得日 |
+**訂正後の問題定義**: 「同一指摘への往復」ではなく「`promote` 後に `--apply` 記録へ到達しない」
+という**片道の脱落**が主因。
+
+| # | 主張 | 値／取得コマンド | 取得日 |
 |---|---|---|---|
-| 1 | 在庫60（applied 2 / promoted 45 / pending 13）、30日提示77回（promoted 38 / already_reflected 26 / rejected 13）、反映記録1件 | #631 本文（`bin/evolve-audit --growth` と `corrections.jsonl` status Counter 突合） | 2026-09-05T01:33Z |
-| 2 | 通知文言（`scripts/lib/daily/proposal_digest.py:667-679`）は既に「起草→追記→`--apply`」の3点セットを明記し、旧「promote-weak で止まる」文面ではない | `sed -n '640,679p' scripts/lib/daily/proposal_digest.py`（本設計作業中に直接確認） | 2026-09-05 |
-| 3 | 反映先つき4択の手順書（`skills/evolve/references/correction-review.md:112-131`）も3点セット（昇格→反映先提案→Edit/Write→`--apply`）を既に規定 | 同ファイル読了 | 2026-09-05 |
-| 4 | `--apply` は `--target-path`/`--draft-line-file` 必須、rules 配下は `--before-content-file` も必須（省略でエラー停止） | `skills/reflect/scripts/reflect.py:1044-1060,1312-1334` | 2026-09-05 |
-| 5 | `correction_backlog.py` は `reflect_status=="promoted"` かつ非 invalidated を timestamp 昇順（古い順）で読み取り専用に返す。`timestamp` は既に `_format_backlog_item` の出力に含まれる | `scripts/lib/correction_semantic/correction_backlog.py:63-136` | 2026-09-05 |
-| 6 | #541 D-2 により `already_reflected` は `--promote-weak` を呼ばず correction を作らないため、在庫レーンにも新規4択レーンにも出ない（`promoted` とは非対称） | `scripts/lib/daily/proposal_digest.py:661-666` | 2026-09-05 |
+| 1 | `corrections.jsonl`（project_path に `evolve-anything` を含む行）の `reflect_status` 内訳: `promoted 2 / applied 20 / skipped 25 / pending 14`。**v1 に書いた「promoted 45」は仕分け前スナップショット**（#631 起票時点、2026-09-05T01:33Z）で、現在値とは別物 | `python3 -c` で `corrections.jsonl` を読み `project_path` に `evolve-anything` を含む行の `reflect_status` を `Counter` 集計 | 2026-09-05（本設計作業時点） |
+| 2 | `correction_review_seen.jsonl` を `pj_slug=="evolve-anything"`・`decision=="promoted"`・直近30日で絞ると **38行・distinct key 38・重複0**（同じ key が2回以上 `promoted` と記録された行は無い） | `python3 -c`（`~/.claude/evolve-anything/correction_review_seen.jsonl` を読み `key` を `Counter`。ウィンドウは `reviewed_at` 直近30日） | 2026-09-05 |
+| 3 | `reflect.py:1218` は `--promote-weak` ハンドラ内で `record_reviewed(res["promoted_keys"], ..., decision="promoted", ...)` を**即時**呼ぶ（`--apply` を待たない）。この既読化により同一 key は二度と朝の新規4択に出ない（`daily/proposal_digest.py:667-679` のコメントが根拠） | `sed -n '1174,1237p' skills/reflect/scripts/reflect.py` | 2026-09-05 |
+| 4 | `daily/proposal_digest.py`（SessionStart 経路の `build_proposal_digest`・339行目／`build_session_proposals`・456行目）は `correction_backlog` を**呼んでいない**（grep で一致0件）。在庫3択が出るのは `/evolve-anything:evolve` スキル実行時のみ（`skills/evolve/SKILL.md:257`「`daily.correction_backlog` が非空のとき...在庫3択で確認する（MUST）」） | `grep -n "correction_backlog" scripts/lib/daily/proposal_digest.py`（0件）／`skills/evolve/SKILL.md:256-257` | 2026-09-05 |
+| 5 | `--promote-weak` の stdout JSON（`reflect.py:1231-1237`）は `status/promoted_keys/skipped/confirmed_idioms/corrections_human_allpj` のみを返す。次に打つべき `--apply <source_correction_id> --target-path ... --draft-line-file ...` の**雛形は印字されない**。agent が `make_source_correction_id(session_id, timestamp)`（`memory_temporal.py:339`）を自力で組む必要がある | 同上コード読了 | 2026-09-05 |
+| 6 | 文書とコードの食い違い: `correction-review.md:129`「6. 既読化: ...を `record_reviewed(...)` に渡す」は手順4（`--apply`）の**後**の手順6として書かれ、`skills/evolve/SKILL.md:256` も「①ルールに書く」→...→ `--apply` で実在確認してから」と読める語順だが、実装（上記#3）は `--promote-weak` の中で `--apply` を待たずに既読化する。**既読化のタイミングは文書の読後感と逆**（コードが正） | `sed -n '112,131p' skills/evolve/references/correction-review.md` と #3 の対比 | 2026-09-05 |
 
-**3の evidence が意味すること**: 文書と通知は #541/#498（2026-08-30 マージ）時点で既に「一続き」の
-手順を書いている。**#631 が実測した往復（38回書く→1件反映）は、文言不足ではなく、多段の手順を
-毎回最後まで agent が実行し切れていないという実行時の落ち方**（手順は書いてあるが、選択後の
-Edit→`--apply` まで agent が同一ターンで完了する保証がない）。この診断は次節「3. 現状の経路」で
-file:line を続ける。
+**この5件から導かれる脱落点**: 「promote」を選んだ時点で（a）既読化は完了し二度と聞かれない、
+（b）次にすべき `--apply` コマンドの組み立て材料（`source_correction_id`）は agent 側の自力計算に
+委ねられている。（a）と（b）が重なると、agent がその場で `--apply` まで実行しない限り、
+**再提示という形での「気づき直しの機会」自体が失われる**（38件中37件で実際に起きた）。
 
-## 3. 現状の経路（`promoted` が終端になる箇所）
+## 3. 現状の経路（訂正後）
 
-- `--promote-weak` は correction に `reflect_status="promoted"` を書き込むだけで完結する
-  （`daily/proposal_digest.py:663-667` のコメントが明言）。この呼び出し**単体**は正しく完了する。
-- 次の手順（反映先提案→Edit/Write→`--apply`）は**すべて agent の後続の自発的な行動**に依存する。
-  これを強制する機構は無い（`correction-review.md:114-128` は agent 向けの手順記述であって、
-  実行を保証するコードではない）。
-- 未実行のまま次の朝を迎えると、`correction_backlog.py:106`（`reflect_status != "promoted"` で
-  除外しない＝promoted は在庫として残り続ける）により**古い順で再提示される**。これが#631の
-  「往復」の実体で、`promoted` は事実上の終端状態になっている。
-- 再提示された在庫は現在「promoted」であること以外の情報を持たない。**何日前から`promoted`のまま
-  かが見えない**ため、朝の30秒でユーザーが「これは前も見た指摘か」を判断する材料がない
-  （`_format_backlog_item` は `timestamp` を返すが、呼び出し側の表示に経過日数への変換は無い —
-  `daily/proposal_digest.py` 内に `correction_backlog` の出力を経過日数へ変換する処理は見当たらない）。
+```
+SessionStart（毎回）
+  └─ daily/proposal_digest.py: build_proposal_digest / build_session_proposals
+       └─ 新規4択（反映先つき）… correction_backlog は不参照
+            └─「1 ルールに書く」選択
+                 └─ --promote-weak 実行
+                      ├─ corrections.jsonl の reflect_status を "promoted" へ（即時）
+                      └─ record_reviewed(decision="promoted") で既読化（即時・#3）
+                           → 以後 SessionStart の新規4択には二度と出ない
+                 └─（ここから先の Edit/Write→--apply は agent の自発行動に依存。
+                    stdout に次コマンドの雛形は出ない＝#5）
+                 └─ 実行されなければ reflect_status="promoted" のまま放置される
+
+/evolve-anything:evolve 実行時（ユーザーが明示的に叩いたときだけ）
+  └─ 在庫3択（correction_backlog、#514）… reflect_status=="promoted" を古い順に提示
+       └─「もう出さない」以外を選ばない限り、再度「1」を選んでも同じ脱落を繰り返しうる
+```
+
+**「promoted が終端になる」の実体**: 新規4択の再提示は既読化によって構造的に止まる
+（正しい設計・二重質問防止）一方、その先の `--apply` への導線が SessionStart 経路には無く、
+`/evolve` を明示的に叩かない限り可視化すらされない。
 
 ## 4. 提案
 
-**選ばない案の説明も含め、機構数の比較を先に書く**（`think-before-coding.md` の「機構を足す前に
-減らせないか」に従う）。
-
-| 案 | やること | 機構数 | 選ばなかった場合の実害 |
+| 案 | やること | 機構数 | 採否 |
 |---|---|---|---|
-| (A) 通知文言の書き換え | 「1を選んだ場合」をさらに強い MUST 文言にする | 0（既存文言の言い回し変更のみ） | 3節の evidence の通り、**既に3点セットを明記した文言で往復が起きている**ので、文言強化だけでは同じ実行時の落ち方（多段手順の未完走）を防げない。実害＝往復が続く |
-| (B) `--promote-weak` に `--target-path` を必須化し1コマンド化 | 昇格コマンド自体に反映先を持たせ、`--promote-weak` の成功を「反映先が決定済み」の証拠にする | 1（CLI引数の追加・後方互換のため既定 None で任意運用に留めるなら実質0） | 選ばない場合、昇格と反映先決定が分離したままで、agentが反映先提案（手順1.5）を省略しても検出できない。ただし**Edit/Write と `--apply` はこの案でも別ターンに残る**ため、単独では#631の完成条件（往復ゼロ）を満たさない |
-| (C) 在庫再提示に「promoted 済み・未反映 N日」を明示 | `correction_backlog` の出力（既存 `timestamp`）から経過日数を計算し、在庫3択の提示文言に1行足す。**新規ストア・新規フィールドなし**（read時導出、#379 凍結に抵触しない） | 1（表示ロジックの追加のみ、書込みなし） | 選ばない場合、ユーザーは「これは前回も書くと答えた指摘だ」と気づけないまま同じ判断を繰り返し、往復が可視化されないまま続く |
+| (C) 未反映N日の表示 | — | — | **撤回**（0節のとおり実装済み・かつ在庫3択はSessionStartに出ないため、この案単独では脱落を減らせない） |
+| (D) `--promote-weak` の出力に `--apply` 雛形コマンドをそのまま印字＋通知文言に「同セッション内で実行するまでが1手順」と明記 | ①`reflect.py` の `--promote-weak` ハンドラが `promoted_keys` それぞれの `source_correction_id` を計算し `apply_command_template` として stdout JSON に追加 ②`daily/proposal_digest.py:676` の「1 を選んだ場合」文言に「出力された `--apply` 雛形を同セッション内で実行するまでが1手順」を追記 | 2（CLIの出力追加1・文言追記1。いずれも既存コードへの追記で新規ストア無し） | **採用（推奨）** |
+| (E) 朝の SessionStart 経路にも在庫（`correction_backlog`）を運ぶ | `build_proposal_digest`/`build_session_proposals` に `correction_backlog` の呼び出しを追加し、SessionStart でも在庫3択を出す | 1〜（`build_session_proposals` は #443 ADR-054 PR2-b で「順位と打ち切りを分離」する複雑な合成ロジックを持つため、在庫を混ぜると打ち切り件数・`max_groups` 配分の再設計が要る） | **今回は採らない**。理由: (D) は「promote した直後」に手を打つ設計で、agentがその場で `--apply` まで完走すれば在庫レーンに落ちる前に解決する。(E) は「一度promoteされ、放置され、翌朝以降に発見する」ための保険であり、(D) が効けば必要性が下がる。(D) 導入後も脱落が残るなら次点として issue 化する |
+| (D') 既読化（`record_reviewed`）を `--promote-weak` 内から `--apply` 成功時へ移す | `reflect.py:1218` の呼び出し位置を変更 | 1（既存呼び出しの移動） | **今回は採らない**。理由: `reflect.py:1174-1218` のコメントが明示する `#412 [Must]5` の契約（「昇格できた key だけを即座に既読化しないと、TTL失効等で `promoted=0` でも既読化され二度と出ない silent failure が再発する」）に触れる。既読化を `--apply` 成功時に遅らせると、`--apply` を実行しないまま日をまたいだ場合に**同一指摘が新規4択へ再出現**するようになり、それは0節で確認した「往復は実際には起きていない」という現状の良い性質（二重質問防止）を壊す副作用がある。#412 の契約を壊さずに達成する保証が無いため、この設計では採用しない |
 
-**推奨: (C) を単独で採用し、(A)(B) は見送る。**
-理由: (C) は新規メカニズムを持たず（既存 `timestamp` の read-time 変換のみ）、`#379` 新設凍結・
-`no-denylist-checks.md` のいずれにも抵触しない最小の1手で、#631 の完成条件のうち
-「未反映として翌朝に区別されて出る」（issue本文の代替完了条件）を直接満たす。
-(A) は3節の evidence により効果が実証的に否定されている（既に3点セットの文言があるのに往復が
-起きた）ため追加しない。(B) は反映先決定の強制はできるが Edit/Write・`--apply` の未完走という
-本体の問題を解決しないため、(C) だけでは物足りないと判断されるなら**次点候補**として issue 化する
-（本設計では採用しない＝層を重ねない）。
-
-### (C) の実装位置（設計のみ・実装しない）
-
-- `scripts/lib/correction_semantic/correction_backlog.py` の `_format_backlog_item`
-  （63-78行目）が返す `timestamp` を使い、**呼び出し側**（`daily/proposal_digest.py` の在庫3択
-  組み立て箇所）で `now - timestamp` の日数を計算し、`{n}日前に「ルールに書く」を選択済み・
-  未反映です` を在庫3択の設問文に追記する。**`correction_backlog.py` 自体は読み取り専用のまま
-  変更しない**（責務は「在庫を返す」のままにし、表示文言の組み立ては呼び出し側に残す）。
-- 経過日数のしきい値（何日から表示するか）は**暫定で0日（常に表示）**とする。表示を間引く基準は
-  実データが無いと較正できないため、`measure-now-not-later.md` に従い暫定値のまま出し、
-  必要ならユーザーの「うるさい」というフィードバックで調整する（新規ストアなしで調整可能 —
-  表示ロジックの定数変更のみ）。
+**推奨: (D)。**
+理由: (D) は新規ストアを作らず、脱落点である「`--apply` に必要な `source_correction_id` を
+agentが自力で組む」という手間そのものを消す。文言追記も既存の3点セット手順を「同セッション内で」
+という時間的制約に強化するだけで、#412 の契約にも #379 凍結にも触れない最小の1手。
 
 ## 5. #632 の取り込み
 
-本設計は #632 の裁定を**待たない**。理由: (C) は `reflect_target_kind` を一切参照しない
-（`correction_backlog.py` は `reflect_status` と `timestamp` のみを見る。柱2集計の対象範囲を
-決める `pillar2_metrics.py:233`／`reflect_apply_match.py:88-121`（`classify_reflect_target_kind`）
-とは独立した経路）。#632 が「数える」「対象外と明記」のどちらに決まっても、本設計の在庫表示・
-経過日数計算は変更不要。
+本設計は #632 の裁定を待たない。(D) は `reflect_apply_events.jsonl` への記録経路
+（`--apply` コマンド自体）を変更せず、出力の**手前**（`--promote-weak` の stdout）に雛形を足すだけ
+なので、`reflect_target_kind` の集計対象（#632 の論点）とは独立。
 
 ## 6. 凍結との整合
 
-- 新規ストア・新規 JSON キー・新規 weak_signal channel は作らない。(C) は既存 `corrections.jsonl`
-  の `timestamp` フィールドを read 時に `now` と差分計算するだけで、永続化する値を1つも増やさない。
-- `#379` 新設凍結の対象（新 store / observability section / advisory proposal adapter /
-  weak_signal channel）のいずれにも該当しない。
+- `apply_command_template` は `--promote-weak` の**stdout JSON への追加キー**であり、evolve phases
+  の永続化された result キー・新規ストア・新規 weak_signal channel のいずれでもない。
+  **頭の裁定（本設計に明記）**: CLI の一時的な標準出力キー追加は `#379` 新設凍結の対象外とする
+  （凍結対象は「新設される store / observability section / advisory proposal adapter /
+  weak_signal channel」であり、`--promote-weak` の呼び出し1回限りの stdout はどれにも該当しない）。
+  永続化は一切増えない（`corrections.jsonl` 側にフィールドを足さない）。
 
 ## 7. 検証（設計時点の計画。実装フェーズで実施）
 
-- **陽性**: `correction_backlog` に `timestamp` が3日前の `promoted` レコードを1件仕込み、
-  在庫3択の提示文言に「3日前に...選択済み・未反映です」相当の文字列が現れることを確認する。
-- **陽性対照**: `reflect_status="applied"` のレコード、または `timestamp` が当日のレコードでは
-  経過日数の警告文言が出ない（`applied` は `correction_backlog` の母集団自体から除外済み
-  ＝`correction_backlog.py:106` を根拠に対照とする）。
+- **陽性**: `--promote-weak` を1件実行し、stdout JSON に `apply_command_template`
+  （`--apply <source_correction_id> --target-path ... --draft-line-file ...` の文字列）が
+  含まれることを確認する。
+- **陽性対照**: 「いいえ」（`--reject-weak`）・「既に反映済み」（`--already-reflected-weak`）の
+  stdout JSON には `apply_command_template` が含まれない（この2経路は反映を前提としないため）
+  ことを確認し、経路が変わっていないことを示す。
 - **陰性試験（このチェックを通したまま壊す入力）**:
-  1. `timestamp` が未来日時（時計ずれ・不正データ）のレコード → 負の日数にならず「0日」に丸める
-     処理を要求する（丸めないと「-5日前」という表示になり得る）。
-  2. `timestamp` がパース不能な文字列 → `correction_backlog.py:134` 既存の「末尾送り（epoch扱い）」
-     と整合させ、経過日数表示は「不明」にフォールバックすることを要求する（例外を投げない）。
+  1. `promoted_keys` が空（全 key が昇格失敗）のとき、`apply_command_template` は空リストまたは
+     キー自体を省略し、存在しない `source_correction_id` を捏造しないことを要求する。
+  2. `session_id`/`timestamp` が欠落したレコードを昇格しようとしたとき、
+     `make_source_correction_id` が例外を投げずに済む場合のみ雛形を出し、組めない場合は
+     「雛形を生成できません・手動で `--view` から source_correction_id を確認してください」と
+     明示することを要求する（黙って壊れた雛形を出さない）。
 
 ## 8. 未実測と実行契約
 
-- **未実測**: (C) の表示追加により、実際に「往復（同じ指摘に何度も『書く』と答える）」が
-  減るかどうかは運用してみないと分からない。ユーザーが経過日数を見ても行動を変えない可能性がある。
+- **未実測**: (D) の雛形提示・文言強化により、agentが実際に同セッション内で `--apply` まで
+  完走する率が上がるかは運用しないと分からない。「手間を減らせば実行される」という因果は仮説。
 - **実行契約**:
   - 起点: 実装 PR マージ日
-  - 再測条件: 実装後30日経過、または `promoted` レコードが新たに10件蓄積のいずれか早い方
-  - 実行者: 頭（`bin/evolve-audit --growth` と `corrections.jsonl` status Counter 突合を再実行）
+  - **再測条件（観測可能量）**: 直近30日の `decision=promoted` 件数に対する、同一 key 由来の
+    `reflect_apply_events.jsonl` の `correction_applied` 到達件数の比率。
+    **現在値（基準値）: 1/38 ≈ 2.6%**（2節#2の distinct key 38・うち `--apply` 記録に到達したのは
+    #631 起票時点の実測で1件。算出コマンドは2節#2に同じ、`reflect_apply_events.jsonl` との
+    correction_id 突合を追加する）
+  - 実行者: 頭
   - 判定者: ユーザー
   - 期限: 実装 PR マージから30日
-  - 期限超過時: 「書く」選択の反復率（同一 idiom/representative が複数回『書く』と選ばれた比率）が
-    実装前（#631 実測時点の分子分母は未算出。実装時に別途算出）から改善していなければ、(B) の
-    追加 or 別設計をユーザーへ提起する
+  - 期限超過時: 比率が基準値（1/38）から改善していなければ、(E) または (D') 代替案の再検討を
+    ユーザーへ提起する
+
+## Nit（issue候補・本設計の対象外）
+
+- `correction_backlog.py:70` の `age_days = (datetime.now(timezone.utc) - ts).days` は
+  `ts` が未来日時（時計ずれ等）のとき負値を返し得る。丸め処理が無い。別 issue 候補。
 
 ## ブロッカー
 
-なし（本設計内で暫定案により完結。実装時の詳細な `daily/proposal_digest.py` 内の関数分割・
-テストケース設計はレビュー後の実装フェーズで確定する）。
+なし。
