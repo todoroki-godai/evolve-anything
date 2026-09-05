@@ -22,6 +22,7 @@ if str(_lib_dir) not in sys.path:
     sys.path.insert(0, str(_lib_dir))
 
 from correction_semantic import judge_runner  # noqa: E402
+from correction_semantic import prompt as cs_prompt  # noqa: E402
 from correction_semantic.store import read_judged_keys  # noqa: E402
 from weak_signals.store import read_signals  # noqa: E402
 
@@ -405,7 +406,7 @@ def test_run_threads_model_into_weak_signal_provenance(tmp_path, monkeypatch):
     assert ws_lines[0]["provenance"]["model"] == "haiku"
     assert ws_lines[0]["provenance"]["category"] == "factual"
     assert ws_lines[0]["provenance"]["prompt_fingerprint"]
-    assert ws_lines[0]["provenance"]["category_schema_version"] == 1
+    assert ws_lines[0]["provenance"]["category_schema_version"] == 2
 
 
 def test_dry_run_does_not_acquire_lock_and_proceeds_while_lock_held(tmp_path):
@@ -888,6 +889,7 @@ def test_call_haiku_delegates_to_safe_llm_call(monkeypatch):
     def _fake(prompt, *, model="haiku", **kwargs):
         captured["prompt"] = prompt
         captured["model"] = model
+        captured.update(kwargs)
         return "ok"
 
     monkeypatch.setattr(judge_runner._safe_llm_call, "call_claude_headless", _fake)
@@ -895,6 +897,23 @@ def test_call_haiku_delegates_to_safe_llm_call(monkeypatch):
     assert out == "ok"
     assert captured["prompt"] == "prompt text"
     assert captured["model"] == "haiku"
+    schema = json.loads(captured["json_schema"])
+    assert schema["type"] == "object"
+    assert schema["required"] == ["verdicts"]
+    verdicts = schema["properties"]["verdicts"]
+    assert verdicts["type"] == "array"
+    item = verdicts["items"]
+    assert item["type"] == "object"
+    assert item["required"] == ["index", "is_correction"]
+    assert item["properties"]["index"]["type"] == "integer"
+    assert item["properties"]["is_correction"]["type"] == "boolean"
+    assert item["properties"]["idiom"]["type"] == ["string", "null"]
+    assert item["properties"]["category"]["type"] == ["string", "null"]
+    assert item["properties"]["category"]["enum"] == [
+        *cs_prompt.CATEGORY_ENUM,
+        None,
+    ]
+    assert item["properties"]["reason"]["type"] == "string"
 
 
 # ─────────────────────────────────────────────────────────────────
