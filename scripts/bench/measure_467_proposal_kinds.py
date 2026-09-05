@@ -546,13 +546,26 @@ def _measure_verification_needs(project_root: Path, data_dir: Path) -> Dict[str,
 
 
 def _measure_recommended_artifacts(project_root: Path) -> Dict[str, int]:
-    """`recommended_artifacts`（discover/runner.py:312-347 と同じ経路）。"""
+    """`recommended_artifacts`（discover/runner.py の呼び出しと同じ経路）。
+
+    `project_root` を渡さないと PJ 側の rules/hooks/skills を探索しないため、
+    「既に別名・別ディレクトリにある推奨」を落とせず件数が過大になる。
+    `recommended_artifacts` は runner.py 側では単一キーへ統合済み（#624 巡3）だが、
+    本ベンチの表示用集計としては covered（`covered_by` あり）と fresh（`covered_by` なし）を
+    分けて返す（返り値の dict キーは表示用の集計名であり result のキーではない）。
+    """
     from discover import detect_recommended_artifacts  # noqa: PLC0415
     from tool_usage_analyzer import analyze_tool_usage  # noqa: PLC0415
 
     tool_result = analyze_tool_usage(project_root=project_root) or {}
-    recommended = detect_recommended_artifacts(tool_usage_patterns=tool_result)
-    return {"recommended_artifacts": len(recommended)}
+    recommended = detect_recommended_artifacts(
+        tool_usage_patterns=tool_result, project_root=project_root
+    )
+    covered = [e for e in recommended if e.get("covered_by")]
+    return {
+        "recommended_artifacts": len(recommended) - len(covered),
+        "recommended_artifacts_covered": len(covered),
+    }
 
 
 def _measure_stall_recovery(project_root: Path) -> Dict[str, int]:

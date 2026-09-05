@@ -3,6 +3,39 @@
 ## [Unreleased]
 
 ### Fixed
+- **fix(discover): `recommended_artifacts_covered` キーを廃止し単一 `recommended_artifacts` へ統合する（#467・巡3是正）** —
+  上の3層方式の一次実装は `covered`/`fresh` を `recommended_artifacts_covered`/`recommended_artifacts`
+  の別キーへ分離していたが、レビューで「別キー分離は不要な複雑化」と指摘され撤回した。
+  `detect_recommended_artifacts` の全 entry を単一の `result["recommended_artifacts"]` に入れ、
+  ①`covered_by` なし・`likely_covered_by` なし → ②`likely_covered_by` あり → ③`covered_by` あり
+  の順に安定ソートして状態を表現する（下段の entry は下げた事実を消さず `covered_by`/`likely_covered_by`
+  で判別できる。silence != evaluated は維持）。`ProposalKind(kind="recommended_artifacts_covered")` /
+  `evolve_keyset_optional.txt` の条件付きキー宣言（実行順序依存の隠蔽だったため撤回）を削除。
+  ベンチ集計 `measure_467_proposal_kinds.py::_measure_recommended_artifacts` は表示用の内訳
+  （fresh数/covered数）としてのみ2つの数字を返し続ける（result のキーではない）。
+
+- **fix(discover): 推奨 artifact の既存判定を「場所一致」だけの3層方式に作り直す（#467・巡3）** —
+  `detect_recommended_artifacts` は決め打ちパスの `exists()` だけで導入状態を判定していたため、
+  **同じ内容が別名・別ディレクトリにあっても「未導入」として提案していた**。巡1・巡2 のレビューで
+  名前・basename の一致に依拠する探索が「無関係な同名ファイルを根拠にする」族の [Must] を繰り返し出し
+  たため、`.claude/rules/no-denylist-checks.md`（名前・文字列一致は blocking にしない）に従い方式を
+  作り直した。**3層**: ①**場所一致**（`_find_by_location`）— 宣言パスの `~/.claude` からの相対部分を
+  `~/.claude` と `<project_root>/.claude` の2 base に結合し `is_file()` だけを見る。**唯一の自動抑制**で、
+  rule/hook を要素単位に判定し両方揃って初めて `covered_by`（`file` 形式・行番号なし）を付けて
+  `recommended_artifacts_covered` へ分離する。片方だけなら `rule_covered_by`/`hook_covered_by` を
+  付けつつ `missing` に残す（hook は本文の記述で代替できないため）。②**言い回し一致**
+  （`_find_marker`・`equivalent_markers` の本文一致、走査は両 base の `rules/` のみ）— **印
+  （`likely_covered_by`、`file:line` 形式）を付けるだけで、`missing` からは絶対に外さない**
+  （既知の言い回しのみ検出・迂回可能と明記）。③**人間の確定** — `discover-suppression.jsonl`（不変）。
+  旧方式の同名探索（`_find_same_name`・`_search_roots`）は削除。実測（2026-09-04・project_root=本 PJ）:
+  12 件中、場所一致は 2 件（`commit-version`/`evidence-before-claims`）のみが自動抑制対象、
+  残り 7 件は言い回し一致で fresh のまま印が付くだけになった（旧方式では 9 件とも下げていた）。
+  非 UTF-8 の `*.md` は読み飛ばして探索を続ける。`recommended_artifacts_covered` は場所一致件数が
+  2件に減ったことで既存の実データ dry-run キー集合スナップショット（`test_evolve_result_keyset_matches_snapshot`）
+  の非決定性が顕在化した（他テストの suppression 書込みとの実行順序に依存）ため、当該キーを
+  `evolve_keyset_optional.txt` の条件付きキーへ移した（機構は既存の設計を利用・ロジック変更なし）。
+
+### Fixed
 - **fix(rule-violation): 禁止コマンド抽出を「同じ文の中」に限定する（#622）** — rules から
   禁止コマンドを抽出する処理が、行内で禁止キーワードより前にある backtick を**すべて**
   禁止扱いにしていた。rules は1項目1行の長文のため、同じ行に書かれた**推奨**コマンドまで
