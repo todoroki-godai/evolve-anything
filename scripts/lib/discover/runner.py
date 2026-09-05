@@ -373,10 +373,13 @@ def run_discover(
         tool_usage_patterns=tool_result,
         project_root=project_root,
     )
-    # 同じ内容が別名・別ディレクトリに既にあるものは提案から下げる。
+    # 場所一致（rule/hook が全要素とも他 base に実在）で全要素が揃ったものだけ下げる。
     # **消さずに件数と内訳を必ず surface する**（silence != evaluated）。
     covered = [e for e in recommended_missing if e.get("covered_by")]
     fresh = [e for e in recommended_missing if not e.get("covered_by")]
+    # 言い回し一致（`likely_covered_by`）は印だけなので missing からは外さないが、
+    # 表示順は「印なし → 印あり」に安定ソートする（元の相対順は各グループ内で保つ）。
+    fresh = sorted(fresh, key=lambda e: bool(e.get("likely_covered_by")))
     if fresh:
         result["recommended_artifacts"] = fresh
     if covered:

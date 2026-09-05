@@ -198,11 +198,12 @@ PROPOSAL_KINDS: Tuple[ProposalKind, ...] = (
     ),
     ProposalKind(
         kind="recommended_artifacts_covered",
-        # 同じ内容が別名・別ディレクトリに既にある推奨（discover/artifacts.py の
-        # _find_same_name / _find_marker がヒットしたもの）。提示から下げた分を
-        # 消さずにここへ残す（silence != evaluated）。各エントリは covered_by に
-        # 根拠 file:line を持つ。判定は名前とファイル本文の文字列一致であり、
-        # 言い回しが違えば当たらない（.claude/rules/no-denylist-checks.md）。
+        # 宣言パスの相対位置が別 base（project_root/.claude）に実在した推奨
+        # （discover/artifacts.py の _find_by_location がヒットし rule/hook の
+        # 全要素が揃ったもの）。提示から下げた分を消さずにここへ残す
+        # （silence != evaluated）。各エントリは covered_by に根拠 file を持つ
+        # （行番号なし＝ファイル全体が根拠）。判定は同じ相対位置の実在であり、
+        # 名前・文字列一致では下げない（.claude/rules/no-denylist-checks.md）。
         source_path="phases.discover.recommended_artifacts_covered",
         selector="list_of_dict",
         lane_connected=False,

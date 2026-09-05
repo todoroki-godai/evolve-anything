@@ -175,59 +175,60 @@ RECOMMENDED_ARTIFACTS = [
 ]
 
 
-def _search_roots(project_root: Optional[Path] = None) -> List[Path]:
-    """既存 artifact を探すディレクトリ群（グローバル + PJ）。
+def _claude_home_root() -> Path:
+    """`~/.claude` を都度解決する（`Path.home()` monkeypatch にテストが依存）。"""
+    return Path.home() / ".claude"
 
-    決め打ちパスだけを見ると、**同じ内容が別名・別ディレクトリにあっても
-    「未導入」と判定する**（実測 2026-09-05: 12 件の提案のうち 10 件が
-    既存 rules に書かれていた）。ここは探索範囲の単一ソース。
+
+def _find_by_location(path: Optional[Path], project_root: Optional[Path]) -> Optional[Path]:
+    """artifact が宣言した場所、または PJ 側の対応する場所にファイルが実在するか。
+
+    **判定に使う識別**: 宣言パスが `~/.claude` からの相対パスとして表現できる場合、
+    その相対パスを2つの base（`~/.claude` と `<project_root>/.claude`）に結合して
+    `is_file()` だけを見る。名前の一致でも本文の一致でもなく、**同じ相対位置に
+    実体があるか**だけを見る（`.claude/rules/no-denylist-checks.md` の「判定に
+    使う識別」を1行で書く要求に対応）。
+
+    `~/.claude` 配下として表現できない宣言パス（plugin 内 skill・`~/.gstack` 設定等）
+    は、宣言された1箇所だけを見る。base の組合せは対象外。
     """
-    roots = [
-        Path.home() / ".claude" / "rules",
-        Path.home() / ".claude" / "hooks",
-        Path.home() / ".claude" / "skills",
-    ]
-    if project_root:
-        roots.append(Path(project_root) / ".claude" / "rules")
-        roots.append(Path(project_root) / ".claude" / "hooks")
-        roots.append(Path(project_root) / ".claude" / "skills")
-    return roots
-
-
-def _find_same_name(path: Optional[Path], roots: List[Path]) -> Optional[Path]:
-    """決め打ちパスと同じ「親ディレクトリ名 / ファイル名」を探索範囲から再帰的に探す。
-
-    **ファイル名だけで照合してはいけない**。skill の実体は常に `SKILL.md` なので、
-    basename 一致では無関係な skill が根拠になり、**本当に無い artifact が
-    提示から消える**（外部レビュー巡1 [Must]。再現: `~/.claude/skills/unrelated/SKILL.md`
-    だけが在る環境で `skills/commit/SKILL.md` を探すと unrelated に当たる）。
-
-    親ディレクトリ名まで見れば `commit/SKILL.md` と `unrelated/SKILL.md` は別物になり、
-    `rules/commit-version.md` はグローバルでも PJ でも親が `rules` なので一致する。
-    """
-    if not path:
+    if path is None:
         return None
-    name = path.name
-    parent_name = path.parent.name
-    for root in roots:
-        if not root.is_dir():
-            continue
-        for found in root.rglob(name):
-            if found.is_file() and found.parent.name == parent_name:
-                return found
+    if path.is_file():
+        return path
+    if project_root is None:
+        return None
+    try:
+        rel = path.relative_to(_claude_home_root())
+    except ValueError:
+        return None
+    alt = Path(project_root) / ".claude" / rel
+    if alt.is_file():
+        return alt
     return None
 
 
-def _find_marker(markers: List[str], roots: List[Path]) -> Optional[str]:
-    """本文の特徴語で既存 artifact を探し、最初のヒットを `file:line` で返す。
+def _marker_roots(project_root: Optional[Path] = None) -> List[Path]:
+    """言い回し一致の走査対象（`rules/` ディレクトリのみ・両 base）。
 
-    （同名一致の `_find_same_name` はファイルパスのみを返すため、
-    `covered_by` 全体の書式は `file[:line]` である）
+    marker はあくまで「印」であり、これで entry を covered にはしない
+    （`likely_covered_by` を付けるだけ）。走査範囲を rules に絞るのは、
+    hook/skill の実体を本文の記述で代替できないため（下の `detect_recommended_artifacts`
+    が hook を missing に残すのと対称）。
+    """
+    roots = [_claude_home_root() / "rules"]
+    if project_root:
+        roots.append(Path(project_root) / ".claude" / "rules")
+    return roots
+
+
+def _find_marker(markers: List[str], roots: List[Path]) -> Optional[str]:
+    """本文の特徴語で既存記述を探し、最初のヒットを `file:line` で返す。
 
     **判定に使う識別**: 本文に現れる文字列。名前でも実体でもない。
-    既知の言い回しのみ検出でき、書き換えられれば当たらなくなる。
-    ゆえに**提案を消さず「既に書かれている可能性」として下げるだけ**に使い、
-    下げた件数と内訳は必ず surface する（`.claude/rules/no-denylist-checks.md`）。
+    既知の言い回しのみ検出でき、書き換えられれば当たらなくなる。ゆえに
+    **entry を covered にせず `likely_covered_by`（印）を付けるだけ**に使う
+    （`.claude/rules/no-denylist-checks.md`）。
     """
     if not markers:
         return None
@@ -239,7 +240,7 @@ def _find_marker(markers: List[str], roots: List[Path]) -> Optional[str]:
                 lines = f.read_text(encoding="utf-8").splitlines()
             except (OSError, UnicodeError):
                 # 読めないファイルは飛ばして次へ。1 件の非 UTF-8 で
-                # 推奨 artifact フェーズ全体を落とさない（外部レビュー巡1 [Should]）。
+                # 推奨 artifact フェーズ全体を落とさない。
                 continue
             for i, line in enumerate(lines, 1):
                 if any(m in line for m in markers):
@@ -258,6 +259,16 @@ def detect_recommended_artifacts(
     Returns:
         未導入 artifact のリスト。各エントリに evidence (検出データ) を含む。
 
+    3層方式（#624 巡3。`.claude/rules/no-denylist-checks.md` に従い名前一致の
+    探索は廃止し、場所一致のみを自動抑制に使う）:
+      1. 場所一致（`_find_by_location`）— 唯一の自動抑制。要素（rule/hook）単位で判定し、
+         `missing` から該当要素だけを除く。**両方揃って初めて** entry 全体を
+         `covered_by`（`file` 形式・行番号なし）付きにする。片方だけなら
+         `rule_covered_by`/`hook_covered_by` を付けつつ `missing` に残す。
+      2. 言い回し一致（`_find_marker`）— `likely_covered_by`（`file:line` 形式）を
+         付けるだけの印。missing からは絶対に外さない（既知の言い回しのみ検出・迂回可能）。
+      3. 人間の確定 — `discover/suppression.py` の見送り記録（本関数は変更しない）。
+
     #26: ユーザーが導入を見送った artifact は suppression 窓（TTL）内は畳む。
     記録は discover-suppression.jsonl の type:"artifact" エントリ。窓を過ぎたら
     1 回だけ再提示して再評価を促す（is_artifact_suppressed が TTL を判定）。
@@ -266,54 +277,71 @@ def detect_recommended_artifacts(
     # package 経由で参照することで `mock.patch("discover.RECOMMENDED_ARTIFACTS", ...)` 既存テストに追従
     from . import RECOMMENDED_ARTIFACTS as _ARTIFACTS  # noqa: PLC0415
     from .suppression import is_artifact_suppressed  # noqa: PLC0415
-    roots = _search_roots(project_root)
+
     for artifact in _ARTIFACTS:
         rule_path = artifact.get("path")
-        rule_exists = rule_path.exists() if rule_path else True
         hook_path = artifact.get("hook_path")
-        hook_exists = hook_path.exists() if hook_path else True
 
-        # 決め打ちパスに無くても、同じ内容が別名・別ディレクトリにあることがある。
-        # 見つけた根拠は covered_by に残し、提案は消さず下げる（呼び出し側が分離）。
-        covered_by: Optional[str] = None
-        if not rule_exists:
-            same = _find_same_name(rule_path, roots)
-            if same:
-                covered_by = str(same)
-            else:
-                covered_by = _find_marker(artifact.get("equivalent_markers", []), roots)
-        if not hook_exists:
-            same_hook = _find_same_name(hook_path, roots)
-            if same_hook:
-                hook_exists = True
+        rule_loc = _find_by_location(rule_path, project_root)
+        hook_loc = _find_by_location(hook_path, project_root)
 
-        if rule_exists and hook_exists:
+        rule_ok = rule_path is None or rule_loc is not None
+        hook_ok = hook_path is None or hook_loc is not None
+
+        if rule_ok and hook_ok:
+            # 宣言パスそのものに在る（正規の場所）＝真に導入済み。提示しない。
+            if rule_loc == rule_path and hook_loc == hook_path:
+                continue
+            # PJ 側の別 base で見つかった＝場所一致だが正規の場所ではない。
+            # 提示は消さず covered_by を付けて下げる（呼び出し側が分離する）。
+            if is_artifact_suppressed(artifact["id"], now=now):
+                continue
+            covered_by = str(rule_loc) if rule_path is not None and rule_loc != rule_path else str(hook_loc)
+            missing.append({
+                "id": artifact["id"],
+                "description": artifact["description"],
+                "missing": [],
+                "covered_by": covered_by,
+            })
             continue
 
-        # #26: 見送り済み & クールダウン窓内なら再提示しない
+        # ここに来るのは、少なくとも一方の要素が場所一致しなかった場合。
+        element_missing: List[Dict[str, Any]] = []
+        rule_covered_by: Optional[str] = None
+        if rule_path is not None:
+            if rule_loc is not None:
+                rule_covered_by = str(rule_loc)
+            else:
+                element_missing.append({"type": "rule", "path": str(rule_path)})
+        hook_covered_by: Optional[str] = None
+        if hook_path is not None:
+            if hook_loc is not None:
+                hook_covered_by = str(hook_loc)
+            else:
+                element_missing.append({
+                    "type": "hook",
+                    "path": str(hook_path),
+                    "description": artifact.get("hook_description", ""),
+                })
+
         if is_artifact_suppressed(artifact["id"], now=now):
             continue
 
         entry: Dict[str, Any] = {
             "id": artifact["id"],
             "description": artifact["description"],
-            "missing": [],
+            "missing": element_missing,
         }
-        if covered_by:
-            # 「既に書かれている可能性」の根拠。書式は `file[:line]` で、
-            # 行番号が付くのは本文の特徴語で見つけた場合のみ（同名一致は
-            # ファイル全体が根拠なので位置を持たない・外部レビュー巡1 [Must]）。
-            # 呼び出し側はこれを持つ提案を既定で提示から下げ、
-            # 下げた件数と内訳を必ず surface する。
-            entry["covered_by"] = covered_by
-        if not rule_exists and rule_path:
-            entry["missing"].append({"type": "rule", "path": str(rule_path)})
-        if not hook_exists and hook_path:
-            entry["missing"].append({
-                "type": "hook",
-                "path": str(hook_path),
-                "description": artifact.get("hook_description", ""),
-            })
+        if rule_covered_by:
+            entry["rule_covered_by"] = rule_covered_by
+        if hook_covered_by:
+            entry["hook_covered_by"] = hook_covered_by
+
+        likely_covered_by = _find_marker(
+            artifact.get("equivalent_markers", []), _marker_roots(project_root)
+        )
+        if likely_covered_by:
+            entry["likely_covered_by"] = likely_covered_by
 
         # data_driven な artifact には tool_usage データを証拠として付加
         if artifact.get("data_driven") and tool_usage_patterns:
