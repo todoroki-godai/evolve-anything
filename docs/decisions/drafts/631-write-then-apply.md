@@ -161,11 +161,11 @@ agentが自力で組む」という手間そのものを消す。文言追記も
   `--promote-weak` の**stdout JSON への追加キー**であり、`corrections.jsonl` 等の永続化ストアに
   フィールドを足さない。evolve phases の永続化された result キー・新規ストア・新規 weak_signal
   channel のいずれでもない。
-- **ユーザー裁定（2026-09-06）: reflect CLI stdout の一時キー（`apply_command_template`／本設計の
-  `promoted_records`）は #379 新設凍結の対象外**。前例 #587（`gh issue view 587` 本文
-  「#379の新設凍結をこの1件だけ解除する（ユーザー裁定 2026-09-01）」）と同様に、凍結対象範囲の
-  解釈を頭が単独で確定せずユーザーへ仰いだ結果、対象外との裁定を得た。**永続化を増やさない
-  stdout の一時キーである点は変わらない**（`corrections.jsonl` 等への新規フィールド追加は無い）。
+- **ユーザー裁定（2026-09-06）で凍結対象外**。reflect CLI stdout の一時キー（`--apply` 雛形。
+  裁定時の呼称 `apply_command_template`／本設計の `promoted_records`）は**永続化ゼロ**
+  （`corrections.jsonl` 等への新規フィールド追加は無い）。前例 #587（`gh issue view 587` 本文
+  「#379の新設凍結をこの1件だけ解除する（ユーザー裁定 2026-09-01）」）と同様、凍結対象範囲の
+  解釈を頭が単独で確定せずユーザーへ仰いだ結果、対象外との裁定を得た。
 
 ## 7. 検証（設計時点の計画。実装フェーズで実施）
 
