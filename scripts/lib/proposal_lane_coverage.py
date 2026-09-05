@@ -197,18 +197,6 @@ PROPOSAL_KINDS: Tuple[ProposalKind, ...] = (
         lane_connected=False,
     ),
     ProposalKind(
-        kind="recommended_artifacts_covered",
-        # 宣言パスの相対位置が別 base（project_root/.claude）に実在した推奨
-        # （discover/artifacts.py の _find_by_location がヒットし rule/hook の
-        # 全要素が揃ったもの）。提示から下げた分を消さずにここへ残す
-        # （silence != evaluated）。各エントリは covered_by に根拠 file を持つ
-        # （行番号なし＝ファイル全体が根拠）。判定は同じ相対位置の実在であり、
-        # 名前・文字列一致では下げない（.claude/rules/no-denylist-checks.md）。
-        source_path="phases.discover.recommended_artifacts_covered",
-        selector="list_of_dict",
-        lane_connected=False,
-    ),
-    ProposalKind(
         kind="stall_recovery_patterns",
         # tool_usage_analyzer/stall.py:81-92 detect_stall_recovery_patterns が List[Dict] を
         # 返す（runner.py:474-475）。phases_remediate.py:153-156 で

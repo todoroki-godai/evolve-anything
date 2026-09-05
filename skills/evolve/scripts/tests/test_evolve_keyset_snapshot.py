@@ -18,13 +18,6 @@ evolve-anything 自身の実スキル構成に対して実行する。そのた�
 ``zero_invocations_suppressed``）設計になっており、実行時刻や本 PJ 自身のスキル増減で
 出たり消えたりする。これは regression ではなく **意図された条件付き透明化キー**。
 
-``phases.discover.recommended_artifacts_covered``（#624 巡3）も同じ理由で optional 宣言する。
-場所一致（`discover/artifacts.py._find_by_location`）で covered になる artifact は現状わずか
-2件（`commit-version` / `evidence-before-claims`）で、`discover-suppression.jsonl`（本テストは
-HOME のみ隔離し DATA_DIR は隔離しない）にこの2件の見送り記録が既に在ると空になる。他テストの
-suppression 書込みとの実行順序に依存するため hard 契約にしない（実測: 単体では出るが
-`test_discover_artifact_suppression.py` の後に実行すると消える）。
-
 こうした「条件付き透明化キー」は `fixtures/evolve_keyset_optional.txt` に prefix 宣言する
 （1 行 1 prefix、dotted path の完全一致 or `<prefix>.` で始まるサブキーにマッチ）。宣言済み
 prefix に一致するキーの増減は許容し、それ以外の増減のみ regression として fail する

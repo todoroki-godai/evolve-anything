@@ -3,6 +3,17 @@
 ## [Unreleased]
 
 ### Fixed
+- **fix(discover): `recommended_artifacts_covered` キーを廃止し単一 `recommended_artifacts` へ統合する（#467・巡3是正）** —
+  上の3層方式の一次実装は `covered`/`fresh` を `recommended_artifacts_covered`/`recommended_artifacts`
+  の別キーへ分離していたが、レビューで「別キー分離は不要な複雑化」と指摘され撤回した。
+  `detect_recommended_artifacts` の全 entry を単一の `result["recommended_artifacts"]` に入れ、
+  ①`covered_by` なし・`likely_covered_by` なし → ②`likely_covered_by` あり → ③`covered_by` あり
+  の順に安定ソートして状態を表現する（下段の entry は下げた事実を消さず `covered_by`/`likely_covered_by`
+  で判別できる。silence != evaluated は維持）。`ProposalKind(kind="recommended_artifacts_covered")` /
+  `evolve_keyset_optional.txt` の条件付きキー宣言（実行順序依存の隠蔽だったため撤回）を削除。
+  ベンチ集計 `measure_467_proposal_kinds.py::_measure_recommended_artifacts` は表示用の内訳
+  （fresh数/covered数）としてのみ2つの数字を返し続ける（result のキーではない）。
+
 - **fix(discover): 推奨 artifact の既存判定を「場所一致」だけの3層方式に作り直す（#467・巡3）** —
   `detect_recommended_artifacts` は決め打ちパスの `exists()` だけで導入状態を判定していたため、
   **同じ内容が別名・別ディレクトリにあっても「未導入」として提案していた**。巡1・巡2 のレビューで

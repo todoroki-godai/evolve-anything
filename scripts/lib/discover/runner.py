@@ -373,18 +373,22 @@ def run_discover(
         tool_usage_patterns=tool_result,
         project_root=project_root,
     )
-    # 場所一致（rule/hook が全要素とも他 base に実在）で全要素が揃ったものだけ下げる。
-    # **消さずに件数と内訳を必ず surface する**（silence != evaluated）。
-    covered = [e for e in recommended_missing if e.get("covered_by")]
-    fresh = [e for e in recommended_missing if not e.get("covered_by")]
-    # 言い回し一致（`likely_covered_by`）は印だけなので missing からは外さないが、
-    # 表示順は「印なし → 印あり」に安定ソートする（元の相対順は各グループ内で保つ）。
-    fresh = sorted(fresh, key=lambda e: bool(e.get("likely_covered_by")))
-    if fresh:
-        result["recommended_artifacts"] = fresh
-    if covered:
-        # 下げた事実は必ず残す（silence != evaluated）。各エントリの covered_by が根拠。
-        result["recommended_artifacts_covered"] = covered
+    # 場所一致（`covered_by`）・言い回し一致（`likely_covered_by`）のいずれも
+    # missing からは外さず、単一の `recommended_artifacts` 内で状態を表現する
+    # （別キーへの分離は廃止・#467 巡3 [Must]）。
+    # 表示順は安定ソートで
+    # ①covered_by なし・likely_covered_by なし → ②likely_covered_by あり → ③covered_by あり
+    # （元の相対順は各グループ内で保つ）。
+    def _sort_key(e: dict) -> int:
+        if e.get("covered_by"):
+            return 2
+        if e.get("likely_covered_by"):
+            return 1
+        return 0
+
+    recommended_missing = sorted(recommended_missing, key=_sort_key)
+    if recommended_missing:
+        result["recommended_artifacts"] = recommended_missing
 
     # 導入済みアーティファクトの状態
     installed = detect_installed_artifacts(

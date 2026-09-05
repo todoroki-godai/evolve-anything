@@ -550,8 +550,9 @@ def _measure_recommended_artifacts(project_root: Path) -> Dict[str, int]:
 
     `project_root` を渡さないと PJ 側の rules/hooks/skills を探索しないため、
     「既に別名・別ディレクトリにある推奨」を落とせず件数が過大になる。
-    covered（既存の記述が見つかり提示から下げた分）と fresh（実際に提示する分）を
-    分けて返し、runner の分離と同じ数字を再現できるようにする。
+    `recommended_artifacts` は runner.py 側では単一キーへ統合済み（#624 巡3）だが、
+    本ベンチの表示用集計としては covered（`covered_by` あり）と fresh（`covered_by` なし）を
+    分けて返す（返り値の dict キーは表示用の集計名であり result のキーではない）。
     """
     from discover import detect_recommended_artifacts  # noqa: PLC0415
     from tool_usage_analyzer import analyze_tool_usage  # noqa: PLC0415

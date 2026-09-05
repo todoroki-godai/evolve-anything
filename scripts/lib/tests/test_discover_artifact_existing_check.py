@@ -336,3 +336,66 @@ class TestUnreadableFileDoesNotBreakTheScan:
         got = _by_id(detect_recommended_artifacts(), "test-happy-path-first")
         assert got is not None
         assert "zzz_good.md" in got["likely_covered_by"]
+
+
+class TestRunDiscoverFinalDictKeepsStateInline:
+    """`run_discover(...)` の最終 dict でも状態を消さず単一キーに統合する（#624 巡3 [Should]）。
+
+    `detect_recommended_artifacts` 単体でなく `run_discover` を実際に呼び、rule が場所一致・
+    hook が未導入の artifact が `recommended_artifacts` に `covered_by` なし・`rule_covered_by`
+    ありで残ることと、`covered_by` あり entry が同じリストの末尾に並ぶことを固定する。
+    """
+
+    def test_rule_location_match_hook_missing_stays_in_recommended_artifacts(
+        self, monkeypatch, tmp_path, no_suppression,
+    ):
+        home = _mk_home(monkeypatch, tmp_path)
+        (home / ".claude" / "rules" / "deploy-lock.md").write_text("x", encoding="utf-8")
+        art = _artifact(
+            id="deploy-lock",
+            path=home / ".claude" / "rules" / "deploy-lock.md",
+            hook_path=home / ".claude" / "hooks" / "deploy-lock.py",
+        )
+        monkeypatch.setattr(discover, "RECOMMENDED_ARTIFACTS", [art])
+        result = discover.run_discover(project_root=tmp_path)
+        got = _by_id(result["recommended_artifacts"], "deploy-lock")
+        assert got is not None
+        assert "covered_by" not in got
+        assert got["rule_covered_by"] == str(home / ".claude" / "rules" / "deploy-lock.md")
+
+    def test_covered_by_entries_sort_to_the_end(self, monkeypatch, tmp_path, no_suppression):
+        home = _mk_home(monkeypatch, tmp_path)
+        proj = tmp_path / "proj"
+        (proj / ".claude" / "rules").mkdir(parents=True)
+        (proj / ".claude" / "rules" / "zzz-covered.md").write_text("本文", encoding="utf-8")
+        fresh_art = _artifact(id="aaa-fresh", path=home / ".claude" / "rules" / "aaa-fresh.md")
+        covered_art = _artifact(
+            id="zzz-covered", path=home / ".claude" / "rules" / "zzz-covered.md",
+        )
+        monkeypatch.setattr(discover, "RECOMMENDED_ARTIFACTS", [covered_art, fresh_art])
+        result = discover.run_discover(project_root=proj)
+        ids = [e["id"] for e in result["recommended_artifacts"]]
+        assert ids.index("aaa-fresh") < ids.index("zzz-covered")
+        covered_got = _by_id(result["recommended_artifacts"], "zzz-covered")
+        assert covered_got["covered_by"] == str(proj / ".claude" / "rules" / "zzz-covered.md")
+
+    def test_likely_covered_by_sorts_after_fresh_without_mark(
+        self, monkeypatch, tmp_path, no_suppression,
+    ):
+        """`likely_covered_by` のみの entry は、印なし entry より後ろに並ぶ（末尾ではない）。"""
+        home = _mk_home(monkeypatch, tmp_path)
+        rules = home / ".claude" / "rules"
+        (rules / "testing.md").write_text("正常系E2Eテスト\n", encoding="utf-8")
+
+        no_mark_art = _artifact(
+            id="aaa-no-mark", path=home / ".claude" / "rules" / "aaa-no-mark.md",
+        )
+        likely_art = _artifact(
+            id="zzz-likely",
+            path=home / ".claude" / "rules" / "zzz-likely.md",
+            equivalent_markers=["正常系E2Eテスト"],
+        )
+        monkeypatch.setattr(discover, "RECOMMENDED_ARTIFACTS", [likely_art, no_mark_art])
+        result = discover.run_discover(project_root=tmp_path)
+        ids = [e["id"] for e in result["recommended_artifacts"]]
+        assert ids.index("aaa-no-mark") < ids.index("zzz-likely")

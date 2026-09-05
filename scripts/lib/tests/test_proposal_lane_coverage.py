@@ -42,10 +42,6 @@ _ELEMENT_BY_KIND = {
         "detection_result": {"applicable": True, "evidence": [], "confidence": 1.0},
     },
     "recommended_artifacts": {"recommendation_id": "r1", "type": "rule", "evidence": {}},
-    "recommended_artifacts_covered": {
-        "id": "r1", "description": "d",
-        "covered_by": "/home/.claude/rules/other.md:3",
-    },
     "stall_recovery_patterns": {
         "command_pattern": "git status", "session_count": 3,
         "recovery_actions": [], "confidence": 0.6,
