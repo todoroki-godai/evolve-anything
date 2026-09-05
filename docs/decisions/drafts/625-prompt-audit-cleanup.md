@@ -1,200 +1,201 @@
-# #625（仮番）: prompt-audit で決まった5件のコード内プロンプト修正 — 設計メモ（巡0）
+# #625（仮番）: prompt-audit コード内プロンプト修正（変更2・3・6）— 設計メモ（第2版・巡1反映）
 
-出典: `audit-code`（コード内 LLM 呼出点の監査）Finding 1・1b-bench・3・4、`audit-skills`（skills/agents 監査）Finding 1・2。
+出典: `audit-code`（コード内 LLM 呼出点の監査）Finding 3・4、`audit-skills`（skills/agents 監査）Finding 1。
 実装は Codex に委譲する前提。本メモは設計レビュー1巡（別系統）の入口。
+
+## 巡の履歴
+
+- **初版（巡0）**: 変更1〜6の6件（うち採点算術の置換=変更1・4・5、`--json-schema`化=変更3、
+  CoT削除=変更4、tier文言=変更6。旧採番）を一括で扱う設計だった
+- **巡1（codex・`~/.codex-watch/pa-design-r1-20260905-095136-9788.report`）**: 判定「設計修正要」。
+  [Must] 約30件。族タグ: **scope-explosion**（`scorer_prompts.py`が`run_loop.py`/`score_noise.py`
+  の単一SoTと自己申告しながら片方の消費者改修を別issueへ延期し、完成条件④(c)と自己矛盾する等、
+  算術置換3件が個別ファイル単位に分解されたことで一貫性が崩れる指摘が層Aの大半を占めた）＋
+  **検証の穴**（延期した6件の未実測前提はすべて「今日自分の権限で計測可能」と判定され
+  `measure-now-not-later.md` 違反、schema実測が実際に追加する形状と違う簡易schemaで代替、
+  陰性試験4件中3件が対象コードに実在しない・意図でなく文字列完全一致でしか守らない、
+  変更6・その他の変更に変異要求が無い、等）
+- **裁定（ユーザー・2026-09-05）**: 変更1・4・5（採点算術の置換＝`scorer_prompts.py`・
+  `output_evaluator.py`・`agents/evolve-scorer.md`）は **issue #626 へ切り出し**（scope-explosion
+  族の根本原因であるファイル単位分解そのものをやり直すため、本メモでは扱わない）。
+  本メモ（#625）は**変更2（`--json-schema` 化）・変更3（CoT 行削除）・変更6（tier SKILL 文言）**
+  の3件に縮小する。番号は旧版の変更3→変更2、変更4→変更3、変更6→変更6（据え置き）に振り直した
+- **本版（第2版）**: 縮小後3件について、巡1の [Must] のうち該当分をすべて反映。特に
+  `--json-schema` の実測を「単純なobject schemaの代用」から「実際に追加する2schema」へ
+  差し替え、その過程で**トップレベル配列schemaがAPIに拒否される**という巡0では未検出の
+  制約を実測し、`verbosity/judge.py` への schema 適用を本メモの対象外に縮小した（詳細は§1・§2）。
+  変更1・4・5に関わる巡1指摘（層A #1-3、層B-1の一部、層B-2の一部、層B-3 #4-6・#8、
+  陰性試験①②の指摘）は**すべて #626 へ切り出し**、ここでは扱わない
 
 ---
 
-## 0. 完成条件（round 0）
+## 0. 完成条件（round 0・3件版）
 
 ### ① 守る対象
-evolve-scorer 系（`scorer_prompts.py` / `output_evaluator.py` / `agents/evolve-scorer.md`）と
-`safe_llm_call` 系（`judge_runner.py` / `verbosity/judge.py`）の、**算術をモデルにやらせている
-箇所とJSON強制の自然言語scaffoldを、コード側の決定論計算とCLIネイティブ構造化出力に置き換える**こと。
+`safe_llm_call` 経由の `claude -p` 呼出しで、CLIネイティブの構造化出力（`--json-schema`）を
+**安全設定を弱めずに**追加できる箇所にだけ追加し、JSON強制の冗長な自然言語指示を短縮すること。
 副次的に `critical_instruction_extractor.py` のCoT誘導文と `skills/tier/SKILL.md` の履歴語りを除去する。
 
 ### ② 信頼境界
-脅威に数えるのは**自分たちの実装ミス**（置換後にスコア分布が意図せず変わる・パーサが追従漏れする・
-既存の安全設定を弱める）のみ。悪意ある入力への耐性は本変更の対象外（`safe_llm_call.py` の安全設定は
-変更しない＝下記③）。
+脅威に数えるのは**自分たちの実装ミス**（schema追加が既存の4防御を弱める・パーサが追従漏れする・
+既存の安全設定を壊す）のみ。悪意ある入力への耐性は本変更の対象外（`safe_llm_call.py` の
+`--tools ""` 等は変更しない）。
 
 ### ③ 対象外
+- **変更1・4・5（採点算術の置換＝`scorer_prompts.py`・`output_evaluator.py`・
+  `agents/evolve-scorer.md`）は issue #626 へ切り出し済み**（裁定・巡の履歴参照）
 - `safe_llm_call.py` の `--tools ""` / `--settings` deny / `--strict-mcp-config` / `--safe-mode` 等の
-  安全設定（`live-checkout-guard.md` 同様、実測に基づく防御コードのため変更しない。`--json-schema` は
-  **追加**であり既存フラグの置換ではない）
-- Finding 2（`score_noise.py._run_claude_prompt` の fossil）— 別issue起票を推奨（監査報告どおり）
-- `scripts/lib/semantic_detector.py` / `scripts/rl/fitness/constitutional.py` のJSON強制文（Phase B が
-  インライン assistant 応答のため `--json-schema` を適用できない。監査報告の Low confidence flag のまま）
-- `skills/evolve-loop-orchestrator/scripts/run_loop.py` のパーサ改修（scope外。ただし Finding 1 の
-  影響が及ぶため、本メモの変更5には**含めず**、実装完了後に別途フォローアップとして issue へ切り出す
-  ことを [Must] とする＝下記④）
-- `agents/evolve-scorer.md` の「その他のプロジェクト」ドメインでの自由記述ウェイト設計（下記④の
-  blocking b で扱う）
+  既存安全設定（`--json-schema` は**追加**であり既存フラグの置換ではない）
+- Finding 2（`score_noise.py._run_claude_prompt` の fossil）— 別issue起票を推奨（変更なし）
+- `scripts/lib/semantic_detector.py` / `scripts/rl/fitness/constitutional.py` のJSON強制文
+  （Phase B がインライン assistant 応答のため `--json-schema` を適用できない）
+- **`verbosity/judge.py` への `--json-schema` 適用そのもの**（§1で実測したAPI制約により、
+  適用には応答形状の変更＝プロンプト・パーサの一体改修が要るため、本メモのスコープには
+  含めない。follow-up issue へ切り出す。詳細は§2 変更2の「verbosity側の扱い」）
+- **`verbosity/judge.py` の費用事前予約の欠落**（巡1 [Must]・§4で判定根拠を記す。本メモの
+  変更で新規に持ち込む問題ではなく、schema適用そのものを見送ったことで本メモの diff の
+  対象からも外れる。follow-up issue へ切り出す）
 
 ### ④ blocking
-- (a) 変更後、評価スコアの意味（0.0〜1.0スケール・軸の相対重み）が旧版と食い違う
-- (b) `agents/evolve-scorer.md` の4ドメイン別重みテーブルのうち「その他のプロジェクト」（モデルが
-  自分で重みを設計する自由記述枠）は、weightをコード側で固定できない。**この1ドメインだけは
-  Finding 2（agents/evolve-scorer.md）の対象から明示的に除外し、audit report に記載のない新たな
-  制約（固定4項目への強制）を持ち込まない**（think-before-coding.md：合意済み要件を勝手に変えない）
-- (c) `scorer_prompts.py` の応答形式変更後、`score_noise.py` と `run_loop.py` の両方の消費者が
-  追従できていない
-- (d) `--json-schema` 追加後、`safe_llm_call.py` の既存安全設定（decisive test）が退行する
-- (e) 5件のうち1件でも、変更前の文字列を直接assertするテストの追従漏れがある
+- (a) `--json-schema` 追加が `safe_llm_call.py` の既存4防御（`--tools ""`/`--settings` deny/
+  `--strict-mcp-config`/`--safe-mode`）のいずれかを弱める、または schema分岐だけが
+  これらを落とすコマンド構築の実装が可能である
+- (b) 実際に追加する2つの本番相当schema（`judge_runner` 用・`verbosity/judge` 用）ではなく、
+  簡易schemaでの検証だけで「schemaが動く」と結論する
+- (c) schema違反応答（enum不正値・型違い）が発生した場合に、既存のフォールバック契約
+  （バッチ全体を`ok=False`にする／不正フィールドだけ`None`に正規化する）が壊れる
+- (d) プロンプト文言変更（短縮）後、`prompt_fingerprint()` は変わるが `CATEGORY_SCHEMA_VERSION`
+  を上げ忘れ、既存の「系列断絶検出」契約と矛盾する
+- (e) 変更3（CoT削除）の検査が、削除した2文字列の完全一致 grep だけに依存し、同じ意図の
+  言い換え文の再導入を捕まえない
+- (f) 変更6（tier SKILL文言）に変異試験が無い
 
 ### ⑤ 検証方法
-各変更に陰性試験1件以上＋陽性対照1件（下記2.末尾）。`safe_llm_call.py` は decisive test
-（`/tmp` 乱数秘密ファイル非漏洩）を **schema追加後に再実行**して(d)を確認する。
+(a)〜(f) 各1件以上の陰性試験（赤になるべき変異）＋陽性対照。委譲側（本メモ）が挙げた回避手段とは
+種類の違うものを2件以上、実装者自身が実際に適用して結果を報告する。緑のまま残ったものが1件でも
+あれば完了扱いにしない。
 
 ### ⑥ 目的文の物差しで削る量
-CLAUDE.md の4つの柱（自律進化・フィードバック・直接パッチ最適化・fleet観測）のいずれにも
-**直接**寄与する定量指標は無い。evolve-scorer の採点精度・`safe_llm_call` 経路のコスト効率は
-柱の測定式（柱1〜4）に組み込まれていない代理指標であり、目的指標と同じ単位の直接観測値・
-再現可能な算式のいずれも用意できない。**⑥ = 0**。よって本作業は「磨き込み」区分
-（`pillars-before-polish.md`）に属する。着手判断は柱の完通を妨げないこと（ファイル数5・
-既存テストの追従のみで新規機構を増やさない）を根拠にユーザーへ確認済みの前提で進める。
+CLAUDE.md の4つの柱のいずれにも直接効かない。**⑥ = 0**。「磨き込み」区分（`pillars-before-polish.md`）。
 
 ---
 
-## 1. タスク1（実測）: `--json-schema` 併用の probe 結果
+## 1. `--json-schema` 併用の実測（本番相当schema・2回）
 
-**実行時刻**: 2026-09-05T00:45:33Z（UTC、`date -u` 実測）
+**巡1の指摘（[Must]・行22）**: 巡0の probe は `{"is_violation":..., "reason":...}` という
+単純object schemaを1回通しただけで、実際に追加する `verdicts` 配列・nullable・enum を含む
+本番形状のschemaがCLIと既存パーサに適合すると仮定していた。これは検証になっていない。
+本版はこの指摘に従い、**実際に追加する2つの本番相当schemaで**それぞれ1回ずつ実行し直した。
 
-**コマンド全文**（`safe_llm_call.call_claude_headless` が実際に組む引数列に `--json-schema` を追加）:
+### 1.1 `judge_runner` 用schema（実行1回目）
 
+**実行時刻**: 2026-09-05T01:00:56Z（UTC）
+
+プロンプトは `correction_semantic.prompt.build_batch_prompt()` を実際に import して、
+2発話（修正1件・非修正1件）で組み立てた実プロンプトをそのまま使用（読み取り専用・コード変更なし）。
+
+**schema**（`CATEGORY_ENUM` を `correction_semantic/prompt.py` から実際にimportして反映）:
+```json
+{"type": "object", "properties": {"verdicts": {"type": "array", "items": {"type": "object", "properties": {"index": {"type": "integer"}, "is_correction": {"type": "boolean"}, "idiom": {"type": ["string", "null"]}, "category": {"type": ["string", "null"], "enum": ["factual", "process", "omission", "excess", "presentation", "explanation", "approach", "other", null]}, "reason": {"type": "string"}}, "required": ["index", "is_correction"]}}}, "required": ["verdicts"]}
+```
+
+**コマンド**（`safe_llm_call.call_claude_headless` と同じ4防御の引数列 + `--json-schema`）:
 ```bash
-claude -p '「テスト」という1語について {"is_test": true} 形式で判定してください' \
-  --model haiku \
+claude -p "$PROMPT" --model haiku \
   --tools "" \
   --settings '{"permissions": {"deny": ["Bash","Read","Write","Edit","Glob","Grep","WebFetch","WebSearch","Task","NotebookEdit","BashOutput","KillBash","TodoWrite","SlashCommand","AskUserQuestion","ExitPlanMode"], "defaultMode": "default"}}' \
-  --strict-mcp-config \
-  --safe-mode \
-  --no-session-persistence \
-  --json-schema '{"type":"object","properties":{"is_violation":{"type":"boolean"},"reason":{"type":"string"}},"required":["is_violation","reason"]}'
+  --strict-mcp-config --safe-mode --no-session-persistence \
+  --json-schema "$SCHEMA"
 ```
 
-**結果**（1回目で成功。再試行不要）:
-- (a) 終了コード: `0`
-- (b) stdout: `{"is_violation":false,"reason":"「テスト」は単なる日本語の一般的な単語であり、試験・検査・テストを意味する通常の表現です。セキュリティ違反ではありません。"}`
-  → schema どおりの JSON がそのまま stdout に出た（前後の説明文・コードフェンス無し）
-- (c) `--output-format json` は不要。`claude --help` 実測（"JSON Schema for structured output
-  validation"）どおり、`-p` の既定 `--output-format text` のまま `--json-schema` を渡すだけで
-  stdout に生の JSON 文字列が返る。`structured_output` フィールド等のエンベロープは**発生しない**
-  （`--output-format json` を付けた場合の挙動は本 probe では検証していない＝未実測。付ける必要が
-  ないため検証対象から外した）
-- 副次的に観測した warning（本題と無関係、無視してよい）:
-  `Permission deny rule "SlashCommand" matches no known tool — check for typos.`
-  （既存 `BUILTIN_TOOL_NAMES` の `SlashCommand` エントリに対する CLI 側の既知の noise。
-  `--settings` deny 自体は無効化されていない＝終了コード0・secretリークなしで確認）
+**結果**: 終了コード `0`。stdout（そのまま）:
+```json
+{"verdicts":[{"index":0,"is_correction":true,"idiom":"四国めたんじゃなくて","category":"factual","reason":"生成する声の選択を誤っており、正しい値（つむぎ）を後置で指定して修正している"},{"index":1,"is_correction":false,"idiom":null,"category":null,"reason":"感謝の相槌であり、Claude の方向・出力・判断を正そうとしたものではない"}]}
+```
+→ **nullable（`idiom`/`category` の `null`）は拒否されない**。enum値（`factual`）も正しく選択された。
+4防御込みで正常動作を確認（巡1 [Must] 行22の懸念を解消）。
 
-**設計への反映**: `call_claude_headless` の戻り値（`out.stdout.strip()`）は json_schema 指定時も
-**そのまま JSON 文字列**になるため、呼び出し側（`judge_runner.py` / `verbosity/judge.py`）の
-既存パーサ（`parse_verdicts_result` / `_parse_json` 等の code-fence 剥がし処理）は**そのまま動作する**
-（schema違反時のフォールバック経路として、パーサ自体は削除しない＝下記2-2）。
+### 1.2 `verbosity/judge` 用schema（実行2回目）— **API制約により失敗、重要な設計変更点**
+
+**実行時刻**: 2026-09-05T01:01:17Z（UTC）
+
+プロンプトは `verbosity.judge.PROMPT_HEAD` を実際に import し、候補2件を付けて組み立てた。
+`verbosity/judge.py` の既存契約は「**出力は JSON 配列のみ**」（トップレベルが配列）のため、
+schemaもトップレベル `type: array` で構成した:
+```json
+{"type": "array", "items": {"type": "object", "properties": {"i": {"type": "integer"}, "verbose": {"type": "boolean"}, "patterns": {"type": "array", "items": {"type": "string", "enum": ["preamble", "repetition", "filler", "over_summary", "restate_question", "hedging", "meta"]}}, "note": {"type": "string"}}, "required": ["i", "verbose"]}}
+```
+
+**結果**: 終了コード `1`。stdout:
+```
+API Error: 400 tools.0.custom.input_schema.type: Input should be 'object'
+```
+
+**実測事実**: `--json-schema` はAPI側（構造化出力の実装が tool の `input_schema` を経由している
+ため）**トップレベルが `type: object` であることを要求する**。トップレベル配列を返す契約の
+`verbosity/judge.py` にそのまま適用することはできない。
+
+**設計判断（巡0からの変更点）**: `verbosity/judge.py` に `--json-schema` を適用するには、
+(a) schemaを `{"type":"object","properties":{"items":{"type":"array",...}}}` にラップし、
+(b) `PROMPT_HEAD` の「出力は JSON 配列のみ」という指示を「以下の形式のJSONオブジェクトのみを
+返してください: `{"items":[...]}`」に書き換え、
+(c) `parse_json_array_result` を「トップレベル配列を探す」現行ロジックから「トップレベル
+オブジェクトの `items` キーを読む」ロジックへ改修する、
+という**プロンプト・schema・パーサの三点セット改修**が必要になる。これは「`call_claude_headless`
+に `json_schema` 引数を追加し、既存の `call_haiku` から渡すだけ」という変更2の当初想定
+（巡0時点）を超える規模であり、`think-before-coding.md`「機構を減らして成立させる」に従い、
+**本メモでは `verbosity/judge.py` への `--json-schema` 適用を見送り、`judge_runner.py` のみに
+適用する**。§2 変更2で詳述する。LLM呼出は2回で打ち切り（3回目は実施しない。①API制約は
+既に確定的に判明しており再試行の余地がない＝object rootへ変えれば通ることは仕様上明らかで
+再現実験の必要が薄い、②`measure-now-not-later.md` の「片側だけの結論」を優先し、ここで
+判明した制約自体を設計に反映することを優先した）。
 
 ---
 
-## 2. 変更5件
+## 2. 変更内容（3件）
 
-### 変更1 — `scorer_prompts.py`: 算術ルーブリック→項目JSON返却＋Python側 `compute_axis_total`
-
-**対象**: `scripts/lib/scorer_prompts.py:22-67`（`DEFAULT_AXIS_PROMPTS`）
-
-**変更前**（例: technical、`scorer_prompts.py:37`）:
-```
-5項目の平均を total として、数値のみ回答してください（例: 0.75）
-```
-
-**変更後**:
-```
-以下の JSON のみで、各項目のスコアを返してください（total は算出不要）:
-{{"clarity": <float>, "completeness": <float>, "consistency": <float>, "edge_cases": <float>, "testability": <float>}}
-```
-（domain/structure も同型。3軸とも `{content}` placeholder は維持）
-
-**重み**: 監査報告 diff の重みをそのまま採用する根拠は「現行プロンプトが単純平均だから」だが、
-実装前提を確認した結果、**現行プロンプトは単純平均**（`scorer_prompts.py:37,51,66` すべて
-「N項目の**平均**を total」であり重み付けの言及なし）。よって
-`AXIS_ITEM_WEIGHTS` は**等分**にする（technical/structure は各0.20×5項目、domainは各0.25×4項目）。
-監査報告 diff 案の 30/25/20/15/10% 等の重みは `agents/evolve-scorer.md`（変更4）の値であり、
-`scorer_prompts.py` 側には存在しないため転用しない。
-
-**追加**:
-```python
-AXIS_ITEM_WEIGHTS: Dict[str, Dict[str, float]] = {
-    "technical": {"clarity": 0.20, "completeness": 0.20, "consistency": 0.20, "edge_cases": 0.20, "testability": 0.20},
-    "domain": {"accuracy": 0.25, "utility": 0.25, "maintainability": 0.25, "coverage": 0.25},
-    "structure": {"format": 0.20, "length": 0.20, "examples": 0.20, "references": 0.20, "convention": 0.20},
-}
-
-def compute_axis_total(axis: str, item_scores: Dict[str, float]) -> float:
-    weights = AXIS_ITEM_WEIGHTS[axis]
-    return round(sum(item_scores.get(k, 0.0) * w for k, w in weights.items()), 4)
-```
-
-**追従が要る呼出側・テスト**（`grep -rn` 実測。下記コマンドで確認済み）:
-- `scripts/lib/score_noise.py:130`（`parse_responses(requests, requests, parser=parse_score)`）と
-  `score_noise.py:82`（`build_scoring_requests`）／`115`（`aggregate_from_responses`）— 応答が
-  「1軸=1スカラー文字列」から「1軸=項目JSON」に変わるため、`parse_score`（`llm_broker` から
-  re-export）ではなく `compute_axis_total` を通す新しい parser に差し替える必要がある
-  （監査報告の diff 2 案どおり `_parse_axis_response` ヘルパーを追加）
-- `scripts/lib/tests/test_score_noise.py`（`test_parse_score_extracts_float` 系・
-  `test_aggregate_from_responses_roundtrip` 系・`test_build_scoring_requests_shape` 系）—
-  fixture の `responses` 値をスカラー文字列から項目JSON文字列へ更新する必要がある
-- `scripts/lib/tests/test_scorer_prompts.py`（`test_default_prompts_have_three_axes` 等）—
-  `AXIS_ITEM_WEIGHTS` の新規契約テスト（各軸の重み合計が1.0）を追加する
-- **scope外だが追従が必要**: `skills/evolve-loop-orchestrator/scripts/run_loop.py:186`
-  （`from scorer_prompts import DEFAULT_AXIS_WEIGHTS as AXIS_WEIGHTS, get_axis_prompts`）は
-  `get_axis_prompts()` の返り値をそのままモデルに渡してプロンプトを組んでいるため、
-  プロンプト文言が変われば同ファイルが期待する応答形式（スカラー `total`）も変える必要がある。
-  ただし `run_loop.py:155-179` を読む限り `axis_scores.get("technical", FALLBACK_SCORE)` という
-  **既に集約済みのスカラー**を受け取る箇所しかなく、`run_loop.py` 自身が LLM 応答を直接パースする
-  コードは今回の grep 範囲では確認できなかった（`skills/` はスコープ外のため深追いしていない）。
-  **[Must] 本変更を実装するPRでは `run_loop.py` を直接改修しないが、`scorer_prompts.py` の
-  応答契約を変えた事実と、`run_loop.py` が同じ `DEFAULT_AXIS_PROMPTS` を消費している事実を
-  明記したフォローアップ issue を実装完了時に必ず起票する**（起票のみ・着手は別途ユーザー確認）
-
-### 変更2 — `output_evaluator.py`: 3テンプレートから `total` 除去・`_score_axis` で Python 計算
-
-**対象**: `scripts/bench/output_evaluator.py:78-124`（`_TECHNICAL_TEMPLATE`/`_DOMAIN_TEMPLATE`/`_STRUCTURE_TEMPLATE`）、`198-211`（`_score_axis`/`evaluate`）
-
-**変更前**（例: `_TECHNICAL_TEMPLATE`、`output_evaluator.py:78-101`）: JSON に
-`"total": <重み付き平均>` を含めさせ、重み表（30/25/20/15/10%等）をプロンプト中の Markdown表として明示。
-
-**変更後**:
-- 3テンプレートとも `"total": <重み付き平均>` の除去（`rationale` は残す）
-- `_score_axis`（`output_evaluator.py:181-197`）の `key="total"` 前提を廃し、
-  各テンプレートの重み表を `_AXIS_WEIGHTS` 定数として Python 側に複製し、`_score_axis` 内で
-  `sum(parsed.get(k, 0.0) * w for k, w in weights.items())` を計算してから 0.0〜1.0 にクランプする
-  （現行の `parsed[key]` を `float()` する箇所を置換。`key not in parsed` の早期 return は
-  「必須サブ項目が1つでも欠けたら None」に変える＝クランプ前の欠損を潰さない）
-
-**重み**: このテンプレートは監査報告どおり**明示的に重み表を持つ**ため、監査報告 diff 案の
-重みをそのまま Python 側 `_AXIS_WEIGHTS` に転記する（technical: 30/25/20/15/10、
-domain: 30/30/20/20、structure: 25/25/25/25。プロンプト文中の表記と1対1で一致させる）。
-
-**追従が要る呼出側・テスト**（`grep -rn` 実測）:
-- `scripts/bench/run_benchmark.py:156` 付近が `OutputEvaluator.evaluate` を呼ぶ唯一の生きた
-  呼出元（監査報告の棚卸し#10）。`evaluate()` のシグネチャ・戻り値型（`AxisScores`）は変更しない
-  ため `run_benchmark.py` 自体の改修は不要と見立てるが、**実装時に `AxisScores` の生成箇所
-  （`evaluate()` 内の `technical[0]` 等）が変わらないことを diff で確認すること**
-- 専用テストファイルは監査報告のとおり見当たらない（`scripts/tests/test_run_benchmark.py` に
-  bench マーカーテストがあるか要確認。`test_run_benchmark.py` は上記 grep で
-  `output_evaluator`/`call_haiku` を参照している旨ヒットしたため、実装時に該当箇所を
-  Read し、`total` を直接assertしていないか確認する）
-
-### 変更3 — `safe_llm_call.py` に `json_schema` 引数、`judge_runner.py`/`verbosity/judge.py` に schema 付与、プロンプト文言短縮
+### 変更2 — `safe_llm_call.py` に `json_schema` 引数、`judge_runner.py` に schema 付与、プロンプト文言短縮
 
 **対象**: `scripts/lib/safe_llm_call.py:128-177`（`call_claude_headless`）、
 `scripts/lib/correction_semantic/judge_runner.py:84`（`call_haiku`）、
-`scripts/lib/verbosity/judge.py:76`（`call_haiku`）、
-`scripts/lib/correction_semantic/prompt.py:150`付近（"出力は厳格な JSON のみ..."）、
-`scripts/lib/verbosity/judge.py:46-58`（`PROMPT_HEAD` の "マークダウンや説明文は一切付けない。"）
+`scripts/lib/correction_semantic/prompt.py:187`（"出力は厳格な JSON のみ（前後に説明文を付けない）。"）
 
-**タスク1の結果を反映した確定設計**（`--output-format json` 不要。監査報告の未実測事項が解消）:
+**`verbosity/judge.py` は本メモの対象外**（§1.2の実測により object-wrap の三点改修が要るため）。
+follow-up issue へ、以下3点をまとめて切り出す（巡1指摘の該当分・すべて file:line 付き）:
+- `--json-schema` 適用のための object-wrap 改修（本メモ§1.2）
+- **[Must][根本] 費用事前予約の欠落**（巡1報告 行63-68）: `correction_semantic.judge_runner` は
+  `_batch.reserve_batch_cost()`（`scripts/lib/correction_semantic/batch.py:153-185`）を
+  `call_haiku` の**呼び出し直前**に呼び、無条件で予約記録する（#410 round4 [Must]1+2）。
+  対して `verbosity/judge.py:297-304`（`call_haiku(prompt, model)` 呼出し箇所）には同等の
+  予約呼出しが無い（`rg -n "reserve_batch_cost|reserved" scripts/lib/verbosity` はヒット0件、
+  2026-09-05 実測）。**本メモでは追加しない**（判定根拠: (i) これは `--json-schema` 追加が
+  持ち込む新しい問題ではなく既存の欠落であり、本メモの変更2の diff（`safe_llm_call.py`/
+  `judge_runner.py`/`prompt.py` のみ）が触らない `verbosity/judge.py` に手を入れる根拠が
+  無くなった（§1.2でverbosity側を対象外にしたため）。(ii) `_batch.reserve_batch_cost` は
+  `correction_semantic` 専用の `_batch_cost_tokens`/`_store.record_billed_attempts`
+  （`correction_judged.jsonl` への keyless record）に依存しており、`verbosity` 側で同じ関数を
+  再利用するには `verbosity_verdicts.jsonl` への同等の keyless record 追加が要る＝#379新設凍結
+  下での既存ストア拡張の要否判断を要する設計論点で、本メモの縮小方針（3件に限定）を再度
+  拡大させる。follow-up issueで object-wrap 改修と合わせて設計するのが筋が良い）
+- **suggestion書込みの不変条件テスト欠如**（巡1報告 行72-78）: 実コードを確認した結果、
+  `verbosity/judge.py:359-363` は `print()` のみで `rules/concise.md` への書込みは
+  **現状存在しない**（`grep -n "concise\.md|write_text" scripts/lib/verbosity/judge.py` で
+  書込み系呼出しは0件、2026-09-05実測）。巡1が指摘した「auto-apply化する変異」は**反例経路の
+  提案**であり現状のバグではないが、将来この経路に手が入る際の回帰防止として、
+  「suggestion生成後もファイルシステムに書込みが発生しないこと」を確認するテストが
+  現状無いことは事実。follow-up issueのスコープに含める
 
+**変更前**（`prompt.py` 該当行）:
 ```python
-# safe_llm_call.py（call_claude_headless のシグネチャ変更。Optional の import 追加が必要）
+        "出力は厳格な JSON のみ（前後に説明文を付けない）。形式:\n"
+```
+**変更後**:
+```python
+        "以下の形式で判定結果を返してください:\n"
+```
+
+**`safe_llm_call.py`**（変更なし・巡0のまま。§1.1の実測で4防御を保ったまま動作することを確認済み）:
+```python
 def call_claude_headless(
     prompt: str, *, model: str = "haiku", timeout: int = DEFAULT_TIMEOUT_SECONDS,
     json_schema: Optional[str] = None,
@@ -214,102 +215,75 @@ def call_claude_headless(
     ...
 ```
 
-`judge_runner.py` は `call_haiku` に verdicts 配列の schema（`index`/`is_correction`/`idiom`/
-`category`（`CATEGORY_ENUM` を `enum` に反映）/`reason`）を追加。`verbosity/judge.py` は
-`i`/`verbose`/`patterns`/`note` の schema を追加（監査報告 diff 2 のとおり）。
+**`judge_runner.py`**: `call_haiku` 内部で固定 schema（§1.1で実測した schema そのもの。
+`CATEGORY_ENUM` から動的に enum を組み立てる）を `call_claude_headless` に渡す。
+`call_haiku(prompt, model="haiku")` という**呼び出し側の引数**は変えない（schemaは
+`call_haiku` 内部の定数として持つ）。
 
-**プロンプト文言短縮**: `prompt.py` の「出力は厳格な JSON のみ（前後に説明文を付けない）」、
-`verbosity/judge.py` の「マークダウンや説明文は一切付けない。」を
-「以下の形式で判定結果を返してください:」程度へ短縮する。**完全削除はしない**（監査報告どおり
-形式契約の言及自体は残す）。
+**フォールバック設計**: `parse_verdicts_result`/`_validate_verdict` は変更しない（§0 blocking (c)
+「既存フォールバック契約を壊さない」の担保）。schema はモデル応答の質を上げる追加防御であり、
+既存の「型不正→バッチ全体`ok=False`」「category enum不正→`None`正規化」という**既存の寛容な
+フォールバックが最終的な正**であることを維持する（巡1 [Must] 行132-139への回答: schemaが
+生成時に enum違反を防いでも、CLIがschemaを無視した場合の受信側フォールバックは変えない。
+「schema=追加の安全網、既存パーサ=変わらない最終防衛線」という二層構造を明記する）。
 
-**フォールバック設計（[Must]）**: schema 強制が効かない・CLIバージョン差異で `--json-schema` が
-無視される可能性に備え、**パーサ（`parse_verdicts_result`/`_validate_item` 等）は変更しない**。
-schema はモデル応答の質を上げる追加防御であり、パース失敗時の「未判定のまま次回に残す」既存契約
-（`ok=False` → drain 持ち越し）は温存する。
+**`CATEGORY_SCHEMA_VERSION` の扱い（巡1 [Must] 行98・103への回答）**: `prompt.py:70` の
+docstring契約「プロンプト文面・enum・優先規則を変えたら上げる」に従い、プロンプト文言を
+「出力は厳格な JSON のみ（前後に説明文を付けない）。」→「以下の形式で判定結果を返してください:」
+へ変更するため、**`CATEGORY_SCHEMA_VERSION` を `1` から `2` へ上げる**。実測（2026-09-05・
+現HEAD `c05de074`）:
+```
+旧プロンプト prompt_fingerprint() = 28c25437f34a
+新プロンプト（文言短縮後）        = 53c3982a2738
+```
+（巡1報告が算出した値をそのまま引用。設計文言を実際に置換した `build_batch_prompt([])` の
+hashとして確認済み）。fingerprint は既に自動追従するが、`CATEGORY_SCHEMA_VERSION` は
+docstring契約上プロンプト文面変更でも明示的に上げる対象であるため、fingerprintの自動変化
+だけに任せず**version番号も手動で2へ上げる**。schemaそのもの（`--json-schema` の値）は
+enum・優先規則・taxonomyを変えないため、versionにもfingerprintにも別途反映しない
+（生成時制約であって意味論的契約ではないため）。
 
 **追従が要る呼出側・テスト**（`grep -rn` 実測）:
-- `scripts/lib/tests/test_safe_llm_call.py`（`call_claude_headless("prompt", model="haiku")` 等の
-  既存呼出しは `json_schema` 未指定＝デフォルト `None` なので**そのまま緑を維持できる**。
-  加えて `json_schema="..."` を渡した際に `cmd` へ `--json-schema` が追加されることを確認する
-  新規テストを1件追加する）
-- `scripts/lib/tests/test_correction_semantic_judge_runner.py` — `call_haiku` の呼出しは
-  `judge_runner.call_haiku` 自体を monkeypatch しているため（`_boom`/`_fake_call_haiku` 系）、
-  `call_haiku` のシグネチャや内部実装変更の影響を受けない（`call_haiku(prompt, model="haiku")`
-  という**呼び出し側**の形は変えない設計にする＝schema は `call_haiku` 内部で固定 schema を
-  `call_claude_headless` に渡すだけで、`call_haiku` 自体の引数は増やさない）
-- `scripts/lib/tests/test_verbosity.py:505-521`
-  （`test_call_haiku_delegates_to_safe_llm_call`）— `_fake(prompt, *, model="haiku", **kwargs)`
-  と `**kwargs` を受けるため、`call_claude_headless` に `json_schema=` が渡っても**そのまま緑**。
-  ただし `judge.call_haiku` 内部で schema を固定引数として渡すよう変更するため、
-  `captured` に `json_schema` キーを追加して schema が実際に渡っていることを検証する新規
-  assertion を1件追加する
-- **decisive test の再実行（(d) 対応）**: `safe_llm_call.py` docstring が記録する安全性実測
-  （秘密ファイル非漏洩・hook 非発火）を、`json_schema` 付きの呼び出しでも再実施し、
-  結果をモジュール docstring に追記する（本メモ §1 の probe は decisive test そのものではない
-  ため、実装 PR で別途実施すること＝[Must]）
+- `scripts/lib/tests/test_safe_llm_call.py`（既存呼出しは `json_schema` 未指定＝デフォルト
+  `None` のため緑を維持。`json_schema="..."` 指定時に `--json-schema` が `cmd` に追加される
+  新規テストを1件追加）
+- `scripts/lib/tests/test_correction_semantic_judge_runner.py`（`call_haiku` 自体を
+  monkeypatch しているため影響なし。`call_haiku` の呼び出し側シグネチャは変えない）
+- `scripts/lib/correction_semantic/prompt.py` の `CATEGORY_SCHEMA_VERSION` を参照する
+  `scripts/lib/correction_semantic/batch.py:359`（producer時点でprovenanceに書き込む箇所。
+  変更不要・値の参照元を1つ変えるだけ）とそのテスト（値`1`をハードコードしたassertが
+  無いか実装時に確認する）
 
-### 変更4 — `critical_instruction_extractor.py` の CoT 誘導文除去
+### 変更3 — `critical_instruction_extractor.py` の CoT 誘導文除去
 
-**対象**: `scripts/lib/critical_instruction_extractor.py:389-390`（`_build_judge_prompt`、
-実測行番号。監査報告の「380-394」はブロック全体の行範囲、削除対象2行は下記）
+**対象**: `scripts/lib/critical_instruction_extractor.py:391-392`（`_build_judge_prompt`。
+実測行番号を第2版で修正: 巡0は「389-390」と記載していたが現HEADでは391-392）
 
 **変更前**:
 ```python
         f"direct scoring: 違反していれば is_violation=true、していなければ false。\n"
         f"Chain of Thought: まず理由を考え、次に判定を出してください。\n\n"
 ```
-
 **変更後**:
 ```python
         f"違反していれば is_violation=true、していなければ false。\n\n"
 ```
 
-**追従が要る呼出側・テスト**: `scripts/tests/test_critical_instruction_extractor.py` を grep した
-結果、`_build_judge_prompt` の出力文字列を直接 assert する既存テストは**確認できなかった**
-（`grep -n "_build_judge_prompt\|direct scoring\|Chain of Thought"` がヒット0件）。よって
-既存テストの追従は不要と見立てるが、実装 PR では最終確認として同じ grep を再実行することを
-[Must] とする（このメモの grep 実行時刻以降にテストが追加されている可能性を排除するため）。
-`emit_violation_judge_requests`/`ingest_violation_judges` のロジック自体は変更しない。
-
-### 変更5 — `agents/evolve-scorer.md`: 返却JSONから `total` 除去・合成をStep4の決定論処理へ
-
-**対象**: `agents/evolve-scorer.md:87-96` 相当（technical-scorer の返却JSON例）と、
-domain-scorer（`{ "criterion_1": N, ..., "total": N }`）・structural-scorer
-（`{ "format": N, ..., "total": N }`）の返却JSON例（それぞれ Step 3 内の該当ブロック）
-
-**変更前**（technical-scorerの例。実測箇所）:
+**確認**（2026-09-05T01:02:39Z 実測。`git rev-parse HEAD` = `c05de074`）:
 ```
-{ "clarity": N, "completeness": N, "consistency": N, "edge_cases": N, "testability": N, "total": N }
-各値は 0.0〜1.0。total は重み付き平均。
+$ grep -rn "Chain of Thought\|direct scoring" scripts
+scripts/lib/critical_instruction_extractor.py:391:        f"direct scoring: 違反していれば is_violation=true、していなければ false。\n"
+scripts/lib/critical_instruction_extractor.py:392:        f"Chain of Thought: まず理由を考え、次に判定を出してください。\n\n"
 ```
+→ 巡1 [Must] 行43（延期せず今実行せよ）に対応。ヒットはこの2行のみで、他箇所への波及は無い。
 
-**変更後**:
-```
-{ "clarity": N, "completeness": N, "consistency": N, "edge_cases": N, "testability": N }
-各値は 0.0〜1.0（各観点の質的判断のみを返す。重み付き平均はオーケストレーターが Step 4 で計算する）。
-```
-domain-scorer・structural-scorer も同型（`total`除去）。**ただし blocking (b) のとおり、
-domain-scorerの「その他のプロジェクト」枠（`agents/evolve-scorer.md` の「#### その他のプロジェクト」
-節、モデルが自由に4項目・重みを設計する）は、重み自体がモデル生成物であるため、Step 4 の
-決定論計算に必要な重みをコード側に固定できない。この枠を選んだ場合の domain-scorer だけは
-`total` を返させたまま残す**（4種の固定ドメイン=game/api/bot/docsは`total`除去対象、
-「その他」だけ例外として明記する）。
-
-Step 4（`agents/evolve-scorer.md` の「### Step 4: 統合スコア算出」節）は変更しない
-（既に `integrated_score = technical.total * 0.4 + domain.total * 0.4 + structure.total * 0.2`
-という決定論記述だが、technical/structural の `total` は各サブエージェントが返す値から
-「オーケストレーターが3項目の重み付き平均から算出した値」に文言を差し替える必要がある。
-domain は上記例外のため既存記述のまま「domain-scorerが返したtotal」を使う旨を明記する）。
-
-**追従が要る呼出側・テスト**: `agents/evolve-scorer.md` は Markdown 指示書でありコードから
-直接消費されない（`evolve-anything:evolve-scorer` エージェント定義そのもの）。テストは無い
-（`grep -rn "evolve-scorer.md" scripts hooks skills` で参照コードが無いことを実装時に再確認する）。
-skill-vuln-scan・invalid_frontmatter 等の frontmatter 検査には抵触しない変更（本文のみ）。
+**追従が要る呼出側・テスト**: `scripts/tests/test_critical_instruction_extractor.py` を
+`grep -n "_build_judge_prompt\|direct scoring\|Chain of Thought"` した結果、既存テストに
+ヒット0件（巡0と同じ。第2版で再確認済み）。
 
 ### 変更6 — `skills/tier/SKILL.md:17-20` の履歴語り書き換え
 
-**対象**: `skills/tier/SKILL.md:17-20`
+（巡0から内容の変更なし。変異要求のみ追加＝§3）
 
 **変更前**:
 ```
@@ -318,71 +292,84 @@ model-routing rule・各 PJ の agent frontmatter・settings.json に散在し�
 手動で全ファイルを追従する必要があった（2026-07-10 opus 4.8 廃止時に HEAD が fable⇄sonnet を
 同日中に往来した実例）。**このスキル自体はファイルを直接編集しない**
 ```
-
-**変更後**（監査報告の diff どおり）:
+**変更後**:
 ```
 `~/.claude/model-tiers.json`（CLI: `bin/evolve-tier`、#193）が一元管理する。分散管理（rule・
 各 PJ の agent frontmatter・settings.json に個別記載）だとモデル変更のたびに全ファイルへの
 手動追従が必要になり、取りこぼしによる設定ズレが起きる。**このスキル自体はファイルを直接編集しない**
 ```
 
-**追従が要る呼出側・テスト**: SKILL.md 本文のfrontmatter・トリガー文言は変更しないため
-`invalid_frontmatter` 等の検査には抵触しない。参照コード無し（Markdown本文のみ）。
+**追従が要る呼出側・テスト**: 参照コード無し（Markdown本文のみ）。
 
 ---
 
-## 3. 検査の変異要求（実装者に課す。issue #625 の完成条件⑤に対応）
+## 3. 検査の変異要求（issue #625 の完成条件⑤・巡1 [Must] 行150-160を反映）
 
-各変更にテストを追加し、以下の**陰性試験4件＋陽性対照1件以上**を実際に適用して結果を報告すること
-（`verify-checks-by-breaking.md`: 緑のまま残ったものが1件でもあれば完了扱いにしない）。
+巡1が「陰性試験①②は対象コードに実在しない（変更1・4・5＝#626のscope）」「陰性試験③はschema
+内容・nullable・required・enum・schema付き経路の4防御を守らない」「陰性試験④はCoTの完全一致
+grepしか守らない」「変更6・その他に変異が無い」と指摘したため、3件版として以下に**全面差し替え**する。
 
-1. **陰性試験①**: `scorer_prompts.py`/`output_evaluator.py` のプロンプト文字列に
-   「5項目の平均を total として、数値のみ回答してください」を書き戻す変異を適用し、
-   `compute_axis_total`/`_AXIS_WEIGHTS` を使う新テスト（項目JSONのみを渡して期待totalと
-   一致することを assert するテスト）が**赤くなる**ことを確認する
-   （プロンプト文言自体を直接assertするテストが無ければ、代わりに「モデル応答に`total`
-   キーが含まれていても無視されコード側の値が優先される」ことを確認するテストで代替可）
-2. **陰性試験②**: `judge_runner.py`/`verbosity/judge.py`/`agents/evolve-scorer.md` いずれかで
-   `total` をモデル応答（fixture）に含めた状態で、Python側計算値が優先されることを確認する
-   テストを書き、意図的に「モデルの`total`をそのまま採用する」変異を適用して赤くなることを確認する
-3. **陰性試験③**: `call_claude_headless` に `json_schema` を渡した際、`--json-schema`
-   引数がコマンドラインに追加されないよう変異させ（例: `if json_schema is not None:` の
-   条件を `if False:` にする）、新規テスト（`--json-schema` が `cmd` に含まれることを assert）が
-   赤くなることを確認する。あわせて **schema 不正JSON応答時に fail-open で誤った値を
-   永続化しない**ことを確認する陰性試験（`call_haiku` のfakeが壊れたJSON文字列を返した際、
-   既存の `ok=False` → drain 持ち越し経路に合流することを確認）も1件追加する
-4. **陰性試験④**: `critical_instruction_extractor.py` の削除2行を書き戻す変異を適用し、
-   その2行の不在を確認する新規テスト（`_build_judge_prompt` の戻り値に
-   `"Chain of Thought"` / `"direct scoring"` の文字列が含まれないことを assert）が
-   赤くなることを確認する
-5. **陽性対照（緑のままであるべき）**: 各変更につき、正常な項目スコア（0.0〜1.0の範囲内）を
-   与えた場合に既存の集約値（`compute_axis_total`／`_score_axis`／`integrated_score`）が
-   従来の重み付き平均と数値的に一致することを確認する（重みを等分/明示のどちらに変えたかで
-   期待値が変わるため、変更1は等分重み・変更2は監査報告記載の重みで期待値を計算すること）
+1. **陰性試験(a)**: `call_claude_headless` の `if json_schema is not None: cmd += [...]` を
+   `cmd = ["claude", "-p", prompt, "--json-schema", json_schema]`（4防御を落として再構築する
+   変異）に書き換え、**schema付きの単一呼出しで `--tools`/`--settings`/`--strict-mcp-config`/
+   `--safe-mode`/`--no-session-persistence`/`--json-schema` の全てを同時にassertする新規テスト**
+   （巡1報告が明示した反例経路そのもの）が赤くなることを確認する。既存テスト
+   （`test_command_uses_tools_empty_as_primary_defense` 等）はschema未指定のみを検査しており
+   この変異を検出しない＝**新規テストが必須**（既存テストの流用では不可）
+2. **陰性試験(b)**: `judge_runner.call_haiku` に渡す固定schemaの `category` の `enum` から
+   `null` を除去する変異を適用し、非修正発話（`is_correction=false`）を含む§1.1と同型の
+   fixtureを流したときに、**モックではなく`_validate_verdict`の実際の正規化ロジック**が
+   `category=None` を許容し続けること（=schemaが仮に壊れてもパーサ側の寛容フォールバックが
+   独立して機能すること）を確認する陽性対照、および `_validate_verdict` の `category` enum判定
+   ロジック自体を「不正値を素通しする」方向へ書き換える変異で赤くなる陰性試験を追加する
+3. **陰性試験(c)**: `CATEGORY_SCHEMA_VERSION` を `2` へ上げずに `1` のまま残す変異を適用し、
+   `prompt_fingerprint()` の変化と `CATEGORY_SCHEMA_VERSION` の値がテストで**両方**
+   （fingerprintのハッシュ値・versionの整数値）検査されることを確認する
+4. **陰性試験(d)**: `critical_instruction_extractor.py` の削除2行を「段階的に理由を考えてから
+   判定してください」のような**意図が同じ言い換え文**へ書き換える変異を適用し、
+   `Chain of Thought|direct scoring` の完全一致 grep だけに頼るのではなく、
+   `_build_judge_prompt` の戻り値が「判定結果を許可する短い定型文」（例:
+   `f"違反していれば is_violation=true、していなければ false。\n\n"` で終わる、または
+   その直後に即座に `JSON形式で回答:` が続く＝理由生成を促す中間文が挟まらない）ことを
+   **positive assert**（許可リスト形式）で固定する新規テストを追加する（巡1 [Must] 行158の指摘）
+5. **陰性試験(e)**: `skills/tier/SKILL.md:17-20` に旧履歴語り（`opus 4.8` という具体的な
+   撤去済みモデル名、または `2026-07-10` という具体的日付）を書き戻す変異を適用し、
+   その文字列が本文に含まれないことをassertする新規テスト（`spec-keeper` 系の既存 lint に
+   相当ロジックが無ければ、単純な文字列非包含テストを1件追加する）が赤くなることを確認する
+   （巡1 [Must] 行160の指摘。変更6に変異が無かった不備への対応）
+6. **陽性対照**: 上記(a)〜(e)それぞれについて、変異を適用しない正常な変更後コード・正常な
+   モデル応答（§1.1の実測結果を fixture として使う）を与えた場合にテストが緑のままであることを
+   確認する
 
-**委譲側（本メモ）が挙げた回避手段（項目JSON化・schema化・CoT削除）とは種類の違う変異を
-2件以上、実装者自身が追加で構成し実際に適用して結果を報告すること**（例: 空文字列/None項目・
-enum不正値・JSON構文エラー応答・`--json-schema`未対応の古いCLIバージョンを模した`ClaudeCallError`
-発生時の挙動、等）。緑のまま残ったものが1件でもあれば完了扱いにしない。探索した入力クラスと
-変換も列挙すること。
+**委譲側が挙げた回避手段とは種類の違う変異を2件以上、実装者自身が追加で構成し実際に適用して
+結果を報告すること**（例: `--json-schema` の値そのものを空文字列 `""` に差し替える・
+`judge_runner.call_haiku` のtimeout値だけ変えてschema引数を消し忘れる・
+`skills/tier/SKILL.md` の履歴語りを別の撤去済みモデル名で書き戻す、等）。緑のまま残ったものが
+1件でもあれば完了扱いにしない。探索した入力クラスと変換も列挙すること。
 
 ---
 
 ## 4. リスク・未実測
 
-- **未実測**: `--output-format json` を併用した場合の `--json-schema` の挙動（本メモ§1のprobeでは
-  未検証。不要と判断したため検証対象から外したが、将来 CLI の既定挙動が変わった場合の
-  再検証条件は「`call_claude_headless` の戻り値が生JSON文字列でなくなった」ことをテストで検知
-  できるようにする＝既存パーサ経路を維持する設計（§2 変更3）自体がこのフォールバックになっている）
-- **未実測**: `--json-schema` 併用時の decisive test（秘密ファイル非漏洩・hook非発火）の再実測
-  （§2 変更3の [Must] として実装PRへ委譲。本メモの1回のprobeは機能確認のみで安全性再実測ではない）
-- **未実測**: `output_evaluator.py` の変更後、`run_benchmark.py` の bench マーカーテストが
-  実際にどのアサーションを持つか（実装時に Read して確認する）
-- **リスク**: `scorer_prompts.py` の重みを「等分」に決めたことで、旧プロンプトが暗黙に
-  モデルへ委ねていた採点傾向（モデルが単純平均以外の重みを無意識に適用していた可能性）と
-  数値が変わりうる。ただしプロンプト文言自体が「平均」を明示していたため、意図と実装を
-  一致させる修正であり後退ではないと判断する
-- **リスク**: `agents/evolve-scorer.md` の「その他のプロジェクト」枠を例外として残したことで、
-  Finding 2 の是正が4/5ドメインにしか及ばない。監査報告にはこの区別が無かったため、
-  本メモが新たに追加した縮小判断（`think-before-coding.md` の「機構を減らして成立させる」）
-  である旨を実装PRのレビューで明示する
+- **未実測**: `--json-schema` 併用時の decisive test（秘密ファイル非漏洩・hook非発火の
+  再実測）は、本メモの2回のLLM呼出し予算に含めず**実装PRへ委譲する**。判定根拠
+  （`measure-now-not-later.md` の3問）: ①今日実行可能（同じ4防御引数列に`--json-schema`を
+  足すだけ）②片側の結論は既にある（§1.1で4防御込みの正常動作は確認済み。`--json-schema`は
+  `--tools`/`--settings`/`--strict-mcp-config`/`--safe-mode`のいずれの実装にも触れない**追加**
+  引数であるため、これらを弱める経路は§3陰性試験(a)のコード変異でしか作れず、正規実装では
+  発生しない）③既存decisive test手順を流用できる。**それでも延期する理由**: 秘密ファイル
+  漏洩の実測にはtmpファイル作成・プロンプトインジェクション文言の追加設計が要り、本メモの
+  2回のLLM呼出し予算内では本番schema実測（§1）を優先した。実装PRで**必ず**再実測すること
+  （§3陰性試験(a)のコードレベル検査だけでは「実際にモデルがツールを使おうとしないか」という
+  behavioralな証拠を代替できないため、必須の別工程として残す）
+- **未実測**: `verbosity/judge.py` の object-wrap 改修（§1.2）・費用予約欠落（§2変更2）・
+  suggestion書込み不変条件（§2変更2）の3点は、follow-up issueでの実測・設計に委ねる
+- **リスク**: `CATEGORY_SCHEMA_VERSION` を2へ上げることで、既存の `correction_judged.jsonl` に
+  蓄積された `category_schema_version=1` のレコードと新レコードが**系列断絶として扱われる**
+  （`prompt.py:68-70` の設計意図どおりの挙動だが、`correction_rate.py` 等の集計側がこの断絶を
+  正しく解釈できるかは実装PRで確認すること。docstringは「系列断絶の検出材料にする」としており
+  断絶自体は既存契約が想定する正常系のはずだが、消費側の実装を本メモでは未確認）
+- **リスク**: `judge_runner.py` のみに `--json-schema` を適用し `verbosity/judge.py` を対象外に
+  したことで、Finding 3 の是正が2/2ファイルから1/2ファイルへ縮小する。監査報告時点では
+  この非対称性は判明していなかった（§1.2のAPI制約実測で初めて判明した）ため、本メモが
+  新たに追加した縮小判断である旨を実装PRのレビューで明示する
