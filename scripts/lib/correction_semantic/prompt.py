@@ -65,9 +65,10 @@ CATEGORY_LABELS_JA = {
     "other": "その他",
 }
 
-# verdict の category フィールドが従う契約のバージョン。プロンプト文面・enum・優先規則を
-# 変えたら上げる（producer 時点で provenance に保存し、collect 側の系列断絶検出に使う・§2.4/§2.5）。
-CATEGORY_SCHEMA_VERSION = 1
+# verdict の category フィールドが従う契約のバージョン。プロンプト文面・enum・優先規則・
+# schema の構造を変えたら上げる（producer 時点で provenance に保存し、断絶が起きたことを
+# 後から識別できるようにする・§2.4/§2.5）。
+CATEGORY_SCHEMA_VERSION = 2
 
 # プロンプトに埋め込む語彙表（意味 + 境界優先規則）。§2.1 の表・優先規則をそのまま使う。
 _CATEGORY_VOCAB_TABLE = (
@@ -150,7 +151,7 @@ def build_batch_prompt(
         "修正でなければ category は null にします。\n\n"
         "**判定対象の全 index について、必ず 1 件ずつ verdict を返してください**"
         "（非修正の発話も is_correction=false で必ず含める。省略しない）。\n\n"
-        "出力は厳格な JSON のみ（前後に説明文を付けない）。形式:\n"
+        "以下の形式で判定結果を返してください:\n"
         '{"verdicts": [{"index": 0, "is_correction": true, "idiom": "四国めたんじゃなくて", '
         '"category": "factual", '
         '"reason": "正しい値を後置で言い直している"}, ...]}\n\n'

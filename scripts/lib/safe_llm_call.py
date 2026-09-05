@@ -88,7 +88,7 @@ from __future__ import annotations
 
 import json
 import subprocess
-from typing import List
+from typing import List, Optional
 
 # claude --help 実測時点（2.1.226）のビルトインツール名の網羅。新ツールが追加されたら
 # 追従が必要（このモジュールが唯一の deny リスト定義なので更新箇所は1箇所で済む）。
@@ -126,7 +126,11 @@ class ClaudeCallError(RuntimeError):
 
 
 def call_claude_headless(
-    prompt: str, *, model: str = "haiku", timeout: int = DEFAULT_TIMEOUT_SECONDS
+    prompt: str,
+    *,
+    model: str = "haiku",
+    timeout: int = DEFAULT_TIMEOUT_SECONDS,
+    json_schema: Optional[str] = None,
 ) -> str:
     """無人・ツール封じ済みの claude -p 呼び出し（subprocess の唯一の集約点）。
 
@@ -134,6 +138,7 @@ def call_claude_headless(
         prompt:  ユーザー発話等の untrusted 本文を含みうるプロンプト全文。
         model:   モデルエイリアス（既定 "haiku"）。
         timeout: subprocess timeout 秒（既定 180）。
+        json_schema: 構造化出力の JSON schema。指定時だけ CLI へ渡す。
 
     Returns:
         stdout を strip した文字列。
@@ -142,30 +147,33 @@ def call_claude_headless(
         ClaudeCallError: プロセスが非ゼロ終了した場合。
         subprocess.TimeoutExpired: タイムアウトした場合（呼び出し側の except で処理する）。
     """
+    cmd = [
+        "claude",
+        "-p",
+        prompt,
+        "--model",
+        model,
+        # 主防御（#410 round2 [Must]A）: built-in ツールセット全体を無効化する。
+        # 列挙非依存のため将来ツールが増えても fail-open しない。
+        "--tools",
+        "",
+        # defense-in-depth（-p モードは不正な settings を無言で無視するため単独の砦に
+        # しない。モジュール docstring 参照）。
+        "--settings",
+        _safe_settings_json(),
+        # --tools "" は built-in セットのみが対象で MCP サーバ由来のツールは塞がないため
+        # 必須（モジュール docstring 参照）。
+        "--strict-mcp-config",
+        # #410 round3 [Must]1: hooks/plugins/CLAUDE.md 等の customization 経路を塞ぐ
+        # （--tools ""/--strict-mcp-config/--settings deny のどれも hooks は無効化
+        # しない。実測で hook 発火の阻止を確認済み・モジュール docstring 参照）。
+        "--safe-mode",
+        "--no-session-persistence",
+    ]
+    if json_schema is not None:
+        cmd += ["--json-schema", json_schema]
     out = subprocess.run(
-        [
-            "claude",
-            "-p",
-            prompt,
-            "--model",
-            model,
-            # 主防御（#410 round2 [Must]A）: built-in ツールセット全体を無効化する。
-            # 列挙非依存のため将来ツールが増えても fail-open しない。
-            "--tools",
-            "",
-            # defense-in-depth（-p モードは不正な settings を無言で無視するため単独の砦に
-            # しない。モジュール docstring 参照）。
-            "--settings",
-            _safe_settings_json(),
-            # --tools "" は built-in セットのみが対象で MCP サーバ由来のツールは塞がないため
-            # 必須（モジュール docstring 参照）。
-            "--strict-mcp-config",
-            # #410 round3 [Must]1: hooks/plugins/CLAUDE.md 等の customization 経路を塞ぐ
-            # （--tools ""/--strict-mcp-config/--settings deny のどれも hooks は無効化
-            # しない。実測で hook 発火の阻止を確認済み・モジュール docstring 参照）。
-            "--safe-mode",
-            "--no-session-persistence",
-        ],
+        cmd,
         capture_output=True,
         text=True,
         timeout=timeout,

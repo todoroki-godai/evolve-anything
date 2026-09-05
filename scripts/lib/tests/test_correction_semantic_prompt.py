@@ -34,9 +34,10 @@ def test_build_prompt_contains_all_utterances() -> None:
     assert "0" in p and "1" in p
 
 
-def test_build_prompt_asks_for_json() -> None:
+def test_build_prompt_asks_for_structured_verdict_result() -> None:
     p = cs_prompt.build_batch_prompt(_utts())
-    assert "JSON" in p or "json" in p
+    assert "以下の形式で判定結果を返してください:" in p
+    assert '"verdicts"' in p
     # 二値 + 言い回し抽出を要求
     assert "is_correction" in p
     assert "idiom" in p

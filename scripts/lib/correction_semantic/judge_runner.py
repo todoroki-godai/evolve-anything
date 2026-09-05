@@ -46,6 +46,7 @@ judged にせずスキップする（#273）ので、``call_haiku`` が例外を
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -62,6 +63,7 @@ from weak_signals.ttl import _parse_iso  # noqa: E402
 
 from . import DEFAULT_BATCH_SIZE  # noqa: E402
 from . import batch as _batch  # noqa: E402
+from .prompt import CATEGORY_ENUM  # noqa: E402
 from . import store as _store  # noqa: E402
 
 # 承認済み標準運用値（#408・ユーザー standing approval）。呼び出し側が override しない
@@ -80,6 +82,32 @@ DEFAULT_JUDGE_UTTERANCE_MAX_AGE_DAYS = 90
 
 _EPOCH = datetime.min.replace(tzinfo=timezone.utc)
 
+_VERDICT_JSON_SCHEMA = json.dumps(
+    {
+        "type": "object",
+        "properties": {
+            "verdicts": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "index": {"type": "integer"},
+                        "is_correction": {"type": "boolean"},
+                        "idiom": {"type": ["string", "null"]},
+                        "category": {
+                            "type": ["string", "null"],
+                            "enum": [*CATEGORY_ENUM, None],
+                        },
+                        "reason": {"type": "string"},
+                    },
+                    "required": ["index", "is_correction"],
+                },
+            }
+        },
+        "required": ["verdicts"],
+    }
+)
+
 
 def call_haiku(prompt: str, model: str = "haiku") -> str:
     """Haiku を 1 回呼ぶ（呼び出しの唯一の集約点・単体テストはここを mock する）。
@@ -91,7 +119,9 @@ def call_haiku(prompt: str, model: str = "haiku") -> str:
     （#410 [Must]F）、呼び出し側の既存の「呼び出し失敗 → 未判定のまま次回に残す」経路に
     合流させる。
     """
-    return _safe_llm_call.call_claude_headless(prompt, model=model)
+    return _safe_llm_call.call_claude_headless(
+        prompt, model=model, json_schema=_VERDICT_JSON_SCHEMA
+    )
 
 
 def _sort_key(u: Dict[str, Any]):
