@@ -46,7 +46,6 @@ judged にせずスキップする（#273）ので、``call_haiku`` が例外を
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -63,7 +62,7 @@ from weak_signals.ttl import _parse_iso  # noqa: E402
 
 from . import DEFAULT_BATCH_SIZE  # noqa: E402
 from . import batch as _batch  # noqa: E402
-from .prompt import CATEGORY_ENUM  # noqa: E402
+from .prompt import VERDICT_JSON_SCHEMA as _VERDICT_JSON_SCHEMA  # noqa: E402
 from . import store as _store  # noqa: E402
 
 # 承認済み標準運用値（#408・ユーザー standing approval）。呼び出し側が override しない
@@ -82,32 +81,6 @@ DEFAULT_JUDGE_UTTERANCE_MAX_AGE_DAYS = 90
 
 _EPOCH = datetime.min.replace(tzinfo=timezone.utc)
 
-_VERDICT_JSON_SCHEMA = json.dumps(
-    {
-        "type": "object",
-        "properties": {
-            "verdicts": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "index": {"type": "integer"},
-                        "is_correction": {"type": "boolean"},
-                        "idiom": {"type": ["string", "null"]},
-                        "category": {
-                            "type": ["string", "null"],
-                            "enum": [*CATEGORY_ENUM, None],
-                        },
-                        "reason": {"type": "string"},
-                    },
-                    "required": ["index", "is_correction"],
-                },
-            }
-        },
-        "required": ["verdicts"],
-    }
-)
-
 
 def call_haiku(prompt: str, model: str = "haiku") -> str:
     """Haiku を 1 回呼ぶ（呼び出しの唯一の集約点・単体テストはここを mock する）。
@@ -117,7 +90,7 @@ def call_haiku(prompt: str, model: str = "haiku") -> str:
     （#410 [Must]A）。``verbosity.judge.call_haiku`` と同じ実装を共有する（片方だけ直す
     partial fix を避けるため）。非ゼロ終了は ``safe_llm_call.ClaudeCallError`` を送出し
     （#410 [Must]F）、呼び出し側の既存の「呼び出し失敗 → 未判定のまま次回に残す」経路に
-    合流させる。
+    合流させる。schema は correction 側のみ（#625・verbosity は object-wrap 改修待ち）。
     """
     return _safe_llm_call.call_claude_headless(
         prompt, model=model, json_schema=_VERDICT_JSON_SCHEMA

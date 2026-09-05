@@ -65,6 +65,38 @@ CATEGORY_LABELS_JA = {
     "other": "その他",
 }
 
+# judge_runner.call_haiku が毎バッチ safe_llm_call へ渡す response schema（#625 [Should]）。
+# 従来は judge_runner.py 内の _VERDICT_JSON_SCHEMA としてのみ定義され、batch.py の
+# 事前予約（_PROMPT_OVERHEAD_TOKENS）はこの schema 長を計上していなかった（バッチ本体の
+# プロンプトのみを見積もり、毎回送信される json_schema 引数のコストが予約外だった）。
+# ここへ移して公開し、prompt（本モジュール）→ batch → judge_runner の依存順で
+# 両モジュールが単一ソースとして参照する。
+VERDICT_JSON_SCHEMA = json.dumps(
+    {
+        "type": "object",
+        "properties": {
+            "verdicts": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "index": {"type": "integer"},
+                        "is_correction": {"type": "boolean"},
+                        "idiom": {"type": ["string", "null"]},
+                        "category": {
+                            "type": ["string", "null"],
+                            "enum": [*CATEGORY_ENUM, None],
+                        },
+                        "reason": {"type": "string"},
+                    },
+                    "required": ["index", "is_correction"],
+                },
+            }
+        },
+        "required": ["verdicts"],
+    }
+)
+
 # verdict の category フィールドが従う契約のバージョン。プロンプト文面・enum・優先規則・
 # schema の構造を変えたら上げる（producer 時点で provenance に保存し、断絶が起きたことを
 # 後から識別できるようにする・§2.4/§2.5）。
