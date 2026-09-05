@@ -8,6 +8,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 _lib_dir = Path(__file__).resolve().parent.parent
 if str(_lib_dir) not in sys.path:
     sys.path.insert(0, str(_lib_dir))
@@ -32,9 +34,10 @@ def test_build_prompt_contains_all_utterances() -> None:
     assert "0" in p and "1" in p
 
 
-def test_build_prompt_asks_for_json() -> None:
+def test_build_prompt_asks_for_structured_verdict_result() -> None:
     p = cs_prompt.build_batch_prompt(_utts())
-    assert "JSON" in p or "json" in p
+    assert "以下の形式で判定結果を返してください:" in p
+    assert '"verdicts"' in p
     # 二値 + 言い回し抽出を要求
     assert "is_correction" in p
     assert "idiom" in p
@@ -70,6 +73,37 @@ def test_prompt_fingerprint_changes_with_template() -> None:
     assert fp1 == fp2  # 決定論（同一プロセス内で安定）
     # 発話内容を変えても fingerprint は変わらない（固定テンプレート部分のみ対象）
     assert cs_prompt.prompt_fingerprint() == fp1
+
+
+def test_prompt_contract_version_and_fingerprint_for_schema_v2() -> None:
+    """#625: 文面短縮と構造schema導入後の系列識別値を固定する。"""
+    assert cs_prompt.CATEGORY_SCHEMA_VERSION == 2
+    assert cs_prompt.prompt_fingerprint() == "53c3982a2738"
+
+
+@pytest.mark.parametrize(
+    ("raw_category", "is_correction", "expected_category"),
+    [
+        ("not-in-category-enum", True, None),
+        ("factual", True, "factual"),
+        (None, False, None),
+    ],
+)
+def test_validate_verdict_fail_open_is_independent_of_generation_schema(
+    raw_category, is_correction, expected_category
+) -> None:
+    """#625: schema 違反相当でも受信側は category だけ未判定へ持ち越す。"""
+    verdict = cs_prompt._validate_verdict(
+        {
+            "index": 0,
+            "is_correction": is_correction,
+            "idiom": "sentinel" if is_correction else None,
+            "category": raw_category,
+            "reason": "sentinel reason",
+        }
+    )
+    assert verdict is not None
+    assert verdict["category"] == expected_category
 
 
 def test_parse_verdict_captures_valid_category() -> None:

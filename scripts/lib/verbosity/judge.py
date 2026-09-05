@@ -84,7 +84,8 @@ def call_haiku(prompt: str, model: str = "haiku") -> str:
     実行させない安全な呼び出し（#410 [Must]A）。``correction_semantic.judge_runner.call_haiku``
     と同じ実装を共有する（片方だけ直す partial fix を避けるため）。非ゼロ終了は
     ``safe_llm_call.ClaudeCallError`` を送出し（#410 [Must]F）、呼び出し側の既存の
-    「呼び出し失敗 → 次バッチへ継続」経路に合流させる。
+    「呼び出し失敗 → 次バッチへ継続」経路に合流させる。schema は correction 側のみ
+    （#625・verbosity は object-wrap 改修待ち）。
     """
     return _safe_llm_call.call_claude_headless(prompt, model=model)
 

@@ -62,6 +62,7 @@ from weak_signals.ttl import _parse_iso  # noqa: E402
 
 from . import DEFAULT_BATCH_SIZE  # noqa: E402
 from . import batch as _batch  # noqa: E402
+from .prompt import VERDICT_JSON_SCHEMA as _VERDICT_JSON_SCHEMA  # noqa: E402
 from . import store as _store  # noqa: E402
 
 # 承認済み標準運用値（#408・ユーザー standing approval）。呼び出し側が override しない
@@ -89,9 +90,11 @@ def call_haiku(prompt: str, model: str = "haiku") -> str:
     （#410 [Must]A）。``verbosity.judge.call_haiku`` と同じ実装を共有する（片方だけ直す
     partial fix を避けるため）。非ゼロ終了は ``safe_llm_call.ClaudeCallError`` を送出し
     （#410 [Must]F）、呼び出し側の既存の「呼び出し失敗 → 未判定のまま次回に残す」経路に
-    合流させる。
+    合流させる。schema は correction 側のみ（#625・verbosity は object-wrap 改修待ち）。
     """
-    return _safe_llm_call.call_claude_headless(prompt, model=model)
+    return _safe_llm_call.call_claude_headless(
+        prompt, model=model, json_schema=_VERDICT_JSON_SCHEMA
+    )
 
 
 def _sort_key(u: Dict[str, Any]):

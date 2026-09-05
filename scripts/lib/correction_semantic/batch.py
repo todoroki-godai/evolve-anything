@@ -64,7 +64,15 @@ _CHARS_PER_TOKEN = 2.0
 # 追加のようなプロンプト伸長で見積もりが実態から乖離した。``prompt.build_batch_prompt([])``
 # （発話ゼロ件＝固定部分のみ）の実長から導出し、テンプレート変更に自動追従させる
 # （estimate_tokens の固定費と reserve_batch_cost の予約額の両方がこの1定数を共有する単一ソース）。
-_PROMPT_OVERHEAD_TOKENS = math.ceil(len(_prompt.build_batch_prompt([])) / _CHARS_PER_TOKEN)
+#
+# #625 [Should]: judge_runner.call_haiku は毎バッチ ``prompt.VERDICT_JSON_SCHEMA``
+# （467字前後）を safe_llm_call の json_schema 引数として送るが、旧実装は本体プロンプト
+# （build_batch_prompt）の長さしか見積もっておらず schema 分が予約から漏れていた
+# （呼ぼうとした時点で必ず予約する reserved_batches の思想＝#410 round4 と矛盾する隙間）。
+# schema 側も同じ _CHARS_PER_TOKEN で換算して加算する。
+_PROMPT_OVERHEAD_TOKENS = math.ceil(
+    len(_prompt.build_batch_prompt([])) / _CHARS_PER_TOKEN
+) + math.ceil(len(_prompt.VERDICT_JSON_SCHEMA) / _CHARS_PER_TOKEN)
 
 # #400 A5（設計 §2.2）: 出力（verdict JSON 1件分）の概算トークン。旧実装は入力のみを見積もり、
 # 出力 token を一切計上していなかった（プロンプト伸長で入力は直るが出力の見落としは別問題）。
