@@ -74,6 +74,11 @@ def _guard_problem(store_name: str) -> Optional[str]:
     return None
 
 
+def guard_problem(store_name: str) -> Optional[str]:
+    """store_name の write 可否を返す公開API。判定実装は `_guard_problem` が単一ソース。"""
+    return _guard_problem(store_name)
+
+
 def store_write(
     store_name: str, record: dict, *, guard_mode: Optional[str] = None
 ) -> None:
@@ -94,6 +99,20 @@ def store_write(
         if mode == "reject":
             raise StoreWriteError(msg)
         print(msg + "（warn-only: 書込は継続）", file=sys.stderr)
+
+    # 専用境界自身も公開 guard_problem を使うため、この拒否は generic writer の
+    # 本体だけに置く（#587・2026-09-01 裁定）。
+    try:
+        import store_registry
+    except ImportError:
+        store_registry = None
+    decl = store_registry.declaration_for(store_name) if store_registry is not None else None
+    boundary = getattr(decl, "write_boundary", None)
+    if boundary is not None:
+        raise StoreWriteError(
+            f"[evolve-anything:write-barrier] ストア '{store_name}' は専用の追記境界 "
+            f"'{boundary}' を経由する必要があります（generic store_write からの直接書込みは拒否・#587）"
+        )
 
     # DATA_DIR は rl_common パッケージ属性（mock.patch.object(rl_common, "DATA_DIR", ...)
     # 経路の SoT）。遅延 import で call-time の live 値を参照する。
@@ -138,10 +157,46 @@ def _raw_freeze_problem(filepath: Path) -> Optional[str]:
     return None
 
 
+def _raw_boundary_problem(filepath: Path) -> Optional[str]:
+    """正準 DATA_DIR 配下の raw 書込が専用境界を迂回しないか照合する。
+
+    symlink は解決先 basename、大小文字だけ異なる別名は casefold した宣言名で照合する。
+    対象ファイルの作成前でも専用境界の別名迂回を拒否する。
+    """
+    try:
+        import rl_common
+
+        target = Path(filepath).resolve()
+        canonical = Path(rl_common.DATA_DIR).resolve()
+        if not target.is_relative_to(canonical):
+            return None
+    except (OSError, ValueError):
+        return None
+    try:
+        import store_registry
+    except ImportError:
+        return None
+    declaration = store_registry.declaration_for(target.name)
+    if declaration is None:
+        requested_name = Path(filepath).name.casefold()
+        for declared_name in store_registry.declared_store_names():
+            if declared_name.casefold() != requested_name:
+                continue
+            declaration = store_registry.declaration_for(declared_name)
+            break
+    boundary = getattr(declaration, "write_boundary", None)
+    if boundary is None:
+        return None
+    return (
+        f"ストア '{Path(filepath).name}' は専用の追記境界 '{boundary}' を経由する必要があります"
+        "（store_write_raw からの直接書込みは拒否・#597）"
+    )
+
+
 def store_write_raw(
     filepath: Path, record: dict, *, guard_mode: Optional[str] = None
 ) -> None:
-    """明示パス指定の例外口（ADR-049 決定5）。store_registry 照合を通さない直接書込。
+    """明示パス指定の例外口（ADR-049 決定5）。通常の registry guard を通さない直接書込。
 
     テスト / 特殊ケース用。フラグでなく別名関数にすることで、raw を使う diff が
     静的 advisory（store_write 非経由の DATA_DIR 参照）の検出対象に上がる。
@@ -157,6 +212,10 @@ def store_write_raw(
         if mode == "reject":
             raise StoreWriteError(msg)
         print(msg + "（warn-only: 書込は継続）", file=sys.stderr)
+
+    boundary_problem = _raw_boundary_problem(filepath)
+    if boundary_problem is not None:
+        raise StoreWriteError(f"[evolve-anything:write-barrier] {boundary_problem}")
 
     from rl_common import append_jsonl
 

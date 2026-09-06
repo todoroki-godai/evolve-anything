@@ -649,24 +649,24 @@ class TestLastSkill:
 class TestCorrectionDetectHook:
     """correction_detect.py のフックテスト。"""
 
-    def test_corrections_routed_through_store_write(self, patch_data_dir):
-        """corrections 書込は store_write 単一ゲート経由（ADR-049 / #55 wave 1）。
-
-        append_jsonl 直呼びでなく store_write("corrections.jsonl", record) を通る。
-        保存先解決と registry guard を単一ゲートに集約したことを構造的に固定し、
-        将来 append_jsonl 直呼びに silent revert したらこのテストが落ちる。
-        """
+    def test_corrections_routed_through_correction_boundary(self, patch_data_dir):
+        """W1 は correction 専用の唯一の保存境界を通る（#593）。"""
         event = {
             "session_id": "sess-cd-sw",
             "message": {"content": "いや、そうじゃなくて optimize を使って"},
         }
-        with mock.patch.object(common, "store_write") as m_sw:
+        with mock.patch.object(
+            common,
+            "append_correction_record",
+            wraps=common.append_correction_record,
+        ) as m_append:
             correction_detect.handle_user_prompt_submit(event)
-        assert m_sw.call_count == 1
-        args = m_sw.call_args.args
-        assert args[0] == "corrections.jsonl"
+        assert m_append.call_count == 1
+        args = m_append.call_args.args
+        assert args[0] == patch_data_dir / "corrections.jsonl"
         assert args[1]["correction_type"] == "iya"
         assert args[1]["session_id"] == "sess-cd-sw"
+        assert common.validate_correction_id(args[1]["correction_id"])
 
     def test_japanese_correction_detected(self, patch_data_dir):
         event = {

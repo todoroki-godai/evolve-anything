@@ -37,6 +37,8 @@ if str(_lib_dir) not in sys.path:
     sys.path.insert(0, str(_lib_dir))
 
 import results_board  # noqa: E402
+from measurement_result import _pillar2_degraded_reason  # noqa: E402
+from pillar2_metrics import count_applied_reflections  # noqa: E402
 
 
 # ── classify_decision ──────────────────────────────────────────────
@@ -405,6 +407,7 @@ def _closed_gate_summary():
         },
         "displayed_weeks": [],
         "latest_coverage": None,
+        "coverage_gaps": [],
         "diagnostics": {},
         "generated_at": None,
     }
@@ -439,6 +442,7 @@ def _point_gate_summary(point_week=None, current_run_length=1, latest_coverage=N
             "week_id": pw["week_id"], "judged": pw["judged_count"], "total": pw["judged_count"],
             "failure_reasons": [],
         },
+        "coverage_gaps": [],
         "diagnostics": {},
         "generated_at": _NOW.isoformat(),
     }
@@ -462,6 +466,7 @@ class TestBuildResultsBoardCorrectionRate:
                  "top3_examples": []},
             ],
             "latest_coverage": {"week_id": "2026-W10", "judged": 10, "total": 10},
+            "coverage_gaps": [],
             "diagnostics": {},
             "generated_at": _NOW.isoformat(),
         }
@@ -484,6 +489,84 @@ class TestBuildResultsBoardCorrectionRate:
 
         assert board["correction_rate"]["gate"]["gate_open"] is False
         assert board["correction_rate"]["displayed_weeks"] == []
+        assert board["correction_rate"]["coverage_gaps"] is None
+
+
+class TestBuildResultsBoardPillar2:
+    def test_missing_project_root_renders_unmeasured_with_unsupported_targets(
+        self, stub_history, stub_correction_rate
+    ):
+        stub_history([])
+        stub_correction_rate(_closed_gate_summary())
+
+        board = results_board.build_results_board("evolve-anything", now=_NOW)
+        text = "\n".join(results_board.render_results_board(board))
+
+        assert (
+            "**実際に反映された改善（直近30日）: 測定不能"
+            "（project_root が指定されていません）**"
+        ) in text
+        assert board["pillar2"]["not_measured"] == {
+            "hook": {"reason": "no_store"},
+            "pitfall_memory": {"reason": "mtime_collision"},
+        }
+        assert board["pillar2"]["pre_scheme_excluded_count"] is None
+        assert "新方式で記録を始める前の旧記録: 評価不能（除外件数も評価不能）" in text
+        assert "未測定の反映先: hook（記録ストアなし） / pitfall_memory（mtime 衝突）" in text
+
+    def test_applied_reflections_are_wired_with_project_root_and_now(
+        self, stub_history, stub_correction_rate, monkeypatch, tmp_path
+    ):
+        stub_history([])
+        stub_correction_rate(_closed_gate_summary())
+        expected = {
+            "count": 2,
+            "measured": True,
+            "pre_scheme_excluded_count": 4,
+            "health": {"degraded": False},
+            "applied_list": [],
+            "not_measured": {
+                "hook": {"reason": "no_store"},
+                "pitfall_memory": {"reason": "mtime_collision"},
+            },
+        }
+        seen = {}
+
+        def _count(project_root, *, now):
+            seen.update(project_root=project_root, now=now)
+            return expected
+
+        monkeypatch.setattr(results_board, "count_applied_reflections", _count)
+
+        board = results_board.build_results_board(
+            "evolve-anything", now=_NOW, project_root=tmp_path
+        )
+
+        assert board["pillar2"] == expected
+        assert seen == {"project_root": tmp_path, "now": _NOW}
+
+    def test_reader_failure_is_explicitly_unmeasured(
+        self, stub_history, stub_correction_rate, monkeypatch, tmp_path
+    ):
+        stub_history([])
+        stub_correction_rate(_closed_gate_summary())
+        monkeypatch.setattr(
+            results_board,
+            "count_applied_reflections",
+            lambda *args, **kwargs: (_ for _ in ()).throw(PermissionError("pillar2 denied")),
+        )
+
+        board = results_board.build_results_board(
+            "evolve-anything", now=_NOW, project_root=tmp_path
+        )
+
+        assert board["pillar2"]["measured"] is False
+        assert board["pillar2"]["pre_scheme_excluded_count"] is None
+        assert board["measurements"]["pillar2"]["measured"] is False
+        assert "PermissionError" in board["measurements"]["pillar2"]["reason"]
+        assert "新方式で記録を始める前の旧記録: 評価不能（除外件数も評価不能）" in "\n".join(
+            results_board.render_results_board(board)
+        )
 
 
 class TestBuildResultsBoardDecisions:
@@ -755,6 +838,19 @@ class TestRenderResultsBoard:
                 "hits": 23, "recall": 21 / 47, "precision": 21 / 23,
                 "recall_ci": (0.314, 0.588), "precision_ci": (0.732, 0.976),
             },
+            "pillar2": {
+                "count": 2,
+                "measured": True,
+                "pre_scheme_excluded_count": 4,
+                "health": {"degraded": False},
+                "not_measured": {
+                    "hook": {"reason": "no_store"},
+                    "pitfall_memory": {"reason": "mtime_collision"},
+                },
+            },
+            "measurements": {
+                "pillar2": {"measured": True, "reason": None, "dropped_lines": 0},
+            },
             "decisions": {"accepted": 1, "rejected": 2, "pending": 1, "excluded": 4},
             "accepted_list": [{"skill_name": "queue", "timestamp": _iso(1)}],
             "withdrawal_candidates": [],
@@ -779,6 +875,205 @@ class TestRenderResultsBoard:
         ))
         assert "L1捕捉率: 未測定（評価セットなし）" in text
 
+    def test_pillar2_count_is_distinct_from_accepted_improvements(self):
+        text = "\n".join(results_board.render_results_board(self._board()))
+
+        assert "実際に反映された改善（直近30日）: 2 件" in text
+        assert "採用した改善（直近30日）: accepted 1 件" in text
+        assert "新方式で記録を始める前の旧記録: 4件（測定不能の理由からは除外）" in text
+
+    def test_pillar2_exclusion_is_rendered_when_measurement_is_degraded(self):
+        board = self._board(
+            pillar2={
+                "count": 1,
+                "measured": False,
+                "legacy_unverified_count": 1,
+                "pre_scheme_excluded_count": 4,
+                "health": {"degraded": True},
+                "not_measured": {},
+            },
+            measurements={
+                "pillar2": {"measured": True, "reason": None, "dropped_lines": 0},
+            },
+        )
+
+        text = "\n".join(results_board.render_results_board(board))
+
+        assert "実際に反映された改善（直近30日）: 測定不能" in text
+        assert "未照合の旧記録 1 件" in text
+        assert "新方式で記録を始める前の旧記録: 4件（測定不能の理由からは除外）" in text
+
+    def test_pillar2_zero_exclusion_is_always_rendered(self):
+        board = self._board()
+        board["pillar2"]["pre_scheme_excluded_count"] = 0
+
+        lines = results_board.render_results_board(board)
+        text = "\n".join(lines)
+
+        assert "新方式で記録を始める前の旧記録: 0件（測定不能の理由からは除外）" in text
+        main_index = next(
+            index
+            for index, line in enumerate(lines)
+            if "実際に反映された改善（直近30日）" in line
+        )
+        exclusion_index = next(
+            index
+            for index, line in enumerate(lines)
+            if "新方式で記録を始める前の旧記録" in line
+        )
+        assert exclusion_index == main_index + 1
+
+    def test_pillar2_zero_exclusion_is_rendered_when_measurement_is_degraded(self):
+        board = self._board(
+            pillar2={
+                "count": 0,
+                "measured": False,
+                "legacy_unverified_count": 1,
+                "pre_scheme_excluded_count": 0,
+                "health": {"degraded": True},
+                "not_measured": {},
+            },
+        )
+
+        text = "\n".join(results_board.render_results_board(board))
+
+        assert "新方式で記録を始める前の旧記録: 0件（測定不能の理由からは除外）" in text
+
+    @pytest.mark.parametrize(
+        "board_transform",
+        [
+            pytest.param(lambda board: board.pop("pillar2"), id="missing-pillar2-payload"),
+            pytest.param(
+                lambda board: board["pillar2"].pop("pre_scheme_excluded_count"),
+                id="missing-exclusion-key",
+            ),
+            pytest.param(
+                lambda board: board["pillar2"].update(pre_scheme_excluded_count=None),
+                id="null-exclusion-count",
+            ),
+            pytest.param(
+                lambda board: board.pop("measurements", None),
+                id="missing-measurement-health",
+            ),
+        ],
+    )
+    def test_pillar2_exclusion_is_unmeasurable_for_incomplete_contracts(
+        self, board_transform
+    ):
+        board = self._board(
+            measurements={
+                "pillar2": {"measured": True, "reason": None, "dropped_lines": 0},
+            }
+        )
+        board_transform(board)
+
+        text = "\n".join(results_board.render_results_board(board))
+
+        assert "新方式で記録を始める前の旧記録: 評価不能（除外件数も評価不能）" in text
+
+    def test_pillar2_unmeasured_never_renders_partial_count(self):
+        board = self._board(
+            pillar2={
+                "count": 7,
+                "measured": False,
+                "health": {"degraded": True, "events_readable": False},
+                "not_measured": {},
+            },
+            measurements={
+                "pillar2": {"measured": True, "reason": None, "dropped_lines": 0},
+            },
+        )
+
+        text = "\n".join(results_board.render_results_board(board))
+
+        assert "実際に反映された改善（直近30日）: 測定不能" in text
+        assert "実際に反映された改善（直近30日）: 7 件" not in text
+        assert "イベント記録を読めません" in text
+
+    def test_every_numeric_pillar2_health_key_has_a_reader_facing_reason(
+        self, tmp_path
+    ):
+        """producer が増やした数値 health を表示側が取りこぼさない。"""
+        corrections = tmp_path / "corrections.jsonl"
+        events = tmp_path / "reflect_apply_events.jsonl"
+        corrections.write_text(
+            json.dumps(
+                {
+                    "correction_id": "a" * 32,
+                    "extracted_learning": "Use the stable API",
+                    "reflect_status": "pending",
+                    "project_path": None,
+                    "timestamp": "2026-08-31T00:00:00+00:00",
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        events.touch()
+        health = count_applied_reflections(
+            tmp_path,
+            corrections_path=corrections,
+            events_path=events,
+            now=_NOW,
+        )["health"]
+
+        numeric_keys = [key for key, value in health.items() if type(value) is int]
+        assert numeric_keys
+        for key in numeric_keys:
+            reason = _pillar2_degraded_reason({"health": {key: 1}})
+            assert reason != "集計 health が degraded", key
+
+    def test_pillar2_invalid_base_id_count_is_in_unmeasured_reason(self):
+        board = self._board(
+            pillar2={
+                "count": 0,
+                "measured": False,
+                "health": {
+                    "degraded": True,
+                    "invalid_base_id_applied_row_count": 1,
+                    "invalid_base_id_non_applied_row_count": 4,
+                    "invalid_base_id_applied_same_project_row_count": 1,
+                    "invalid_base_id_applied_global_looking_row_count": 0,
+                },
+                "not_measured": {},
+            },
+            measurements={
+                "pillar2": {"measured": True, "reason": None, "dropped_lines": 0},
+            },
+        )
+
+        text = "\n".join(results_board.render_results_board(board))
+
+        assert "不正IDの反映済み基底 1 件（当PJ 1・汎用扱い 0）" in text
+        assert "非反映" not in text
+
+    def test_pillar2_invalid_base_id_reason_breaks_down_global_looking(self):
+        board = self._board(
+            pillar2={
+                "count": 0,
+                "measured": False,
+                "health": {
+                    "degraded": True,
+                    "invalid_base_id_applied_row_count": 4,
+                    "invalid_base_id_applied_same_project_row_count": 1,
+                    "invalid_base_id_applied_global_looking_row_count": 3,
+                },
+                "not_measured": {},
+            },
+            measurements={
+                "pillar2": {"measured": True, "reason": None, "dropped_lines": 0},
+            },
+        )
+
+        text = "\n".join(results_board.render_results_board(board))
+
+        assert "不正IDの反映済み基底 4 件（当PJ 1・汎用扱い 3）" in text
+
+    def test_pillar2_not_measured_targets_are_always_separate(self):
+        text = "\n".join(results_board.render_results_board(self._board()))
+
+        assert "未測定の反映先: hook（記録ストアなし） / pitfall_memory（mtime 衝突）" in text
+
     def test_capture_recall_builder_reports_current_pattern_version(self, monkeypatch, tmp_path):
         eval_path = tmp_path / "eval.jsonl"
         eval_path.touch()
@@ -787,6 +1082,119 @@ class TestRenderResultsBoard:
         result = results_board._build_capture_recall()
         assert result["measured"] is True
         assert result["pattern_version"] == results_board.correction_detection.CORRECTION_PATTERN_VERSION
+
+    def test_capture_recall_falls_back_to_shared_data_dir(self, monkeypatch, tmp_path):
+        """checkout 同梱が無くても共有 DATA_DIR にあれば測れる（#601 worktree 実行）。"""
+        import rl_common
+
+        missing = tmp_path / "absent" / "eval.jsonl"
+        shared = tmp_path / "data" / "bench" / results_board._CAPTURE_EVAL_FILENAME
+        shared.parent.mkdir(parents=True)
+        shared.touch()
+        monkeypatch.setattr(results_board, "_CAPTURE_EVAL_PATH", missing)
+        monkeypatch.setattr(rl_common, "DATA_DIR", tmp_path / "data")
+        opened: list[Path] = []
+
+        def _load(path):
+            # 解決した候補と実際に読む候補が食い違う配線切れを検出するため path を記録する。
+            opened.append(Path(path))
+            return [{"text": "違う、そこです。", "label": "TP"}]
+
+        monkeypatch.setattr(results_board, "load_capture_eval_set", _load)
+
+        result = results_board._build_capture_recall()
+
+        assert result["measured"] is True
+        assert opened == [shared]
+
+    def test_broken_checkout_candidate_does_not_shadow_shared(self, monkeypatch, tmp_path):
+        """checkout 側が読めなくても、健全な共有 DATA_DIR 側で測る（#602 巡1 [Must]）。
+
+        評価セットは git 管理外なので、checkout に更新前の古い実体が残る状態は通常運用で
+        到達しうる。「最初に実在した候補」で打ち切ると、正しい実体があるのに測定不能になる。
+        """
+        import rl_common
+
+        stale = tmp_path / "checkout" / results_board._CAPTURE_EVAL_FILENAME
+        stale.parent.mkdir(parents=True)
+        stale.touch()
+        shared = tmp_path / "data" / "bench" / results_board._CAPTURE_EVAL_FILENAME
+        shared.parent.mkdir(parents=True)
+        shared.touch()
+        monkeypatch.setattr(results_board, "_CAPTURE_EVAL_PATH", stale)
+        monkeypatch.setattr(rl_common, "DATA_DIR", tmp_path / "data")
+
+        def _load(path):
+            if Path(path) == stale:
+                raise results_board.CaptureEvalIntegrityError("stale")
+            return [{"text": "違う、そこです。", "label": "TP"}]
+
+        monkeypatch.setattr(results_board, "load_capture_eval_set", _load)
+
+        result = results_board._build_capture_recall()
+
+        assert result["measured"] is True
+
+    def test_all_candidates_broken_reports_integrity_failure(self, monkeypatch, tmp_path):
+        """全候補が壊れているときは「なし」でなく不一致として申告する。"""
+        import rl_common
+
+        stale = tmp_path / "checkout" / results_board._CAPTURE_EVAL_FILENAME
+        stale.parent.mkdir(parents=True)
+        stale.touch()
+        shared = tmp_path / "data" / "bench" / results_board._CAPTURE_EVAL_FILENAME
+        shared.parent.mkdir(parents=True)
+        shared.touch()
+        monkeypatch.setattr(results_board, "_CAPTURE_EVAL_PATH", stale)
+        monkeypatch.setattr(rl_common, "DATA_DIR", tmp_path / "data")
+
+        def _load(_path):
+            raise results_board.CaptureEvalIntegrityError("broken")
+
+        monkeypatch.setattr(results_board, "load_capture_eval_set", _load)
+
+        assert results_board._build_capture_recall() == {
+            "measured": False,
+            "reason": "評価セット不一致",
+        }
+
+    def test_capture_recall_unmeasured_when_absent_everywhere(self, monkeypatch, tmp_path):
+        """どの候補にも実体が無ければ測定不能と申告する（黙って 0 件にしない）。"""
+        import rl_common
+
+        monkeypatch.setattr(results_board, "_CAPTURE_EVAL_PATH", tmp_path / "absent" / "eval.jsonl")
+        monkeypatch.setattr(rl_common, "DATA_DIR", tmp_path / "empty-data")
+
+        result = results_board._build_capture_recall()
+
+        assert result == {"measured": False, "reason": "評価セットなし"}
+
+    def test_capture_eval_prefers_checkout_over_shared(self, monkeypatch, tmp_path):
+        """両方に実体があるときは checkout 同梱を先に読む（探索順を固定する）。
+
+        production が実際に通る `_build_capture_recall` の loader 呼び出し順で固定する
+        （順序専用のアクセサを別に置くと、production の順序が変わっても緑のまま残る）。
+        """
+        import rl_common
+
+        bundled = tmp_path / "checkout" / results_board._CAPTURE_EVAL_FILENAME
+        bundled.parent.mkdir(parents=True)
+        bundled.touch()
+        shared = tmp_path / "data" / "bench" / results_board._CAPTURE_EVAL_FILENAME
+        shared.parent.mkdir(parents=True)
+        shared.touch()
+        monkeypatch.setattr(results_board, "_CAPTURE_EVAL_PATH", bundled)
+        monkeypatch.setattr(rl_common, "DATA_DIR", tmp_path / "data")
+        opened: list[Path] = []
+
+        def _load(path):
+            opened.append(Path(path))
+            return [{"text": "違う、そこです。", "label": "TP"}]
+
+        monkeypatch.setattr(results_board, "load_capture_eval_set", _load)
+
+        assert results_board._build_capture_recall()["measured"] is True
+        assert opened == [bundled]
 
     @pytest.mark.parametrize(
         ("content", "reason"),
@@ -950,6 +1358,7 @@ class TestRenderResultsBoard:
                  "top3_examples": [{"text": "四国めたんじゃなくて", "reason": "呼称の訂正", "idiom": ""}]},
             ],
             "latest_coverage": {"week_id": "2026-W10", "judged": 10, "total": 10},
+            "coverage_gaps": [],
             "diagnostics": {},
             "generated_at": _NOW.isoformat(),
         })
@@ -1221,6 +1630,7 @@ class TestRenderCorrectionRatePointState:
                  "top3_examples": []},
             ],
             "latest_coverage": {"week_id": "2026-W10", "judged": 10, "total": 10},
+            "coverage_gaps": [],
             "diagnostics": {},
             "generated_at": _NOW.isoformat(),
         }
@@ -1286,7 +1696,6 @@ class TestRenderCorrectionRatePointState:
         summary = _point_gate_summary(point_week=pw, current_run_length=1, latest_coverage=latest)
         text = "\n".join(results_board._render_correction_rate(summary))
         assert "最新候補週 2026-W34: 判定カバレッジ 50/90・未測定・理由: tp_conflict" in text
-
     def test_i7ab_all_pj_listed_and_sums_match_total(self):
         """I7(a)(b)/N6: judged>=1 の PJ を全件列挙し、PJ 別合計が全体分母/分子と一致する。"""
         pj_breakdown = {
@@ -1378,3 +1787,183 @@ class TestRenderCorrectionRatePointState:
         text = "\n".join(results_board._render_correction_rate(summary))
         assert "指摘率（2026-W12）" in text
         assert "連続 run の進捗: 3/4 週連続" in text
+
+
+class TestRenderCoverageGapReasons:
+    def test_all_low_coverage_weeks_show_both_zero_inclusive_reasons(self):
+        summary = {
+            **_closed_gate_summary(),
+            "latest_coverage": {"week_id": "2026-W34", "judged": 9, "total": 10},
+            "coverage_gaps": [
+                {
+                    "week_id": "2026-W32", "judged": 129, "total": 842,
+                    "reason": {
+                        "measured": True,
+                        "deadline_exceeded_count": 713,
+                        "unjudged_count": 0,
+                        "unclassified_count": 0,
+                        "reason": None,
+                    },
+                },
+                {
+                    "week_id": "2026-W34", "judged": 9, "total": 10,
+                    "reason": {
+                        "measured": True,
+                        "deadline_exceeded_count": 0,
+                        "unjudged_count": 1,
+                        "unclassified_count": 0,
+                        "reason": None,
+                    },
+                },
+            ],
+        }
+
+        lines = results_board._render_correction_rate(summary)
+
+        assert (
+            "- 2026-W32 カバレッジ不足理由: "
+            "締切（+3日）超過で集計外: 713 件・未判定: 0 件"
+        ) in lines
+        assert (
+            "- 2026-W34 カバレッジ不足理由: "
+            "締切（+3日）超過で集計外: 0 件・未判定: 1 件"
+        ) in lines
+        reason_lines = [line for line in lines if line.startswith("- 2026-W")]
+        assert reason_lines[0].startswith("- 2026-W34 ")
+        headline_index = lines.index(next(line for line in lines if line.startswith("**指摘率")))
+        first_reason_index = lines.index(reason_lines[0])
+        assert headline_index < first_reason_index
+
+    def test_unclassified_gap_is_visible_and_not_mixed_into_main_counts(self):
+        summary = {
+            **_closed_gate_summary(),
+            "latest_coverage": {"week_id": "2026-W34", "judged": 6, "total": 10},
+            "coverage_gaps": [{
+                "week_id": "2026-W34", "judged": 6, "total": 10,
+                "reason": {
+                    "measured": True,
+                    "deadline_exceeded_count": 2,
+                    "unjudged_count": 1,
+                    "unclassified_count": 1,
+                    "reason": None,
+                },
+            }],
+        }
+
+        lines = results_board._render_correction_rate(summary)
+        reason_line = next(line for line in lines if "カバレッジ不足理由" in line)
+
+        assert "集計外: 2 件・未判定: 1 件・判定日時なし（旧形式レコード）: 1 件" in reason_line
+        assert "集計外: 3 件" not in reason_line
+        assert "判定カバレッジ 6/10" in "\n".join(lines)
+
+    @pytest.mark.parametrize(
+        "coverage_gaps",
+        [None, pytest.param("missing", id="missing-key")],
+    )
+    def test_unavailable_or_missing_breakdown_renders_evaluation_impossible(self, coverage_gaps):
+        summary = _closed_gate_summary()
+        if coverage_gaps == "missing":
+            del summary["coverage_gaps"]
+        else:
+            summary["coverage_gaps"] = coverage_gaps
+
+        text = "\n".join(results_board._render_correction_rate(summary))
+
+        assert "カバレッジ不足理由: 評価不能" in text
+
+    def test_week_level_unmeasured_breakdown_renders_evaluation_impossible_without_zeroes(self):
+        summary = {
+            **_closed_gate_summary(),
+            "latest_coverage": {"week_id": "2026-W34", "judged": 0, "total": 10},
+            "coverage_gaps": [{
+                "week_id": "2026-W34", "judged": 0, "total": 10,
+                "reason": {
+                    "measured": False,
+                    "deadline_exceeded_count": None,
+                    "unjudged_count": None,
+                    "unclassified_count": None,
+                    "reason": "判定記録を取得できません",
+                },
+            }],
+        }
+
+        reason_line = next(
+            line for line in results_board._render_correction_rate(summary)
+            if "カバレッジ不足理由" in line
+        )
+        assert reason_line == "- 2026-W34 カバレッジ不足理由: 評価不能（判定記録を取得できません）"
+        assert "0 件" not in reason_line
+
+    def test_inconsistent_breakdown_total_renders_evaluation_impossible_without_counts(self):
+        summary = {
+            **_closed_gate_summary(),
+            "latest_coverage": {"week_id": "2026-W34", "judged": 129, "total": 842},
+            "coverage_gaps": [{
+                "week_id": "2026-W34", "judged": 129, "total": 842,
+                "reason": {
+                    "measured": True,
+                    "deadline_exceeded_count": 712,
+                    "unjudged_count": 0,
+                    "unclassified_count": 0,
+                    "reason": None,
+                },
+            }],
+        }
+
+        reason_line = next(
+            line for line in results_board._render_correction_rate(summary)
+            if "カバレッジ不足理由" in line
+        )
+
+        assert reason_line == (
+            "- 2026-W34 カバレッジ不足理由: "
+            "評価不能（内訳合計が母集団と一致しません）"
+        )
+        assert "712 件" not in reason_line
+
+    def test_missing_measured_key_renders_evaluation_impossible(self):
+        summary = {
+            **_closed_gate_summary(),
+            "coverage_gaps": [{
+                "week_id": "2026-W34", "judged": 9, "total": 10,
+                "reason": {
+                    "deadline_exceeded_count": 0,
+                    "unjudged_count": 1,
+                    "unclassified_count": 0,
+                    "reason": None,
+                },
+            }],
+        }
+
+        reason_line = next(
+            line for line in results_board._render_correction_rate(summary)
+            if "カバレッジ不足理由" in line
+        )
+
+        assert reason_line.endswith(": 評価不能")
+        assert "未判定: 1 件" not in reason_line
+
+    @pytest.mark.parametrize("missing_count", [None, True])
+    def test_non_integer_reason_count_renders_evaluation_impossible(self, missing_count):
+        summary = {
+            **_closed_gate_summary(),
+            "coverage_gaps": [{
+                "week_id": "2026-W34", "judged": 9, "total": 10,
+                "reason": {
+                    "measured": True,
+                    "deadline_exceeded_count": 0,
+                    "unjudged_count": missing_count,
+                    "unclassified_count": 0,
+                    "reason": None,
+                },
+            }],
+        }
+
+        reason_line = next(
+            line for line in results_board._render_correction_rate(summary)
+            if "カバレッジ不足理由" in line
+        )
+
+        assert "評価不能（内訳合計が母集団と一致しません）" in reason_line
+        assert "未判定:" not in reason_line

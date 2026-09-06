@@ -41,6 +41,59 @@ class _FakeCompleted:
         self.stderr = stderr
 
 
+@pytest.mark.parametrize(
+    "json_schema",
+    [
+        None,
+        '{"type":"object","properties":{"verdicts":{"type":"array"}},'
+        '"required":["verdicts"]}',
+    ],
+)
+def test_command_preserves_all_safety_invariants_with_optional_schema(
+    monkeypatch, json_schema
+):
+    """#625: schema の有無にかかわらず安全な完全コマンドを固定する。"""
+    captured = {}
+
+    def _fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return _FakeCompleted(stdout="ok")
+
+    monkeypatch.setattr(sc.subprocess, "run", _fake_run)
+    sc.call_claude_headless(
+        "prompt", model="haiku", timeout=42, json_schema=json_schema
+    )
+
+    expected = [
+        "claude",
+        "-p",
+        "prompt",
+        "--model",
+        "haiku",
+        "--tools",
+        "",
+        "--settings",
+        sc._safe_settings_json(),
+        "--strict-mcp-config",
+        "--safe-mode",
+        "--no-session-persistence",
+    ]
+    if json_schema is not None:
+        expected += ["--json-schema", json_schema]
+    assert captured["cmd"] == expected
+
+    tools_index = captured["cmd"].index("--tools")
+    assert captured["cmd"][tools_index + 1] == ""
+    settings_index = captured["cmd"].index("--settings")
+    settings = json.loads(captured["cmd"][settings_index + 1])
+    assert settings == {
+        "permissions": {
+            "deny": sc.BUILTIN_TOOL_NAMES,
+            "defaultMode": "default",
+        }
+    }
+
+
 def test_command_uses_tools_empty_as_primary_defense(monkeypatch):
     """#410 round2 [Must]A: --tools "" を主防御として使う（codex 指摘: deny 列挙方式は
     将来ツールが増えたとき fail-open する。--tools "" は built-in セット全体を空にするため

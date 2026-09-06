@@ -3,6 +3,7 @@
 import json
 import os
 import sys
+import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
@@ -28,6 +29,7 @@ def _make_correction(
     timestamp=None,
     extracted_learning=None,
     session_id=None,
+    correction_id=None,
 ):
     """テスト用 correction レコードを生成する。"""
     record = {
@@ -37,6 +39,7 @@ def _make_correction(
         "reflect_status": reflect_status,
         "project_path": project_path,
         "timestamp": timestamp or datetime.now(timezone.utc).isoformat(),
+        "correction_id": correction_id or uuid.uuid4().hex,
     }
     if extracted_learning:
         record["extracted_learning"] = extracted_learning
@@ -51,6 +54,14 @@ def _write_corrections(tmp_path, corrections):
     lines = [json.dumps(c, ensure_ascii=False) for c in corrections]
     filepath.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return filepath
+
+
+def _targets(filepath, indices):
+    records = reflect.load_corrections(filepath)
+    return [
+        reflect.UpdateTarget(index, reflect.persistence.record_identity(records[index]))
+        for index in indices
+    ]
 
 
 def _fresh_detected_at() -> str:
@@ -87,6 +98,11 @@ class TestExtractPending:
     def test_empty_records(self):
         """空リストには空リストを返す。"""
         assert reflect.extract_pending([]) == []
+
+    def test_extract_pending_treats_event_shaped_row_as_pending(self):
+        """別ストア契約を破ると event 行が pending に混入することを実証する。"""
+        event = {"event_type": "correction_applied", "schema_version": 1}
+        assert reflect.extract_pending([event]) == [event]
 
 
 # --- Test: classify_project_scope ---
@@ -285,7 +301,7 @@ class TestSkipAllMode:
         ]
         filepath = _write_corrections(tmp_path, corrections)
 
-        reflect.update_reflect_status(filepath, [0, 2], "skipped")
+        reflect.update_reflect_status(filepath, _targets(filepath, [0, 2]), "skipped")
 
         updated = reflect.load_corrections(filepath)
         assert updated[0]["reflect_status"] == "skipped"
@@ -316,6 +332,32 @@ class TestSkipAllMode:
         reflect.update_reflect_status(filepath, [], "skipped")
         # エラーなく完了すること
         assert True
+
+    def test_skip_all_does_not_touch_event_store(self, tmp_path):
+        """--skip-all は柱2イベントストアを一切読み書きしない。"""
+        import rl_common
+
+        corrections = _write_corrections(
+            tmp_path, [_make_correction(reflect_status="pending")]
+        )
+        event_path = rl_common.DATA_DIR / "reflect_apply_events.jsonl"
+        event_path.parent.mkdir(parents=True, exist_ok=True)
+        content = "".join(
+            json.dumps({"event_type": "probe", "ordinal": index}) + "\n"
+            for index in range(1000)
+        )
+        event_path.write_text(content, encoding="utf-8")
+        before_stat = event_path.stat()
+
+        with mock.patch("sys.argv", [
+            "reflect.py", "--skip-all", "--corrections-file", str(corrections)
+        ]):
+            reflect.main()
+
+        after_stat = event_path.stat()
+        assert event_path.read_text(encoding="utf-8") == content
+        assert after_stat.st_mtime_ns == before_stat.st_mtime_ns
+        assert after_stat.st_size == before_stat.st_size
 
 
 # --- Test: --apply-all mode ---
@@ -481,7 +523,7 @@ class TestUpdateReflectStatus:
             _make_correction(message="msg2"),
         ]
         filepath = _write_corrections(tmp_path, corrections)
-        reflect.update_reflect_status(filepath, [0, 2], "skipped")
+        reflect.update_reflect_status(filepath, _targets(filepath, [0, 2]), "skipped")
 
         updated = reflect.load_corrections(filepath)
         assert updated[0]["reflect_status"] == "skipped"
@@ -492,7 +534,7 @@ class TestUpdateReflectStatus:
         """既存 --skip-all 呼び出し（target_path/draft_line 省略）が無改修で動く（MUST）。"""
         corrections = [_make_correction(message="msg0")]
         filepath = _write_corrections(tmp_path, corrections)
-        result = reflect.update_reflect_status(filepath, [0], "skipped")
+        result = reflect.update_reflect_status(filepath, _targets(filepath, [0]), "skipped")
         assert result["status"] == "skipped"
 
     def test_applied_without_target_path_raises(self, tmp_path):
@@ -500,14 +542,14 @@ class TestUpdateReflectStatus:
         corrections = [_make_correction(message="msg0")]
         filepath = _write_corrections(tmp_path, corrections)
         with pytest.raises(ValueError):
-            reflect.update_reflect_status(filepath, [0], "applied")
+            reflect.update_reflect_status(filepath, _targets(filepath, [0]), "applied")
 
     def test_applied_without_draft_line_raises(self, tmp_path):
         corrections = [_make_correction(message="msg0")]
         filepath = _write_corrections(tmp_path, corrections)
         with pytest.raises(ValueError):
             reflect.update_reflect_status(
-                filepath, [0], "applied", target_path=str(tmp_path / "rule.md"),
+                filepath, _targets(filepath, [0]), "applied", target_path=str(tmp_path / "rule.md"),
             )
 
     def test_applied_when_line_matches_target_file(self, tmp_path):
@@ -518,7 +560,7 @@ class TestUpdateReflectStatus:
         target.write_text("- 起草した行そのもの\n", encoding="utf-8")
 
         result = reflect.update_reflect_status(
-            filepath, [0], "applied",
+            filepath, _targets(filepath, [0]), "applied",
             target_path=str(target), draft_line="起草した行そのもの",
         )
 
@@ -534,7 +576,7 @@ class TestUpdateReflectStatus:
         target.write_text("- 別の行\n", encoding="utf-8")
 
         result = reflect.update_reflect_status(
-            filepath, [0], "applied",
+            filepath, _targets(filepath, [0]), "applied",
             target_path=str(target), draft_line="書いていない行",
         )
 
@@ -549,13 +591,243 @@ class TestUpdateReflectStatus:
         target = tmp_path / "does-not-exist.md"
 
         result = reflect.update_reflect_status(
-            filepath, [0], "applied",
+            filepath, _targets(filepath, [0]), "applied",
             target_path=str(target), draft_line="何かの行",
         )
 
         assert result["status"] == "apply_unverified"
         updated = reflect.load_corrections(filepath)
         assert updated[0]["reflect_status"] == "promoted"
+
+
+# --- Test: update_reflect_status の index 空間ずれ (#588) ---
+#
+# load_corrections は空行・壊れた JSON 行を「捨てた配列」の index を返すが、
+# 呼び出し側（reflect.py の --apply/--skip 等）は load_corrections の戻り値配列に
+# enumerate した index を update_reflect_status へ渡す契約になっている。
+# update_reflect_status がこの index 空間と一致しないと、指定と別のレコードが
+# 書き換わる（issue #588）。
+
+class TestUpdateReflectStatusIndexAlignment:
+    def test_stale_index_identity_is_rejected_without_rewrite(self, tmp_path):
+        filepath = _write_corrections(
+            tmp_path,
+            [
+                _make_correction(message="before"),
+                _make_correction(message="target"),
+                _make_correction(message="after"),
+            ],
+        )
+        target = _targets(filepath, [1])
+        remaining = reflect.load_corrections(filepath)[1:]
+        filepath.write_text(
+            "\n".join(json.dumps(record, ensure_ascii=False) for record in remaining) + "\n",
+            encoding="utf-8",
+        )
+        before_call = filepath.read_bytes()
+
+        result = reflect.update_reflect_status(filepath, target, "skipped")
+
+        assert result["status"] == "identity_mismatch"
+        assert filepath.read_bytes() == before_call
+
+    def test_blank_line_does_not_shift_target(self, tmp_path):
+        """(a) 陰性試験: 空行があっても load_corrections の index と一致した
+        レコードだけが更新される（別レコードが書き換わらない）。"""
+        filepath = tmp_path / "corrections.jsonl"
+        filepath.write_text(
+            "\n"
+            + json.dumps({"id": "A", "reflect_status": "promoted"}, ensure_ascii=False) + "\n"
+            + json.dumps({"id": "B", "reflect_status": "promoted"}, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        records = reflect.load_corrections(filepath)
+        assert [r["id"] for r in records] == ["A", "B"]
+
+        # B（load_corrections の index=1）を指定する
+        result = reflect.update_reflect_status(filepath, _targets(filepath, [1]), "skipped")
+
+        updated = reflect.load_corrections(filepath)
+        by_id = {r["id"]: r["reflect_status"] for r in updated}
+        assert by_id["B"] == "skipped", "指定した B が更新されるべき"
+        assert by_id["A"] == "promoted", "A は無関係なので変わらないべき"
+        assert result["status"] == "skipped"
+
+    def test_malformed_json_line_does_not_shift_target(self, tmp_path):
+        """(b) 陰性試験: 壊れた JSON 行があっても、対象は load_corrections の
+        index と一致したレコードだけが更新される。"""
+        filepath = tmp_path / "corrections.jsonl"
+        filepath.write_text(
+            json.dumps({"id": "A", "reflect_status": "promoted"}, ensure_ascii=False) + "\n"
+            + "invalid json\n"
+            + json.dumps({"id": "B", "reflect_status": "promoted"}, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        records = reflect.load_corrections(filepath)
+        assert [r["id"] for r in records] == ["A", "B"]
+
+        # B（load_corrections の index=1）を指定する
+        result = reflect.update_reflect_status(filepath, _targets(filepath, [1]), "skipped")
+
+        updated = reflect.load_corrections(filepath)
+        by_id = {r["id"]: r["reflect_status"] for r in updated}
+        assert by_id["B"] == "skipped", "指定した B が更新されるべき"
+        assert by_id["A"] == "promoted", "A は無関係なので変わらないべき"
+        assert result["status"] == "skipped"
+        # 壊れた行はそのまま温存される（別レコードとして誤変換しない）
+        lines = filepath.read_text(encoding="utf-8").splitlines()
+        assert "invalid json" in lines
+
+    def test_out_of_range_index_does_not_report_success(self, tmp_path):
+        """(c) 陰性試験: 対象を同定できない（存在しない index）ときは
+        成功 (status==指定した status) を返さない。"""
+        corrections = [_make_correction(message="msg0")]
+        filepath = _write_corrections(tmp_path, corrections)
+
+        result = reflect.update_reflect_status(
+            filepath, [reflect.UpdateTarget(5, ("id", "missing"))], "skipped"
+        )
+
+        # #588 [Must]: != "skipped" だけでは戻り値契約を固定できない
+        # （誤って "apply_unverified" を返す実装でも緑になってしまう）。
+        assert result["status"] == "not_found", (
+            "存在しない index を指定したら not_found を返すべき"
+        )
+        assert "5" in (result["reason"] or ""), (
+            "reason に見つからなかった index が含まれるべき"
+        )
+        updated = reflect.load_corrections(filepath)
+        assert updated[0]["reflect_status"] == "pending", "誰も更新されないべき"
+
+    def test_missing_file_with_indices_does_not_report_success(self, tmp_path):
+        """(c) 陰性試験: 非空 index を渡した時点で対象ファイルが消えていても
+        成功を返さない（検索後・更新前にファイルが消える経路）。"""
+        filepath = tmp_path / "corrections.jsonl"
+        assert not filepath.exists()
+
+        result = reflect.update_reflect_status(
+            filepath, [reflect.UpdateTarget(0, ("id", "missing"))], "skipped"
+        )
+
+        assert result["status"] == "not_found", (
+            "対象ファイルが存在しないのに成功扱いを返してはいけない"
+        )
+        assert result["reason"], "理由が付くべき"
+
+    def test_missing_file_with_indices_does_not_report_applied(self, tmp_path):
+        """(c) 陰性試験: applied 経路でも同じ。反映先の行照合に通っても、
+        corrections ファイルが無ければ applied を返さない（revert 記録へ進めない）。"""
+        target = tmp_path / "rules.md"
+        target.write_text("- 起草した行\n", encoding="utf-8")
+        filepath = tmp_path / "corrections.jsonl"
+        assert not filepath.exists()
+
+        result = reflect.update_reflect_status(
+            filepath, [reflect.UpdateTarget(0, ("id", "missing"))], "applied",
+            target_path=str(target), draft_line="- 起草した行",
+        )
+
+        assert result["status"] == "not_found", (
+            "corrections ファイルが無いのに applied を返してはいけない"
+        )
+
+    def test_empty_indices_is_noop_success(self, tmp_path):
+        """陽性対照: indices が空なら『更新すべきものが無い』no-op 成功。
+        not_found（指定したのに見つからない）と混同しない。"""
+        corrections = [_make_correction(message="msg0")]
+        filepath = _write_corrections(tmp_path, corrections)
+
+        result = reflect.update_reflect_status(filepath, [], "skipped")
+
+        assert result["status"] == "skipped"
+        updated = reflect.load_corrections(filepath)
+        assert updated[0]["reflect_status"] == "pending", "誰も更新されないべき"
+
+    def test_positive_control_normal_file_still_updates(self, tmp_path):
+        """陽性対照: 空行・壊れた行が無い正常な corrections.jsonl では
+        従来どおり指定したレコードだけが更新される。"""
+        corrections = [
+            _make_correction(message="msg0"),
+            _make_correction(message="msg1"),
+            _make_correction(message="msg2"),
+        ]
+        filepath = _write_corrections(tmp_path, corrections)
+
+        result = reflect.update_reflect_status(filepath, _targets(filepath, [1]), "skipped")
+
+        updated = reflect.load_corrections(filepath)
+        assert updated[0]["reflect_status"] == "pending"
+        assert updated[1]["reflect_status"] == "skipped"
+        assert updated[2]["reflect_status"] == "pending"
+        assert result["status"] == "skipped"
+
+
+# --- Test: not_found 契約が CLI 呼出側まで貫通するか (#588) ---
+#
+# update_reflect_status が返す "not_found" は失敗である。呼出側が戻り値を捨てたり
+# exit 0 のまま返したりすると、自動呼出側が成功扱いで先へ進む。
+
+def _vanishing_update(monkeypatch, filepath):
+    """検索後・更新前に corrections ファイルが消える競合を再現する。
+
+    update_reflect_status 本体は差し替えず、呼ばれる直前にファイルを消すだけ。
+    したがって返る not_found は実装が実際に判定したもの。
+    """
+    original = reflect.update_reflect_status
+
+    def _wrapper(fp, indices, status, **kwargs):
+        if filepath.exists():
+            filepath.unlink()
+        return original(fp, indices, status, **kwargs)
+
+    monkeypatch.setattr(reflect, "update_reflect_status", _wrapper)
+
+
+class TestNotFoundContractReachesCLI:
+    def test_skip_exits_nonzero_on_not_found(self, tmp_path, monkeypatch):
+        """陰性試験: --skip の更新側 not_found は非0終了になる
+        （検索時の not_found が exit 1 なのに更新時だけ exit 0 だった）。"""
+        corrections = [_make_correction(session_id="s1", timestamp="2026-08-31T00:00:00+00:00")]
+        filepath = _write_corrections(tmp_path, corrections)
+        cid = reflect.make_source_correction_id("s1", "2026-08-31T00:00:00+00:00")
+        _vanishing_update(monkeypatch, filepath)
+
+        with mock.patch("sys.argv", [
+            "reflect.py", "--skip", cid, "--corrections-file", str(filepath),
+        ]):
+            with pytest.raises(SystemExit) as exc:
+                reflect.main()
+        assert exc.value.code != 0, "更新側の not_found は非0終了にすべき"
+
+    def test_skip_all_reports_not_found(self, tmp_path, monkeypatch, capsys):
+        """陰性試験: --skip-all は戻り値を捨てず、not_found を成功表示しない。"""
+        corrections = [_make_correction(reflect_status="pending")]
+        filepath = _write_corrections(tmp_path, corrections)
+        _vanishing_update(monkeypatch, filepath)
+
+        with mock.patch("sys.argv", [
+            "reflect.py", "--skip-all", "--corrections-file", str(filepath),
+        ]):
+            with pytest.raises(SystemExit) as exc:
+                reflect.main()
+        assert exc.value.code != 0, "not_found なら非0終了にすべき"
+        out = capsys.readouterr().out
+        assert "skipped_all" not in out, "失敗したのに成功表示を出してはいけない"
+        assert "not_found" in out
+
+    def test_skip_all_positive_control_still_succeeds(self, tmp_path, capsys):
+        """陽性対照: 正常時の --skip-all は従来どおり成功表示で正常終了する。"""
+        corrections = [_make_correction(reflect_status="pending")]
+        filepath = _write_corrections(tmp_path, corrections)
+
+        with mock.patch("sys.argv", [
+            "reflect.py", "--skip-all", "--corrections-file", str(filepath),
+        ]):
+            reflect.main()
+
+        out = capsys.readouterr().out
+        assert "skipped_all" in out
+        assert reflect.load_corrections(filepath)[0]["reflect_status"] == "skipped"
 
 
 # --- Test: build_output ---
@@ -724,6 +996,119 @@ class TestApplyCLI:
         assert output["status"] == "dry_run"
         assert filepath.read_bytes() == before_bytes
 
+    def test_apply_dry_run_precedes_correction_message_validation(self, tmp_path, capsys):
+        """--dry-run は本文hash検証より先に返る（dry-run ゲートを後段の検証で殺さない）。"""
+        corr = _make_correction(reflect_status="promoted", session_id="sess1", timestamp="2026-08-17T00:00:00Z")
+        corr.pop("message")
+        filepath = _write_corrections(tmp_path, [corr])
+        before_bytes = filepath.read_bytes()
+        target = tmp_path / "rule.md"
+        target.write_text("- 起草した行\n", encoding="utf-8")
+        draft_line_file = tmp_path / "draft.txt"
+        draft_line_file.write_text("起草した行", encoding="utf-8")
+        source_id = reflect.make_source_correction_id("sess1", "2026-08-17T00:00:00Z")
+
+        with mock.patch("sys.argv", [
+            "reflect.py", "--apply", source_id,
+            "--target-path", str(target),
+            "--draft-line-file", str(draft_line_file),
+            "--corrections-file", str(filepath),
+            "--dry-run",
+        ]):
+            reflect.main()
+
+        output = json.loads(capsys.readouterr().out)
+        assert output["status"] == "dry_run"
+        assert filepath.read_bytes() == before_bytes
+
+    def test_apply_rejects_missing_correction_message_before_any_write(
+        self, tmp_path, capsys, monkeypatch
+    ):
+        """本文hashを作れない correction はイベント追記・状態更新より前に拒否する。"""
+        corr = _make_correction(
+            reflect_status="promoted",
+            session_id="sess1",
+            timestamp="2026-08-17T00:00:00Z",
+        )
+        corr.pop("message")
+        filepath = _write_corrections(tmp_path, [corr])
+        before_bytes = filepath.read_bytes()
+        target = tmp_path / "rule.md"
+        target.write_text("- 起草した行\n", encoding="utf-8")
+        draft_line_file = tmp_path / "draft.txt"
+        draft_line_file.write_text("起草した行", encoding="utf-8")
+        source_id = reflect.make_source_correction_id(
+            "sess1", "2026-08-17T00:00:00Z"
+        )
+
+        append = mock.Mock(return_value=mock.Mock(status="appended"))
+        update = mock.Mock()
+        monkeypatch.setattr(reflect, "append_unique_record", append)
+        monkeypatch.setattr(reflect, "update_reflect_status", update)
+
+        with mock.patch("sys.argv", [
+            "reflect.py", "--apply", source_id,
+            "--target-path", str(target),
+            "--draft-line-file", str(draft_line_file),
+            "--corrections-file", str(filepath),
+        ]):
+            with pytest.raises(SystemExit) as exc_info:
+                reflect.main()
+
+        assert exc_info.value.code == 1
+        output = json.loads(capsys.readouterr().out)
+        assert output["status"] == "pillar2_event_failed"
+        assert output["pillar2_event"]["status"] == "invalid_correction_message"
+        # 次手（--skip / message 補完）を必ず示す。文言そのものは固定しない。
+        assert "--skip" in output["pillar2_event"]["reason"]
+        append.assert_not_called()
+        update.assert_not_called()
+        assert filepath.read_bytes() == before_bytes
+
+    def test_apply_hashes_selected_correction_before_any_write(
+        self, tmp_path, capsys, monkeypatch
+    ):
+        """別レコードの本文で対象correctionのhash欠落を補ってはならない。"""
+        first = _make_correction(
+            message="別の correction 本文",
+            reflect_status="promoted",
+            session_id="sess1",
+            timestamp="2026-08-16T00:00:00Z",
+        )
+        target_corr = _make_correction(
+            reflect_status="promoted",
+            session_id="sess2",
+            timestamp="2026-08-17T00:00:00Z",
+        )
+        target_corr.pop("message")
+        filepath = _write_corrections(tmp_path, [first, target_corr])
+        target = tmp_path / "rule.md"
+        target.write_text("- 起草した行\n", encoding="utf-8")
+        draft_line_file = tmp_path / "draft.txt"
+        draft_line_file.write_text("起草した行", encoding="utf-8")
+        source_id = reflect.make_source_correction_id(
+            "sess2", "2026-08-17T00:00:00Z"
+        )
+
+        append = mock.Mock(return_value=mock.Mock(status="appended"))
+        update = mock.Mock()
+        monkeypatch.setattr(reflect, "append_unique_record", append)
+        monkeypatch.setattr(reflect, "update_reflect_status", update)
+
+        with mock.patch("sys.argv", [
+            "reflect.py", "--apply", source_id,
+            "--target-path", str(target),
+            "--draft-line-file", str(draft_line_file),
+            "--corrections-file", str(filepath),
+        ]):
+            with pytest.raises(SystemExit) as exc_info:
+                reflect.main()
+
+        assert exc_info.value.code == 1
+        assert json.loads(capsys.readouterr().out)["status"] == "pillar2_event_failed"
+        append.assert_not_called()
+        update.assert_not_called()
+
 
 # --- Test: --skip（#514 修正在庫の『もう出さない』） ---
 
@@ -753,6 +1138,36 @@ class TestSkipCLI:
         ]):
             with pytest.raises(SystemExit):
                 reflect.main()
+
+    def test_skip_unmigrated_correction_without_audit_event(
+        self, tmp_path, capsys, monkeypatch
+    ):
+        """correction_id 未移行でも skip は続行し、参照不能イベントは残さない。"""
+        corr = _make_correction(
+            reflect_status="promoted",
+            session_id="sess1",
+            timestamp="2026-08-17T00:00:00Z",
+        )
+        corr.pop("correction_id")
+        filepath = _write_corrections(tmp_path, [corr])
+        source_id = reflect.make_source_correction_id(
+            "sess1", "2026-08-17T00:00:00Z"
+        )
+        append = mock.Mock()
+        monkeypatch.setattr(reflect, "append_unique_record", append)
+
+        with mock.patch("sys.argv", [
+            "reflect.py", "--skip", source_id, "--corrections-file", str(filepath),
+        ]):
+            reflect.main()
+
+        output = json.loads(capsys.readouterr().out)
+        assert output["status"] == "skipped"
+        assert output["event_recorded"] is False
+        assert "correction_id" in output["note"]
+        assert "移行" in output["note"]
+        append.assert_not_called()
+        assert reflect.load_corrections(filepath)[0]["reflect_status"] == "skipped"
 
     def test_skip_does_not_overwrite_applied(self, tmp_path, capsys):
         """既に applied 済みのレコードは --skip で上書きしない（安全弁）。"""

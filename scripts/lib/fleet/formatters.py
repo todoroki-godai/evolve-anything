@@ -387,6 +387,22 @@ def _append_corrections_read_health(lines: list, result: dict) -> None:
         )
 
 
+def _append_weak_signals_read_health(lines: list, result: dict) -> None:
+    """劣化した canonical/legacy weak_signals source を個別表示する（#539）。"""
+    for source in (result.get("weak_signals_read_health") or {}).get("sources", []):
+        readable = source.get("readable", True)
+        malformed = int(source.get("malformed_lines", 0) or 0)
+        path = source.get("path") or "weak_signals.jsonl"
+        if not readable:
+            err = source.get("error") or "unknown error"
+            lines.append(f"（{path} 読取失敗: {err} — weak 在庫が過小表示の可能性）")
+        if malformed:
+            lines.append(
+                f"（{path} に壊れた行 {malformed} 件"
+                f" — 該当行は無視・weak 在庫が過小表示の可能性）"
+            )
+
+
 def _append_queue_status(lines: list, result: dict) -> None:
     """queue 全体の状態ラベル + 理由を先頭に1行出す（#267 Sprint 1）。
 
@@ -417,6 +433,7 @@ def format_queue_table(result: dict) -> str:
     lines: list[str] = []
     _append_queue_status(lines, result)
     _append_corrections_read_health(lines, result)
+    _append_weak_signals_read_health(lines, result)
     if not queue:
         lines.append(
             f"[fleet:queue] 待ち PJ はありません"

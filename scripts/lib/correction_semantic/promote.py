@@ -25,6 +25,15 @@ from weak_signals.ttl import is_effectively_expired
 
 # #46 read 層拡張: union read（昇格候補）+ union mark（再昇格防止）の候補 dir 解決を共有する。
 from store_read_union import iter_read_store_paths as _iter_read_store_paths  # noqa: E402
+from rl_common import append_correction_record, new_correction_id
+from rl_common.correction_id import (
+    assert_no_unexpected_content_loss,
+    atomic_write_text_preserving_mode,
+    corrections_write_lock,
+    fcntl_unsupported_reason,
+    snapshot_identities,
+)
+from rl_common.persistence import split_corrections_lines
 
 
 def _normalize_project_path(value: str) -> str:
@@ -359,6 +368,7 @@ def _build_correction_record(
     prov = rec.get("provenance") or {}
     now = datetime.now(timezone.utc).isoformat()
     out = {
+        "correction_id": new_correction_id(),
         "correction_type": "semantic_idiom",
         "matched_patterns": [],
         "message": _correction_message(rec),
@@ -542,12 +552,7 @@ def promote_signals(
             "skipped": _build_skipped(),
         }
 
-    # corrections に human-source レコードを追記
-    # ADR-049 / #55: production（corrections_path 無し）は単一書込ゲート store_write、
-    # 明示 path（テスト/isolation）は store_write_raw でそのパスを尊重する。
-    from rl_common import store_write, store_write_raw
-
-    use_gate = corrections_path is None
+    # corrections に human-source レコードを専用境界から追記する。
     if corrections_path is None:
         import rl_common as _rc
 
@@ -562,12 +567,15 @@ def promote_signals(
         record = _build_correction_record(
             rec, project_path, source=source, idiom_key=idiom_keys.get(key),
         )
-        if use_gate:
-            store_write("corrections.jsonl", record)
-        else:
-            store_write_raw(corrections_path, record)
-        if key:
+        append_result = append_correction_record(corrections_path, record)
+        if append_result.status == "appended" and key:
             promoted_keys.add(key)
+        elif append_result.status != "appended":
+            print(
+                f"[evolve-anything:correction] record not saved: {append_result.status}"
+                + (f" ({append_result.reason})" if append_result.reason else ""),
+                file=sys.stderr,
+            )
 
     # weak_signal を promoted=True にマーク（再昇格防止・union dir 全て / hermetic）
     _mark_promoted(weak_signals_path, promoted_keys)
@@ -607,43 +615,54 @@ def invalidate_idiom_corrections(
     if not target or not corrections_path.exists():
         return {"invalidated": 0, "dry_run": dry_run}
 
-    recs: List[Dict[str, Any]] = []
-    matched = 0
-    with open(corrections_path, "r", encoding="utf-8", errors="replace") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                r = json.loads(line)
-            except (json.JSONDecodeError, ValueError):
-                continue
-            if (
-                r.get("promoted_by") == "idiom_dict"
-                and r.get("idiom_key") in target
-                and not r.get("invalidated")
-            ):
-                matched += 1
-                if not dry_run:
-                    r["invalidated"] = True
-            recs.append(r)
-
     if dry_run:
+        text = corrections_path.read_text(encoding="utf-8", errors="replace")
+        _, matched, _ = _invalidate_idiom_text(text, target, mutate=False)
         return {"invalidated": matched, "dry_run": True}
 
-    if matched:
-        new_content = "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in recs)
-        tmp_fd, tmp_path = tempfile.mkstemp(
-            dir=str(corrections_path.parent), suffix=".tmp"
-        )
-        try:
-            with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
-                f.write(new_content)
-            os.replace(tmp_path, corrections_path)
-        except Exception:
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
+    reason = fcntl_unsupported_reason()
+    if reason is not None:
+        return {"invalidated": 0, "dry_run": False, "error": reason}
 
+    with corrections_write_lock(corrections_path):
+        text = corrections_path.read_text(encoding="utf-8", errors="replace")
+        new_content, matched, touched = _invalidate_idiom_text(text, target, mutate=True)
+        if matched:
+            assert_no_unexpected_content_loss(
+                snapshot_identities(text),
+                snapshot_identities(new_content),
+                touched_before=snapshot_identities("\n".join(touched)),
+            )
+            atomic_write_text_preserving_mode(corrections_path, new_content)
     return {"invalidated": matched, "dry_run": False}
+
+
+def _invalidate_idiom_text(text: str, target: Set[str], *, mutate: bool):
+    recs: List[Any] = []
+    touched: List[str] = []
+    matched = 0
+    for raw_line in split_corrections_lines(text):
+        line = raw_line.strip()
+        if not line:
+            continue
+        try:
+            r = json.loads(line)
+        except (json.JSONDecodeError, ValueError):
+            recs.append(raw_line)
+            continue
+        if (
+            r.get("promoted_by") == "idiom_dict"
+            and r.get("idiom_key") in target
+            and not r.get("invalidated")
+        ):
+            matched += 1
+            touched.append(raw_line)
+            if mutate:
+                r["invalidated"] = True
+                recs.append(r)
+                continue
+        recs.append(raw_line)
+    return "".join(
+        (json.dumps(r, ensure_ascii=False) if isinstance(r, dict) else r) + "\n"
+        for r in recs
+    ), matched, touched

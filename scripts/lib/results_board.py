@@ -25,20 +25,53 @@ from typing import Any, Dict, List, Optional
 
 from capture_recall import CaptureEvalIntegrityError, evaluate_capture_recall, load_capture_eval_set
 from optimize_history_store import load_effective_history, load_revert_events
-from correction_rate import build_correction_rate_summary, GATE_CONSECUTIVE_WEEKS
+from correction_rate import (
+    build_correction_rate_summary,
+    FREEZE_DELAY_DAYS,
+    GATE_CONSECUTIVE_WEEKS,
+)
 from correction_semantic.prompt import CATEGORY_ENUM, CATEGORY_LABELS_JA
 from evolve_revert import REASON_LABELS, compute_revert_availability
+from pillar2_metrics import PILLAR2_NOT_MEASURED_TARGETS, count_applied_reflections
+from measurement_result import (
+    collect_board_measurements,
+    pillar_scopes,
+    read_measurement,
+    render_decisions_health,
+    render_pillar2_health,
+    render_rate_health,
+    render_revert_health,
+    render_scope,
+)
 import rl_common.detection as correction_detection
 
 _WINDOW_DAYS = 30
-_CAPTURE_EVAL_PATH = Path(__file__).resolve().parents[1] / "bench" / "a0_eval_set.jsonl"
+_CAPTURE_EVAL_FILENAME = "a0_eval_set.jsonl"
+_CAPTURE_EVAL_PATH = Path(__file__).resolve().parents[1] / "bench" / _CAPTURE_EVAL_FILENAME
 
 
-def _build_capture_recall() -> Dict[str, Any]:
-    if not _CAPTURE_EVAL_PATH.exists():
-        return {"measured": False, "reason": "評価セットなし"}
+def _capture_eval_candidates() -> List[Path]:
+    """評価セットの探索順を返す（checkout 同梱 → git 管理外の共有 DATA_DIR）。
+
+    評価セットは他PJの生発話を含むため git 管理外（`.gitignore:25`）で、共有 checkout に
+    しか実体が無い。参照先を checkout 相対だけにすると worktree・他マシン・fresh clone から
+    柱1が測定不能になるため、共有 DATA_DIR 配下も探す（#601）。
+
+    **DATA_DIR は import 時に固定しない。** テストの HOME 隔離が DATA_DIR を tmp へ
+    rebase するため、module import 時に解決すると隔離前の実パスを掴む。
+    """
+    import rl_common
+
+    return [
+        _CAPTURE_EVAL_PATH,
+        Path(rl_common.DATA_DIR) / "bench" / _CAPTURE_EVAL_FILENAME,
+    ]
+
+
+def _capture_recall_from(path: Path) -> Dict[str, Any]:
+    """1つの候補パスから捕捉率を算出する。使えなければ measured=False を返す。"""
     try:
-        rows = load_capture_eval_set(_CAPTURE_EVAL_PATH)
+        rows = load_capture_eval_set(path)
         result = evaluate_capture_recall(
             rows,
             lambda text: correction_detection._detect_correction(text, false_positive_hashes=()),
@@ -60,6 +93,26 @@ def _build_capture_recall() -> Dict[str, Any]:
         **result,
     }
 
+
+def _build_capture_recall() -> Dict[str, Any]:
+    """実在する候補を順に試し、最初に測れたものを返す。
+
+    **「最初に実在した候補」で打ち切らない**（#602 レビュー巡1 [Must]）。評価セットは
+    git 管理外なので、checkout 側に更新前の古い実体や誤配置が残る状態は通常運用で
+    到達しうる。1件目で確定すると、共有 DATA_DIR に正しい実体があっても壊れた側に
+    shadow されて測定不能になる。
+    """
+    present = [c for c in _capture_eval_candidates() if c.exists()]
+    if not present:
+        return {"measured": False, "reason": "評価セットなし"}
+    failure: Dict[str, Any] = {"measured": False, "reason": "評価セットなし"}
+    for path in present:
+        outcome = _capture_recall_from(path)
+        if outcome["measured"]:
+            return outcome
+        failure = outcome
+    return failure
+
 # ADR-054 §7.2.1 柱3(a): correction_rate.build_correction_rate_summary が返す schema と
 # 同型のフォールバック（read 失敗時に render 側を壊さないための安全な既定値）。
 _EMPTY_CORRECTION_RATE: Dict[str, Any] = {
@@ -74,6 +127,8 @@ _EMPTY_CORRECTION_RATE: Dict[str, Any] = {
     },
     "displayed_weeks": [],
     "latest_coverage": None,
+    # None は「該当なし」ではなく取得不能。通常の評価済み・該当なしは [] で区別する。
+    "coverage_gaps": None,
     "diagnostics": {},
     "generated_at": None,
 }
@@ -256,7 +311,11 @@ def _in_window(
     return start <= ts < end
 
 
-def build_results_board(slug: str, now: Optional[datetime] = None) -> Dict[str, Any]:
+def build_results_board(
+    slug: str,
+    now: Optional[datetime] = None,
+    project_root: Optional[Path] = None,
+) -> Dict[str, Any]:
     """戦果ボードを決定論生成する（read-only・LLM 非依存）。
 
     Args:
@@ -265,6 +324,8 @@ def build_results_board(slug: str, now: Optional[datetime] = None) -> Dict[str, 
             pj_slug.resolve_pj_slug の basename と telemetry_query の project-name（ディレクトリ
             basename）が一致する前提（既存コードの growth_report.py 等と同じ簡略化）。
         now: 基準時刻（省略時は現在の UTC）。テストの決定論性のため注入可能にする。
+        project_root: 柱2の集計対象。sibling worktree から実行すると same-project の反映が
+            脱落しうるが、その場合も現在は measured=True になる。
 
     Returns:
         correction_rate（ADR-054 §7.2.1 柱3(a)「指摘率」の gate 状態 + 表示対象週 +
@@ -278,34 +339,53 @@ def build_results_board(slug: str, now: Optional[datetime] = None) -> Dict[str, 
     prev_window_start = _now - timedelta(days=_WINDOW_DAYS * 2)
 
     # ── 指摘率（ADR-054 §7.2.1 柱3(a)）: 3ストア read 時 join の週次集計 ──────
-    try:
-        correction_rate = build_correction_rate_summary(now=_now)
-    except Exception:
-        correction_rate = dict(_EMPTY_CORRECTION_RATE)
-        correction_rate["generated_at"] = _now.isoformat()
+    correction_rate, history, revert_events, scopes, measurements = collect_board_measurements(
+        slug,
+        correction_reader=lambda: build_correction_rate_summary(now=_now),
+        history_reader=lambda: load_effective_history(slug),
+        revert_reader=lambda: load_revert_events(slug),
+        correction_fallback={**_EMPTY_CORRECTION_RATE, "generated_at": _now.isoformat()},
+    )
     capture_recall = _build_capture_recall()
+
+    pillar2_fallback = {
+        "count": 0,
+        "measured": False,
+        "pre_scheme_excluded_count": None,
+        "health": {"degraded": True},
+        "not_measured": {
+            target: {"reason": details["reason"]}
+            for target, details in PILLAR2_NOT_MEASURED_TARGETS.items()
+        },
+    }
+    if project_root is None:
+        pillar2 = pillar2_fallback
+        pillar2_health = {
+            "measured": False,
+            "reason": "project_root が指定されていません",
+            "dropped_lines": 0,
+        }
+    else:
+        pillar2, pillar2_health = read_measurement(
+            lambda: count_applied_reflections(Path(project_root), now=_now),
+            fallback=pillar2_fallback,
+            reader_name="pillar2_metrics.count_applied_reflections",
+        )
+    measurements["pillar2"] = pillar2_health
 
     # ── 採用した改善: 直近30日の optimize_history ─────────────────
     # #402 段階4: revert 済み accept を判断母集団から除外した effective view を読む
     # （raw のままだと revert イベントが history[-10:] に混入し本物の decision を
     # 押し出す・S1）。
-    try:
-        history = load_effective_history(slug) or []
-    except Exception:
-        history = []
-
     # withdrawal candidate の「戻し済み」表示用（S4）。effective view は revert 済み
     # accept を既に除外しているため、このボードで reverted=True になることは構造上
     # 無いが、fold の内部実装に依存せず load_revert_events 経由で判定する契約にする
     # （results_board で individual fold 実装をしない・設計正典 §3）。
-    try:
-        reverted_ids = {
-            e.get("reverted_entry_id")
-            for e in (load_revert_events(slug) or [])
-            if e.get("reverted_entry_id") is not None
-        }
-    except Exception:
-        reverted_ids = set()
+    reverted_ids = {
+        e.get("reverted_entry_id")
+        for e in revert_events
+        if e.get("reverted_entry_id") is not None
+    }
 
     recent_history = [
         h for h in history if _in_window(h, window_start, _now, inclusive_end=True)
@@ -363,6 +443,9 @@ def build_results_board(slug: str, now: Optional[datetime] = None) -> Dict[str, 
         "generated_at": _now.isoformat(),
         "correction_rate": correction_rate,
         "capture_recall": capture_recall,
+        "pillar2": pillar2,
+        "measurement_scopes": scopes,
+        "measurements": measurements,
         "decisions": {
             "accepted": len(buckets["accepted"]),
             "rejected": len(buckets["rejected"]),
@@ -441,6 +524,59 @@ def _render_exclusion_diagnostics(diagnostics: Dict[str, Any]) -> List[str]:
     ]
 
 
+def _render_coverage_gap_reasons(correction_rate: Dict[str, Any]) -> List[str]:
+    """100%未満の各週について、カバレッジ不足の排他的な理由内訳を表示する。"""
+    if "coverage_gaps" not in correction_rate or correction_rate["coverage_gaps"] is None:
+        return ["カバレッジ不足理由: 評価不能", ""]
+    gaps = correction_rate["coverage_gaps"]
+    if not isinstance(gaps, list):
+        return ["カバレッジ不足理由: 評価不能", ""]
+
+    lines: List[str] = []
+    sorted_gaps = sorted(
+        gaps,
+        key=lambda gap: str(gap.get("week_id") or "") if isinstance(gap, dict) else "",
+        reverse=True,
+    )
+    for gap in sorted_gaps:
+        week_id = gap.get("week_id") if isinstance(gap, dict) else None
+        prefix = f"- {week_id} カバレッジ不足理由" if week_id else "- カバレッジ不足理由"
+        reason = gap.get("reason") if isinstance(gap, dict) else None
+        if not isinstance(reason, dict) or reason.get("measured") is not True:
+            detail = reason.get("reason") if isinstance(reason, dict) else None
+            suffix = f"（{detail}）" if detail else ""
+            lines.append(f"{prefix}: 評価不能{suffix}")
+            continue
+
+        counts = [
+            reason.get("deadline_exceeded_count"),
+            reason.get("unjudged_count"),
+            reason.get("unclassified_count"),
+        ]
+        judged = gap.get("judged")
+        total = gap.get("total")
+        valid_ints = all(isinstance(value, int) and not isinstance(value, bool) and value >= 0 for value in counts)
+        valid_totals = all(
+            isinstance(value, int) and not isinstance(value, bool) and value >= 0
+            for value in (judged, total)
+        )
+        if not valid_ints or not valid_totals or sum(counts) != total - judged:
+            lines.append(f"{prefix}: 評価不能（内訳合計が母集団と一致しません）")
+            continue
+
+        deadline_exceeded, unjudged, unclassified = counts
+        line = (
+            f"{prefix}: 締切（+{FREEZE_DELAY_DAYS}日）超過で集計外: {deadline_exceeded} 件"
+            f"・未判定: {unjudged} 件"
+        )
+        if unclassified:
+            line += f"・判定日時なし（旧形式レコード）: {unclassified} 件"
+        lines.append(line)
+    if lines:
+        lines.append("")
+    return lines
+
+
 def _render_point_pj_breakdown(pj_breakdown: Dict[str, Any]) -> List[str]:
     """点表示（状態(ii)）専用の PJ 別内訳（#508 I7・全 PJ 列挙・floor 込み）。
 
@@ -498,7 +634,10 @@ def _render_correction_rate_point(gate: Dict[str, Any], correction_rate: Dict[st
     return lines
 
 
-def _render_correction_rate(correction_rate: Dict[str, Any]) -> List[str]:
+def _render_correction_rate(
+    correction_rate: Dict[str, Any],
+    gate_health: Optional[Dict[str, Any]] = None,
+) -> List[str]:
     """指摘率セクション（ADR-054 §7.2.1 柱3(a)）の markdown ブロックを生成する。
 
     表示開始ゲート（§2.9・k=``GATE_CONSECUTIVE_WEEKS`` 週連続で全量判定確定週が揃うまで
@@ -513,21 +652,32 @@ def _render_correction_rate(correction_rate: Dict[str, Any]) -> List[str]:
     1つも無ければ注記自体を出さない（silence でなく、内訳が単に無いだけ）。
     """
     gate = correction_rate.get("gate") or {}
+    # #568 T3: gate_open を鵜呑みにせず、検算に通った場合だけ系列表示を許す。
+    # 検算は `measurement_result.validate_correction_gate` が行い、summary 自体は
+    # verbatim のまま（board["correction_rate"] の pass-through 契約を壊さない）。
+    # gate_health が None の呼び出し（既存テスト等）は従来どおり gate_open に従う。
+    gate_open_effective = (
+        gate.get("gate_open") is True
+        if gate_health is None
+        else gate_health.get("gate_open_effective") is True
+    )
     required = gate.get("required", GATE_CONSECUTIVE_WEEKS)
     lines: List[str] = []
 
     # #466: 分母から除外した件数は gate の開閉に関わらず常に表示する（silence != evaluated）。
     lines.extend(_render_exclusion_diagnostics(correction_rate.get("diagnostics") or {}))
+    coverage_gap_lines = _render_coverage_gap_reasons(correction_rate)
 
     # #508 状態(ii): 系列ゲートが閉じていても、点表示できる確定週があれば1週分の点を出す。
     # I7(d): PJ 別内訳が空なら点表示そのものを行わない（状態(i)へフォールバック）。
     # 既存の閉ゲート分岐・開ゲート分岐はこの下で一字も変えない。
     point_week = gate.get("point_week")
-    if not gate.get("gate_open") and point_week and (point_week.get("pj_breakdown") or {}):
+    if not gate_open_effective and point_week and (point_week.get("pj_breakdown") or {}):
         lines.extend(_render_correction_rate_point(gate, correction_rate))
+        lines.extend(coverage_gap_lines)
         return lines
 
-    if not gate.get("gate_open"):
+    if not gate_open_effective:
         latest = correction_rate.get("latest_coverage")
         if latest:
             headline = (
@@ -539,6 +689,7 @@ def _render_correction_rate(correction_rate: Dict[str, Any]) -> List[str]:
         lines.append(f"**{headline}**")
         lines.append(f"全量判定の確定週が {required} 週連続で揃うまで系列は表示しません。")
         lines.append("")
+        lines.extend(coverage_gap_lines)
         return lines
 
     displayed = correction_rate.get("displayed_weeks") or []
@@ -547,6 +698,7 @@ def _render_correction_rate(correction_rate: Dict[str, Any]) -> List[str]:
         "分子は LLM judge の意味判定です（実測 precision 80% ＝ 分子の2割は誤りを含む前提で読んでください）。"
     )
     lines.append("")
+    lines.extend(coverage_gap_lines)
     category_lines_by_week = {
         w["week_id"]: _category_breakdown_lines(w.get("category_breakdown"))
         for w in displayed
@@ -597,6 +749,8 @@ def render_results_board(board: Dict[str, Any]) -> List[str]:
     decisions = board["decisions"]
 
     lines = ["## 🏆 戦果ボード", ""]
+    scopes = board.get("measurement_scopes") or pillar_scopes(board.get("slug", "(unknown)"))
+    measurements = board.get("measurements") or {}
 
     capture = board.get("capture_recall") or {"measured": False, "reason": "評価セットなし"}
     if capture.get("measured"):
@@ -612,15 +766,31 @@ def render_results_board(board: Dict[str, Any]) -> List[str]:
         )
     else:
         lines.append(f"**L1捕捉率: 未測定（{capture.get('reason', '評価セットなし')}）**")
+    lines.append(render_scope(scopes, "capture_recall"))
     lines.append("")
 
-    lines.extend(_render_correction_rate(board.get("correction_rate") or _EMPTY_CORRECTION_RATE))
+    pillar2 = board.get("pillar2") or {
+        "count": 0,
+        "measured": False,
+        "pre_scheme_excluded_count": None,
+        "health": {"degraded": True},
+        "not_measured": {},
+    }
+    lines.extend(render_pillar2_health(pillar2, measurements))
+    lines.append(render_scope(scopes, "pillar2"))
+    lines.append("")
 
-    lines.append(
-        f"採用した改善（直近30日）: accepted {decisions['accepted']} 件 / "
-        f"rejected {decisions['rejected']} 件 / pending {decisions['pending']} 件 / "
-        f"excluded {decisions['excluded']} 件"
+    lines.extend(render_rate_health(measurements))
+    lines.append(render_scope(scopes, "correction_rate"))
+    lines.extend(
+        _render_correction_rate(
+            board.get("correction_rate") or _EMPTY_CORRECTION_RATE,
+            measurements.get("correction_rate_gate"),
+        )
     )
+
+    lines.extend(render_decisions_health(decisions, measurements))
+    lines.append(render_scope(scopes, "accepted_improvements"))
     # ADR-054 §2.6-7: excluded の理由内訳を画面に出す（テスト汚染/legacy無効化が
     # どちらもどこにも見えない状態を解消する）。
     excluded_reasons = board.get("excluded_reasons") or {}
@@ -659,5 +829,9 @@ def render_results_board(board: Dict[str, Any]) -> List[str]:
                 if label:
                     lines.append(f"  {label}")
         lines.append("")
+
+    lines.extend(render_revert_health(measurements))
+    lines.append(render_scope(scopes, "withdrawal_candidates"))
+    lines.append("")
 
     return lines

@@ -502,15 +502,18 @@ def _gather_queue_result(args: argparse.Namespace) -> dict:
     # private ``_build_queue_result_from_snapshot`` へ ``corr_records``/``corr_read_health``
     # をそのまま渡す。ディスク read はこの関数全体で1回のまま。
     from .queue_materials import read_corrections_records_with_health
+    from weak_signals.store import read_signals
 
     corrections_snapshot = read_corrections_records_with_health(corr_path)
     corr_records = corrections_snapshot.records
+    weak_records = read_signals()
 
     material_slugs = _collect_material_slugs(
-        weak_signals_path=weak_path if weak_path.exists() else None,
+        weak_signals_path=None,
         corrections_path=corr_path,
         correction_slug=_correction_slug,
         corr_records=corr_records,
+        weak_records=weak_records,
     )
     # 実 dir gate: CC が認識する実在 PJ dir（CLAUDE.md/.claude 有）に解決できる slug のみ
     # untracked surface する（phantom/temp slug 除外）。status の新候補検出と同じ discovery。
@@ -531,6 +534,8 @@ def _gather_queue_result(args: argparse.Namespace) -> dict:
         untracked_dir_map=untracked_dir_map,
         corr_records=corrections_snapshot.records,
         corr_read_health=corrections_snapshot.health,
+        weak_records=weak_records,
+        weak_read_health=weak_records.read_health,
     )
 
 
@@ -540,6 +545,7 @@ def _collect_material_slugs(
     corrections_path: Path,
     correction_slug,
     corr_records: list[dict] | None = None,
+    weak_records: list[dict] | None = None,
 ) -> list[str]:
     """weak_signals + corrections に出現する全 pj_slug を集める（重複可・#86 O2）。
 
@@ -562,11 +568,16 @@ def _collect_material_slugs(
     """
     slugs: list[str] = []
     try:
-        from correction_semantic.promote import read_unpromoted
+        from correction_semantic.promote import _filter_unpromoted, read_unpromoted
 
-        for r in read_unpromoted(
-            weak_signals_path=weak_signals_path, exclude_expired=True
-        ):
+        records = (
+            _filter_unpromoted(weak_records, exclude_expired=True)
+            if weak_records is not None
+            else read_unpromoted(
+                weak_signals_path=weak_signals_path, exclude_expired=True
+            )
+        )
+        for r in records:
             s = r.get("pj_slug")
             if s:
                 slugs.append(s)

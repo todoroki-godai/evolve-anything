@@ -536,7 +536,7 @@ def _build_growth_report(
             from pj_slug import resolve_pj_slug
             from results_board import build_results_board, render_results_board
             _slug = resolve_pj_slug(proj)
-            board = build_results_board(_slug)
+            board = build_results_board(_slug, project_root=proj)
             lines.extend(render_results_board(board))
         except Exception as e:
             lines.append(f"戦果ボードの生成に失敗しました: {e}")

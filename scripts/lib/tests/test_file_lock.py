@@ -5,6 +5,7 @@ decision 状態（marker / queue / optimize_history）の read-modify-write を�
 """
 import fcntl
 import json
+import os
 import subprocess
 import sys
 import threading
@@ -51,6 +52,52 @@ def test_file_lock_is_reentrant_safe_across_sequential_uses(tmp_path):
     for _ in range(3):
         with file_lock(lock):
             pass
+
+
+def test_file_lock_retries_when_open_fd_inode_was_replaced(tmp_path, monkeypatch):
+    import rl_common.file_lock as module
+
+    lock = tmp_path / "state.lock"
+    real_flock = module.fcntl.flock
+    acquisitions = 0
+
+    def replace_after_first_acquire(fd, operation):
+        nonlocal acquisitions
+        result = real_flock(fd, operation)
+        if operation == module.fcntl.LOCK_EX:
+            acquisitions += 1
+            if acquisitions == 1:
+                lock.unlink()
+                lock.touch()
+        return result
+
+    monkeypatch.setattr(module.fcntl, "flock", replace_after_first_acquire)
+    with file_lock(lock):
+        held = os.fstat(next(fd for fd in range(3, 256) if _same_open_file(fd, lock)))
+        current = os.stat(lock)
+        assert (held.st_dev, held.st_ino) == (current.st_dev, current.st_ino)
+    assert acquisitions == 2
+
+
+def _same_open_file(fd, path):
+    try:
+        held = os.fstat(fd)
+    except OSError:
+        return False
+    current = os.stat(path)
+    return (held.st_dev, held.st_ino) == (current.st_dev, current.st_ino)
+
+
+def test_unlink_during_held_lock_can_create_a_distinct_lock_inode(tmp_path):
+    """#595 §6: 保持中 unlink の残存窓を、閉じたと誤報しないための実測。"""
+    lock = tmp_path / "state.lock"
+    with file_lock(lock):
+        held_inode = lock.stat().st_ino
+        lock.unlink()
+        lock.touch()
+        assert lock.stat().st_ino != held_inode
+        with try_file_lock(lock) as acquired:
+            assert acquired is True
 
 
 _WORKER = """

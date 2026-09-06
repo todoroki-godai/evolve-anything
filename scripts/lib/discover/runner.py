@@ -371,7 +371,22 @@ def run_discover(
     # 推奨アーティファクト未導入チェック（tool_usage データを証拠として付加）
     recommended_missing = detect_recommended_artifacts(
         tool_usage_patterns=tool_result,
+        project_root=project_root,
     )
+    # 場所一致（`covered_by`）・言い回し一致（`likely_covered_by`）のいずれも
+    # missing からは外さず、単一の `recommended_artifacts` 内で状態を表現する
+    # （別キーへの分離は廃止・#467 巡3 [Must]）。
+    # 表示順は安定ソートで
+    # ①covered_by なし・likely_covered_by なし → ②likely_covered_by あり → ③covered_by あり
+    # （元の相対順は各グループ内で保つ）。
+    def _sort_key(e: dict) -> int:
+        if e.get("covered_by"):
+            return 2
+        if e.get("likely_covered_by"):
+            return 1
+        return 0
+
+    recommended_missing = sorted(recommended_missing, key=_sort_key)
     if recommended_missing:
         result["recommended_artifacts"] = recommended_missing
 

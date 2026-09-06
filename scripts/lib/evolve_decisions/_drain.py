@@ -74,13 +74,16 @@ def drain_pending(
     # （ingest は skill_quality 採点で秒オーダーになりうるので、握ると同一 slug の emit と
     # SessionStart hook を飢餓させる）。TOCTOU は世代キー（`entry_generation`）で防ぐ。
     # ロック下では公開版でなく `_locked` / `_read_pending_marker_file` を使う（自己 deadlock）。
+    # #576: result_json 分岐は marker を読まないのでロックを取らない（lock 取得自体が
+    # MARKER_ROOT への書込＝read-only home で落ちる）。ロックが要るのは marker 分岐と、
+    # 実際に purge するときだけ。
     orphaned_entries: List[Dict[str, Any]] = []
-    with _marker_lock(slug):
-        if result_json:
-            data = json.loads(Path(result_json).read_text(encoding="utf-8"))
-            envelope = data.get("evolve_decisions") or {}
-            pending = envelope.get("pending") or []
-        else:
+    if result_json:
+        data = json.loads(Path(result_json).read_text(encoding="utf-8"))
+        envelope = data.get("evolve_decisions") or {}
+        pending = envelope.get("pending") or []
+    else:
+        with _marker_lock(slug):
             marker = _read_pending_marker_file(slug)
             all_pending = (marker.get("pending") if marker else None) or []
             # #376 AC5: 削除済み worktree の pending は orphan として先に切り離す
@@ -99,8 +102,8 @@ def drain_pending(
     generations = {
         entry_generation(entry) for entry in pending if entry.get("id") in consumed
     } | {entry_generation(entry) for entry in orphaned_entries}
-    with _marker_lock(slug):
-        _purge_marker_entries_locked(
-            slug, consumed | set(summary["orphaned"]), generations=generations
-        )
+    purge_ids = consumed | set(summary["orphaned"])
+    if purge_ids:
+        with _marker_lock(slug):
+            _purge_marker_entries_locked(slug, purge_ids, generations=generations)
     return summary

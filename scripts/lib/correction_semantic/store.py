@@ -24,6 +24,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
+from measurement_result import MeasuredList, measurement_failure_reason
 # #46 read 層拡張: union read + slug alias は共有モジュール（weak_signals.store と単一ソース）。
 from store_read_union import (  # noqa: E402
     iter_read_store_paths as _iter_read_store_paths,
@@ -444,9 +445,22 @@ def read_judged_records(path: Optional[Path] = None) -> List[Dict[str, Any]]:
     """
     paths = [Path(path)] if path is not None else _iter_read_store_paths(JUDGED_STORE_NAME)
     out: List[Dict[str, Any]] = []
+    measured = True
+    dropped_lines = 0
+    reasons: List[str] = []
     for p in paths:
-        out.extend(_read_jsonl(p))
-    return out
+        batch = _read_jsonl(p)
+        measured = measured and bool(batch.measured)
+        dropped_lines += batch.dropped_lines
+        if batch.reason:
+            reasons.append(batch.reason)
+        out.extend(batch)
+    return MeasuredList(
+        out,
+        measured=measured,
+        reason="; ".join(dict.fromkeys(reasons)) or None,
+        dropped_lines=dropped_lines,
+    )
 
 
 def record_judged(
@@ -635,8 +649,9 @@ def filter_unjudged(
 # ─────────────────────────────────────────────────────────────────
 def _read_jsonl(store: Path) -> List[Dict[str, Any]]:
     if not store.exists():
-        return []
+        return MeasuredList()
     out: List[Dict[str, Any]] = []
+    dropped_lines = 0
     try:
         with open(store, "r", encoding="utf-8", errors="replace") as f:
             for line in f:
@@ -644,9 +659,24 @@ def _read_jsonl(store: Path) -> List[Dict[str, Any]]:
                 if not line:
                     continue
                 try:
-                    out.append(json.loads(line))
+                    record = json.loads(line)
+                    if not isinstance(record, dict):
+                        dropped_lines += 1
+                        continue
+                    out.append(record)
                 except (json.JSONDecodeError, ValueError):
-                    continue
-    except OSError:
-        return []
-    return out
+                    dropped_lines += 1
+    except OSError as exc:
+        return MeasuredList(
+            measured=False,
+            reason=measurement_failure_reason(
+                "correction_semantic.store._read_jsonl", store, exc
+            ),
+        )
+    reason = f"破損 JSONL を {dropped_lines} 行スキップ" if dropped_lines else None
+    return MeasuredList(
+        out,
+        measured=not (dropped_lines and not out),
+        reason=reason,
+        dropped_lines=dropped_lines,
+    )

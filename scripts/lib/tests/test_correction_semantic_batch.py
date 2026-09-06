@@ -704,14 +704,30 @@ def test_estimate_tokens() -> None:
 
 
 def test_prompt_overhead_tokens_derived_from_template() -> None:
-    """固定費は ``build_batch_prompt([])``（発話ゼロ件＝固定部分のみ）の実長から導出する。
+    """固定費は ``build_batch_prompt([])``（発話ゼロ件＝固定部分のみ）の実長 +
+    ``VERDICT_JSON_SCHEMA``（毎バッチ送信される json_schema 引数）の実長から導出する。
     旧実装は 400 のハードコード定数で、カテゴリ語彙表追加のようなプロンプト伸長で
     見積もりが実態から乖離していた。
     """
     from correction_semantic import prompt as cs_prompt
 
-    expected = math.ceil(len(cs_prompt.build_batch_prompt([])) / cs_batch._CHARS_PER_TOKEN)
+    expected = math.ceil(
+        len(cs_prompt.build_batch_prompt([])) / cs_batch._CHARS_PER_TOKEN
+    ) + math.ceil(len(cs_prompt.VERDICT_JSON_SCHEMA) / cs_batch._CHARS_PER_TOKEN)
     assert cs_batch._PROMPT_OVERHEAD_TOKENS == expected
+
+
+def test_prompt_overhead_tokens_includes_verdict_schema_cost(monkeypatch) -> None:
+    """#625 [Should]: 事前予約はバッチ本体だけでなく毎回送信する ``VERDICT_JSON_SCHEMA``
+    （judge_runner.call_haiku が ``json_schema`` 引数として毎バッチ送る・467字前後）の
+    分も計上すること。schema を空文字に差し替えると固定費が template 分だけに縮み、
+    この assert は落ちる（テンプレート由来の値と厳密一致でなく「schema 抜きの値より
+    大きい」で比較するため、schema 側だけを変異させても検出できる）。
+    """
+    from correction_semantic import prompt as cs_prompt
+
+    template_only = math.ceil(len(cs_prompt.build_batch_prompt([])) / cs_batch._CHARS_PER_TOKEN)
+    assert cs_batch._PROMPT_OVERHEAD_TOKENS > template_only
 
 
 def test_estimate_tokens_includes_output_budget_per_verdict() -> None:

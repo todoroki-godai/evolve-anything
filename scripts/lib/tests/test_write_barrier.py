@@ -27,7 +27,7 @@ if str(_lib_dir) not in sys.path:
 import rl_common  # noqa: E402
 import shrink_freeze  # noqa: E402
 import store_registry  # noqa: E402
-from rl_common import store_write, store_write_raw  # noqa: E402
+from rl_common import guard_problem, store_write, store_write_raw  # noqa: E402
 from rl_common.store_write import StoreWriteError  # noqa: E402
 
 
@@ -256,6 +256,77 @@ def test_store_write_raw_allows_known_basename_under_canonical_datadir(data_dir)
     assert _read_lines(target) == [{"v": 1}]
 
 
+def test_store_write_raw_rejects_specialized_boundary_under_canonical_datadir(
+    data_dir,
+) -> None:
+    target = data_dir / "reflect_apply_events.jsonl"
+    with pytest.raises(StoreWriteError, match="専用の追記境界"):
+        store_write_raw(target, {"correction_id": "a" * 32})
+    assert not target.exists()
+
+
+def test_store_write_raw_boundary_cannot_be_downgraded_to_warn(data_dir) -> None:
+    target = data_dir / "reflect_apply_events.jsonl"
+    with pytest.raises(StoreWriteError, match="専用の追記境界"):
+        store_write_raw(target, {"correction_id": "a" * 32}, guard_mode="warn")
+    assert not target.exists()
+
+
+def test_store_write_raw_rejects_relative_specialized_boundary(
+    data_dir, monkeypatch
+) -> None:
+    monkeypatch.chdir(data_dir)
+    target = Path("reflect_apply_events.jsonl")
+    with pytest.raises(StoreWriteError, match="専用の追記境界"):
+        store_write_raw(target, {"correction_id": "a" * 32})
+    assert not target.exists()
+
+
+@pytest.mark.parametrize(
+    ("frozen", "guard_mode"),
+    [(True, "warn"), (False, None)],
+    ids=["frozen-warn", "unfrozen-default-reject"],
+)
+def test_store_write_raw_rejects_missing_case_alias_of_specialized_boundary(
+    data_dir, monkeypatch, frozen, guard_mode
+) -> None:
+    monkeypatch.setattr(shrink_freeze, "SHRINK_FREEZE_ACTIVE", frozen)
+    declared = data_dir / "reflect_apply_events.jsonl"
+    alias = data_dir / "Reflect_Apply_Events.jsonl"
+
+    with pytest.raises(StoreWriteError, match="専用の追記境界"):
+        store_write_raw(alias, {"correction_id": "a" * 32}, guard_mode=guard_mode)
+    assert not declared.exists()
+    assert not alias.exists()
+
+
+@pytest.mark.parametrize(
+    ("frozen", "guard_mode"),
+    [(True, "warn"), (False, None)],
+    ids=["frozen-warn", "unfrozen-default-reject"],
+)
+def test_store_write_raw_rejects_missing_dangling_alias_of_specialized_boundary(
+    data_dir, monkeypatch, frozen, guard_mode
+) -> None:
+    monkeypatch.setattr(shrink_freeze, "SHRINK_FREEZE_ACTIVE", frozen)
+    declared = data_dir / "reflect_apply_events.jsonl"
+    alias = data_dir / "alias.jsonl"
+    alias.symlink_to(declared.name)
+
+    with pytest.raises(StoreWriteError, match="専用の追記境界"):
+        store_write_raw(alias, {"correction_id": "a" * 32}, guard_mode=guard_mode)
+    assert not declared.exists()
+    assert alias.is_symlink()
+
+
+def test_store_write_raw_keeps_explicit_path_exception_for_boundary_store(
+    tmp_path_factory, data_dir
+) -> None:
+    target = tmp_path_factory.mktemp("explicit-boundary") / "reflect_apply_events.jsonl"
+    store_write_raw(target, {"correction_id": "a" * 32})
+    assert _read_lines(target) == [{"correction_id": "a" * 32}]
+
+
 def test_store_write_raw_ignores_unknown_basename_outside_canonical_datadir(
     tmp_path_factory, data_dir
 ) -> None:
@@ -335,6 +406,7 @@ _EXPECTED_ACTIVE_STORES = [
     # #475 §12 決定4: 未登録だった live store の宣言バックフィル。
     "optimize_history/<slug>.jsonl",
     "pj_slug_cache.json",
+    "reflect_apply_events.jsonl",
     "remediation-outcomes.jsonl",
     "remediation_suppression/<slug>.jsonl",
     "remediation_surfaced/<slug>.json",
@@ -368,10 +440,18 @@ def test_store_write_resolves_every_active_store_under_canonical(data_dir):
     for name in store_registry.active_store_names():
         if "<" in name or not name.endswith(".jsonl"):
             continue
+        if getattr(store_registry.declaration_for(name), "write_boundary", None):
+            continue
         store_write(name, {"probe": name})
         assert (data_dir / name).exists()
         # 解決先は常に canonical 直下（別 dir に漏れない）。
         assert json.loads((data_dir / name).read_text().splitlines()[0]) == {"probe": name}
+
+
+def test_generic_store_write_rejects_specialized_boundary(data_dir):
+    with pytest.raises(StoreWriteError, match="専用の追記境界"):
+        store_write("reflect_apply_events.jsonl", {"probe": 1})
+    assert not (data_dir / "reflect_apply_events.jsonl").exists()
 
 
 # --- Phase 2b wave 3: scripts/lib caller の store_write 経由ルーティング -------
@@ -459,3 +539,9 @@ def StoreDeclaration_json_kind() -> "store_registry.StoreDeclaration":
         retention="permanent",
         classification="derived_cache",
     )
+# --- guard_problem: correction 専用保存境界向け公開 API -----------------------
+
+
+def test_guard_problem_is_public_single_source():
+    assert guard_problem("corrections.jsonl") is None
+    assert "未登録ストア" in guard_problem("definitely-unknown.jsonl")

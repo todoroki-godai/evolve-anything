@@ -388,8 +388,7 @@ def _build_judge_prompt(item: Dict[str, Any]) -> str:
         f"以下のユーザー修正が、スキル指示への違反を示しているか判定してください。\n\n"
         f"スキル指示: {instruction_text}\n"
         f"ユーザー修正: {correction_message}\n\n"
-        f"direct scoring: 違反していれば is_violation=true、していなければ false。\n"
-        f"Chain of Thought: まず理由を考え、次に判定を出してください。\n\n"
+        f"違反していれば is_violation=true、していなければ false。\n\n"
         f'JSON形式で回答: {{"is_violation": true/false, "confidence": 0.0-1.0, "reason": "..."}}'
     )
 

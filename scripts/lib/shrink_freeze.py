@@ -87,6 +87,8 @@ FROZEN_STORES: FrozenSet[str] = frozenset(
         "optimize_history/<slug>.jsonl",
         "pj_slug_cache.json",
         "quality-baselines.jsonl",
+        # #587（2026-09-01）: 柱2測定ストア1件だけを新設凍結の例外として追加。
+        "reflect_apply_events.jsonl",
         "remediation-outcomes.jsonl",
         "remediation_suppression/<slug>.jsonl",
         "remediation_surfaced/<slug>.json",

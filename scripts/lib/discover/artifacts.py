@@ -36,6 +36,7 @@ RECOMMENDED_ARTIFACTS = [
     },
     {
         "id": "test-happy-path-first",
+        "equivalent_markers": ["正常系E2Eテスト"],
         "type": "rule",
         "path": Path.home() / ".claude" / "rules" / "test-happy-path-first.md",
         "description": "テストはハッピーパスから書く — パイプラインの正常系E2Eテストを最初に書くルール",
@@ -57,6 +58,7 @@ RECOMMENDED_ARTIFACTS = [
     },
     {
         "id": "claude-md-style",
+        "equivalent_markers": ["CLAUDE.mdは現在有効な動作情報"],
         "type": "rule",
         "path": Path.home() / ".claude" / "rules" / "claude-md-style.md",
         "description": "CLAUDE.md vs MEMORY.md の使い分け — 動作情報/経緯/コードから分かる情報の記載先判断",
@@ -73,6 +75,7 @@ RECOMMENDED_ARTIFACTS = [
     },
     {
         "id": "evidence-before-claims",
+        "equivalent_markers": ["検証コマンドの実行結果を提示"],
         "type": "rule",
         "path": Path.home() / ".claude" / "rules" / "verify-before-claim.md",
         "description": "証拠提示義務 — 完了主張の前に検証コマンドの実行結果を提示する",
@@ -90,6 +93,7 @@ RECOMMENDED_ARTIFACTS = [
     },
     {
         "id": "suggest-implement-skill",
+        "equivalent_markers": ["/evolve-anything:implement` を提案"],
         "type": "rule",
         "path": Path.home() / ".claude" / "rules" / "suggest-implement-skill.md",
         "description": "実装タスク時の implement スキル提案 — 「実装して」等で /evolve-anything:implement を提案",
@@ -106,6 +110,7 @@ RECOMMENDED_ARTIFACTS = [
     # --- gstack ワークフローツール ---
     {
         "id": "gstack-flow-chain",
+        "equivalent_markers": ["flow-chain.json"],
         "type": "rule",
         "path": Path.home() / ".claude" / "rules" / "gstack-flow-chain.md",
         "description": "gstack フローチェーン — /ship→/document-release→/spec-keeper update→/retro の実装後ワークフロー",
@@ -113,6 +118,7 @@ RECOMMENDED_ARTIFACTS = [
     },
     {
         "id": "living-spec-awareness",
+        "equivalent_markers": ["spec-keeper init` を提案"],
         "type": "rule",
         "path": Path.home() / ".claude" / "rules" / "living-spec-awareness.md",
         "description": "Living Spec 意識 — SPEC.md 未存在 PJ で /spec-keeper init を提案、存在 PJ では最初に読む",
@@ -134,6 +140,7 @@ RECOMMENDED_ARTIFACTS = [
     },
     {
         "id": "continuation-check",
+        "equivalent_markers": ["handoverファイルとSPEC.md"],
         "type": "rule",
         "path": Path.home() / ".claude" / "rules" / "continuation-check.md",
         "description": "前回の続き判定 — 引き継ぎ/ロードマップ言及時に引き継ぎファイルとSPEC.mdを自動確認",
@@ -142,6 +149,7 @@ RECOMMENDED_ARTIFACTS = [
     # --- 並行開発パターン ---
     {
         "id": "worktree-parallel-work",
+        "equivalent_markers": ["worktree で隔離する"],
         "type": "rule+hook",
         "path": Path.home() / ".claude" / "rules" / "worktree-parallel-work.md",
         "description": "worktree 並行開発 — ブランチ作成時に worktree を使い、stash+checkout 事故と同一ディレクトリ並行作業を防止。feature-branch rule の PJ 上書きが必要",
@@ -167,15 +175,99 @@ RECOMMENDED_ARTIFACTS = [
 ]
 
 
+def _claude_home_root() -> Path:
+    """`~/.claude` を都度解決する（`Path.home()` monkeypatch にテストが依存）。"""
+    return Path.home() / ".claude"
+
+
+def _find_by_location(path: Optional[Path], project_root: Optional[Path]) -> Optional[Path]:
+    """artifact が宣言した場所、または PJ 側の対応する場所にファイルが実在するか。
+
+    **判定に使う識別**: 宣言パスが `~/.claude` からの相対パスとして表現できる場合、
+    その相対パスを2つの base（`~/.claude` と `<project_root>/.claude`）に結合して
+    `is_file()` だけを見る。名前の一致でも本文の一致でもなく、**同じ相対位置に
+    実体があるか**だけを見る（`.claude/rules/no-denylist-checks.md` の「判定に
+    使う識別」を1行で書く要求に対応）。
+
+    `~/.claude` 配下として表現できない宣言パス（plugin 内 skill・`~/.gstack` 設定等）
+    は、宣言された1箇所だけを見る。base の組合せは対象外。
+    """
+    if path is None:
+        return None
+    if path.is_file():
+        return path
+    if project_root is None:
+        return None
+    try:
+        rel = path.relative_to(_claude_home_root())
+    except ValueError:
+        return None
+    alt = Path(project_root) / ".claude" / rel
+    if alt.is_file():
+        return alt
+    return None
+
+
+def _marker_roots(project_root: Optional[Path] = None) -> List[Path]:
+    """言い回し一致の走査対象（`rules/` ディレクトリのみ・両 base）。
+
+    marker はあくまで「印」であり、これで entry を covered にはしない
+    （`likely_covered_by` を付けるだけ）。走査範囲を rules に絞るのは、
+    hook/skill の実体を本文の記述で代替できないため（下の `detect_recommended_artifacts`
+    が hook を missing に残すのと対称）。
+    """
+    roots = [_claude_home_root() / "rules"]
+    if project_root:
+        roots.append(Path(project_root) / ".claude" / "rules")
+    return roots
+
+
+def _find_marker(markers: List[str], roots: List[Path]) -> Optional[str]:
+    """本文の特徴語で既存記述を探し、最初のヒットを `file:line` で返す。
+
+    **判定に使う識別**: 本文に現れる文字列。名前でも実体でもない。
+    既知の言い回しのみ検出でき、書き換えられれば当たらなくなる。ゆえに
+    **entry を covered にせず `likely_covered_by`（印）を付けるだけ**に使う
+    （`.claude/rules/no-denylist-checks.md`）。
+    """
+    if not markers:
+        return None
+    for root in roots:
+        if not root.is_dir():
+            continue
+        for f in sorted(root.rglob("*.md")):
+            try:
+                lines = f.read_text(encoding="utf-8").splitlines()
+            except (OSError, UnicodeError):
+                # 読めないファイルは飛ばして次へ。1 件の非 UTF-8 で
+                # 推奨 artifact フェーズ全体を落とさない。
+                continue
+            for i, line in enumerate(lines, 1):
+                if any(m in line for m in markers):
+                    return f"{f}:{i}"
+    return None
+
+
 def detect_recommended_artifacts(
     tool_usage_patterns: Optional[Dict[str, Any]] = None,
     *,
     now: Optional[float] = None,
+    project_root: Optional[Path] = None,
 ) -> List[Dict[str, Any]]:
     """推奨ルール/hook の導入状態をチェックする。
 
     Returns:
         未導入 artifact のリスト。各エントリに evidence (検出データ) を含む。
+
+    3層方式（#624 巡3。`.claude/rules/no-denylist-checks.md` に従い名前一致の
+    探索は廃止し、場所一致のみを自動抑制に使う）:
+      1. 場所一致（`_find_by_location`）— 唯一の自動抑制。要素（rule/hook）単位で判定し、
+         `missing` から該当要素だけを除く。**両方揃って初めて** entry 全体を
+         `covered_by`（`file` 形式・行番号なし）付きにする。片方だけなら
+         `rule_covered_by`/`hook_covered_by` を付けつつ `missing` に残す。
+      2. 言い回し一致（`_find_marker`）— `likely_covered_by`（`file:line` 形式）を
+         付けるだけの印。missing からは絶対に外さない（既知の言い回しのみ検出・迂回可能）。
+      3. 人間の確定 — `discover/suppression.py` の見送り記録（本関数は変更しない）。
 
     #26: ユーザーが導入を見送った artifact は suppression 窓（TTL）内は畳む。
     記録は discover-suppression.jsonl の type:"artifact" エントリ。窓を過ぎたら
@@ -185,32 +277,71 @@ def detect_recommended_artifacts(
     # package 経由で参照することで `mock.patch("discover.RECOMMENDED_ARTIFACTS", ...)` 既存テストに追従
     from . import RECOMMENDED_ARTIFACTS as _ARTIFACTS  # noqa: PLC0415
     from .suppression import is_artifact_suppressed  # noqa: PLC0415
+
     for artifact in _ARTIFACTS:
         rule_path = artifact.get("path")
-        rule_exists = rule_path.exists() if rule_path else True
         hook_path = artifact.get("hook_path")
-        hook_exists = hook_path.exists() if hook_path else True
 
-        if rule_exists and hook_exists:
+        rule_loc = _find_by_location(rule_path, project_root)
+        hook_loc = _find_by_location(hook_path, project_root)
+
+        rule_ok = rule_path is None or rule_loc is not None
+        hook_ok = hook_path is None or hook_loc is not None
+
+        if rule_ok and hook_ok:
+            # 宣言パスそのものに在る（正規の場所）＝真に導入済み。提示しない。
+            if rule_loc == rule_path and hook_loc == hook_path:
+                continue
+            # PJ 側の別 base で見つかった＝場所一致だが正規の場所ではない。
+            # 提示は消さず covered_by を付けて下げる（呼び出し側が分離する）。
+            if is_artifact_suppressed(artifact["id"], now=now):
+                continue
+            covered_by = str(rule_loc) if rule_path is not None and rule_loc != rule_path else str(hook_loc)
+            missing.append({
+                "id": artifact["id"],
+                "description": artifact["description"],
+                "missing": [],
+                "covered_by": covered_by,
+            })
             continue
 
-        # #26: 見送り済み & クールダウン窓内なら再提示しない
+        # ここに来るのは、少なくとも一方の要素が場所一致しなかった場合。
+        element_missing: List[Dict[str, Any]] = []
+        rule_covered_by: Optional[str] = None
+        if rule_path is not None:
+            if rule_loc is not None:
+                rule_covered_by = str(rule_loc)
+            else:
+                element_missing.append({"type": "rule", "path": str(rule_path)})
+        hook_covered_by: Optional[str] = None
+        if hook_path is not None:
+            if hook_loc is not None:
+                hook_covered_by = str(hook_loc)
+            else:
+                element_missing.append({
+                    "type": "hook",
+                    "path": str(hook_path),
+                    "description": artifact.get("hook_description", ""),
+                })
+
         if is_artifact_suppressed(artifact["id"], now=now):
             continue
 
         entry: Dict[str, Any] = {
             "id": artifact["id"],
             "description": artifact["description"],
-            "missing": [],
+            "missing": element_missing,
         }
-        if not rule_exists and rule_path:
-            entry["missing"].append({"type": "rule", "path": str(rule_path)})
-        if not hook_exists and hook_path:
-            entry["missing"].append({
-                "type": "hook",
-                "path": str(hook_path),
-                "description": artifact.get("hook_description", ""),
-            })
+        if rule_covered_by:
+            entry["rule_covered_by"] = rule_covered_by
+        if hook_covered_by:
+            entry["hook_covered_by"] = hook_covered_by
+
+        likely_covered_by = _find_marker(
+            artifact.get("equivalent_markers", []), _marker_roots(project_root)
+        )
+        if likely_covered_by:
+            entry["likely_covered_by"] = likely_covered_by
 
         # data_driven な artifact には tool_usage データを証拠として付加
         if artifact.get("data_driven") and tool_usage_patterns:

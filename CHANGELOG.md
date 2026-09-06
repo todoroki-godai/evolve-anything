@@ -2,7 +2,67 @@
 
 ## [Unreleased]
 
+### Fixed
+- **fix(discover): `recommended_artifacts_covered` キーを廃止し単一 `recommended_artifacts` へ統合する（#467・巡3是正）** —
+  上の3層方式の一次実装は `covered`/`fresh` を `recommended_artifacts_covered`/`recommended_artifacts`
+  の別キーへ分離していたが、レビューで「別キー分離は不要な複雑化」と指摘され撤回した。
+  `detect_recommended_artifacts` の全 entry を単一の `result["recommended_artifacts"]` に入れ、
+  ①`covered_by` なし・`likely_covered_by` なし → ②`likely_covered_by` あり → ③`covered_by` あり
+  の順に安定ソートして状態を表現する（下段の entry は下げた事実を消さず `covered_by`/`likely_covered_by`
+  で判別できる。silence != evaluated は維持）。`ProposalKind(kind="recommended_artifacts_covered")` /
+  `evolve_keyset_optional.txt` の条件付きキー宣言（実行順序依存の隠蔽だったため撤回）を削除。
+  ベンチ集計 `measure_467_proposal_kinds.py::_measure_recommended_artifacts` は表示用の内訳
+  （fresh数/covered数）としてのみ2つの数字を返し続ける（result のキーではない）。
+
+- **fix(discover): 推奨 artifact の既存判定を「場所一致」だけの3層方式に作り直す（#467・巡3）** —
+  `detect_recommended_artifacts` は決め打ちパスの `exists()` だけで導入状態を判定していたため、
+  **同じ内容が別名・別ディレクトリにあっても「未導入」として提案していた**。巡1・巡2 のレビューで
+  名前・basename の一致に依拠する探索が「無関係な同名ファイルを根拠にする」族の [Must] を繰り返し出し
+  たため、`.claude/rules/no-denylist-checks.md`（名前・文字列一致は blocking にしない）に従い方式を
+  作り直した。**3層**: ①**場所一致**（`_find_by_location`）— 宣言パスの `~/.claude` からの相対部分を
+  `~/.claude` と `<project_root>/.claude` の2 base に結合し `is_file()` だけを見る。**唯一の自動抑制**で、
+  rule/hook を要素単位に判定し両方揃って初めて `covered_by`（`file` 形式・行番号なし）を付けて
+  `recommended_artifacts_covered` へ分離する。片方だけなら `rule_covered_by`/`hook_covered_by` を
+  付けつつ `missing` に残す（hook は本文の記述で代替できないため）。②**言い回し一致**
+  （`_find_marker`・`equivalent_markers` の本文一致、走査は両 base の `rules/` のみ）— **印
+  （`likely_covered_by`、`file:line` 形式）を付けるだけで、`missing` からは絶対に外さない**
+  （既知の言い回しのみ検出・迂回可能と明記）。③**人間の確定** — `discover-suppression.jsonl`（不変）。
+  旧方式の同名探索（`_find_same_name`・`_search_roots`）は削除。実測（2026-09-04・project_root=本 PJ）:
+  12 件中、場所一致は 2 件（`commit-version`/`evidence-before-claims`）のみが自動抑制対象、
+  残り 7 件は言い回し一致で fresh のまま印が付くだけになった（旧方式では 9 件とも下げていた）。
+  非 UTF-8 の `*.md` は読み飛ばして探索を続ける。`recommended_artifacts_covered` は場所一致件数が
+  2件に減ったことで既存の実データ dry-run キー集合スナップショット（`test_evolve_result_keyset_matches_snapshot`）
+  の非決定性が顕在化した（他テストの suppression 書込みとの実行順序に依存）ため、当該キーを
+  `evolve_keyset_optional.txt` の条件付きキーへ移した（機構は既存の設計を利用・ロジック変更なし）。
+
+### Fixed
+- **fix(rule-violation): 禁止コマンド抽出を「同じ文の中」に限定する（#622）** — rules から
+  禁止コマンドを抽出する処理が、行内で禁止キーワードより前にある backtick を**すべて**
+  禁止扱いにしていた。rules は1項目1行の長文のため、同じ行に書かれた**推奨**コマンドまで
+  巻き込まれ、実データで `git status` 8回・`git log` 7回が「ルール違反」として提示されていた
+  （実測 2026-09-03: 実 rules 2ディレクトリからの抽出 17 spec のうち 8 spec が誤り）。
+  採用範囲を「そのキーワードと同じ文に属し、キーワードより前に閉じた backtick」へ変更し、
+  backtick の内側に引用されたキーワード（「`MUST NOT` という表現が残っていないか検索する」等）は
+  禁止の宣言として扱わない。修正後の実測は 10 spec で、`cd` と `while pgrep -f "script.py"` は
+  陽性として残り `git log` / `git status` は消えた。**判定に使う識別は文字位置の近さであり、
+  既知の種別のみ検出・迂回可能な advisory**（blocking 保証には使わない・
+  `.claude/rules/no-denylist-checks.md`）。作動しない条件4種（対比文で推奨側も拾う／
+  キーワードより後ろの対象を拾わない／否定されたキーワードを禁止として拾う／
+  英文の終止符を文境界にしない）は `TestKnownLimitations` で現状挙動を固定した。
+  いずれも実 rules に該当0件。**外部レビュー2巡で同一の欠陥族（範囲の取り方）への
+  後追い修正が続いたため族2巡打ち切りを発動し、人間の裁定により
+  「未修正の blocking 欠陥が無い状態まで縮小してマージ」を選択した。**
+
 ### Added
+- **feat(evolve): 提案の必須提示項目に「推奨」を追加し4点提示にする（#582）** — 朝の y/n を含む
+  全 AskUserQuestion で、対象・根拠・変更内容に加えて「どの選択肢を選ぶべきかと理由1行」を
+  必ず添える。推せる材料が無い場合は `推奨なし: <理由>` と書き、空欄・省略は禁止。契約文は
+  `proposal_digest.RECOMMENDATION_INSTRUCTION` を単一ソースとし、SessionStart の
+  `additionalContext` へ到達することと SKILL.md / proposal-protocol.md との同期を契約テストで
+  固定する（片側だけ旧3点提示へ戻す・配線をすり替える・merge 側で契約文を除去する・
+  全PJ横断レーンだけ契約を落とす、のいずれも赤）。指示文書側の正準句も
+  `RECOMMENDATION_DOC_CLAUSE` を単一ソースとし完全一致で突合する。意味矛盾の検出
+  （別の場所に打ち消し文を足す）は契約テストの責務外と明記した。
 - **queue が休眠 PJ の反映待ち correction 在庫を表示** — `reflect_status=promoted` の有効在庫を
   PJ 別に read-time 集計し、通常 material が閾値未満でも在庫が1件以上あれば queue の末尾へ
   含める。`material_count` の既存意味と順位は維持し、`BACKLOG` 列で別表示する（#515）。
@@ -11,6 +71,53 @@
   評価セットがない環境では数字を推測せず「未測定」と明示する。
 
 ### Fixed
+- **fix(corrections): correction レコードへ位置非依存の不変 ID を発行（#593）** — W1〜W4
+  （hook / semantic promote / preceding-tool-call backfill / learnings queue migration）の全 writer を
+  `append_correction_record` 1本へ統一し、32文字小文字hexの `correction_id` を構築時に付与する。
+  保存境界は公開 `guard_problem()`、共有 validator、排他ロック内の重複判定、unlock 前 flush を
+  無条件に通し、`fcntl` 非対応環境は拒否する。既存データ向けにバックアップ必須・回避フラグなしの
+  dry-run既定 migration（`tempfile` + identity/hash再照合 + `os.replace`）と、複合 source ID から
+  不変 ID を返す read-only resolver を追加。identity再照合後から置換前の競合は検出できないため、
+  writer停止契約と残存窓を runbook に明記した。更新経路・`reflect_status`・柱2表示は変更しない。
+- **fix(weak_signals): 読取失敗を正常な空在庫と区別（#539）** — canonical/legacy source ごとの
+  `readable` / `error` / `malformed_lines` を同一 read snapshot に保持し、dedup・queue 集計・
+  人間向け表示・JSON 出力へ伝播する。全 source が健全な場合だけ measured とし、読取不能や
+  部分破損を在庫0件へ丸めない。
+- **fix(reflect): `update_reflect_status` の index 空間ずれで別レコードが書き換わる不具合を修正（#588）** —
+  `load_corrections` は空行・壊れた JSON 行を捨てた**配列の index** を返すが、
+  `update_reflect_status` は物理行番号で照合していたため、空行1つで全体が1つずれ、
+  指定と別の correction が更新される事故があった（さらに対象行が壊れている/空のときは
+  黙って何もせず成功を返していた）。`update_reflect_status` を `load_corrections` と同じ
+  「空行・壊れた JSON 行はレコードとして数えない」index 空間で照合するよう修正し、
+  指定 index に対応するレコードが見つからない場合は成功を返さず `"not_found"` を返すように
+  変更した（呼び出し側の契約は互換維持）。TDD +4件（空行/壊れた行での誤更新の陰性試験2件・
+  存在しない index の陰性試験1件・陽性対照1件）。
+  レビュー指摘を受け、`"not_found"` が**呼出側まで失敗として貫通する**よう追補した:
+  非空の index を渡されたのに corrections ファイルが存在しない場合（検索直後に消える経路）を
+  成功にせず `"not_found"` にし、`--apply` / `--skip` / `--skip-all` の CLI をいずれも非0終了へ統一、
+  `--skip-all` が戻り値を捨てて成功表示していたのを止めた（index が空のときだけは
+  「更新すべきものが無い」no-op 成功として区別する）。TDD +7件・変異試験5件すべて赤・
+  陽性対照1件緑・緑残0件。**identity 再確認と追記 writer との排他は本 issue のスコープ外**で、
+  記録方式そのものを追記イベント方式へ変える #587 が受け皿（コードにも限界として明記）。
+- **docs(rules): 柱2は現在の記録では測定できないと明記（#567 / #587）** —
+  `report-by-four-pillars.md` の測定手段から柱2の数値を外し、`not_measured` と書く規定にする。
+  戦果ボードの「採用した改善」（提案の accept）と、照合の無い申告
+  （`correction_review_seen.jsonl` の `promoted` / `already_reflected`）はいずれも柱2に流用しない。
+  測れない理由6件（反映日時が残らない／反映先種別が残らない／照合が修正本文と結びついていない／
+  二重計上規則が無い／無効化済みが残る／旧レコードが照合なしで applied）を codex 2巡で確認し、
+  測定の作り直しは #587 へ切り出した（族2巡打ち切り・裁定②）。
+- **fix(audit): 戦果ボードの測定不能・測定スコープ・指摘率 gate 検算を明示（#568）** —
+  correction rate / optimize history / revert event の読取例外を 0 件へ丸めず、理由つきの
+  `measured=false` として `evolve-audit --growth` / `evolve-revert --list`（JSON を含む）へ
+  surface する。JSONL の破損行は fail-open で読み続けつつ脱落行数を表示し、全行破損は
+  測定不能とする。4柱にはローカル評価セット（git 管理外・環境依存）・当PJ・全PJ合算の
+  scope を構造化して併記し、指摘率 gate は `best_run_length >= required` で再検算して
+  不一致を到達扱いにしない。
+- **fix(dogfood): Layer 1b の home 固定 marker lock による隔離すり抜けを解消（#576）** —
+  `drain_pending(result_json=...)` の result JSON 読取を marker lock 外へ出し、消費・orphan が
+  どちらも空なら purge 用 marker lock を取得前に skip する。Layer 1b は result JSON を使い
+  accepted/rejected を渡さないため、read-only home でも実 marker に一切触れず完走する。
+  判断ありの日次 drain は従来どおり lock + purge し、判断済み提案のリマインド残留を防ぐ。
 - **fix(queue): corrections.jsonl 読取失敗の在庫ゼロ誤報告と symlink target 消失レースを
   是正（#533）** — 脅威モデル: この修正が守るのは未改変の production 経路（CLI/公開 API が
   corrections.jsonl を1回 read し、その1つの snapshot から records と health を組で下流へ
@@ -743,6 +850,7 @@
 - **docs(spec): SPEC.md の Recent Changes を撤廃し CHANGELOG.md を単一ソースにした（#318）** — SPEC.md の `Recent Changes` は7行で 10.6KB を占めていたが、言及する14バージョンは**全て CHANGELOG.md に存在する**ことを実測突合した純粋な二重管理だった。短縮版を hot に残すと必ず drift するため転記自体をやめ、CHANGELOG.md への1行ポインタに畳んだ（SPEC.md 23,480 → 13,373 bytes・Healthy 目安 20KB 以内）。あわせて spec-keeper スキル側の運用も更新した（旧運用は「直近5件を超えたら古い項目を CHANGELOG.md へ移動」で、移動作業が滞った分だけ hot が肥大する構造＝41KB 超過の主因だった）。**`spec-keeper` は evolve-anything 専用でなく全 PJ 共通のスキル**なので、この変更は他 PJ の SPEC.md 運用にも及ぶ。
 
 ### Fixed
+- **fix(agent_tier): `CLAUDE_CODE_SUBAGENT_MODEL` の説明を CC 2.1.251 の意味変更に追随** — `check_subagent_model_env_override` の docstring と finding detail が「この env は全 subagent の frontmatter model を実行時に上書きする（解決順 env > 起動時 > frontmatter > session）」と断定していたが、CC 2.1.251 でこの env は**既定値**に変わり、agent 定義の `model:` と spawn 時の明示指定が優先されるようになった（CHANGELOG: "Changed `CLAUDE_CODE_SUBAGENT_MODEL` to set the default subagent model rather than override everything"）。現行の解決順（spawn 明示 > agent 定義 `model:` > この env > 親継承）へ書き換え、finding の意味を「ティア宣言が殺される」から「**spawn 指定と agent 定義の双方が無い**呼び出しが台帳外の配分に倒れ**得る**」＝潜在リスクの surface へ訂正した（`severity: "low"` は据え置き。呼び出し元は advisory として `ℹ` 表示するのみで、実際に未指定の agent/spawn が存在することまでは検出しない）。env に不正なモデル名・未知の exact ID を入れた場合の CC 側の挙動（拒否・正規化・fallback）は**未確認**として docstring に明記。回帰防止に契約テスト `test_env_override_detail_states_post_2_1_251_semantics` を追加し、変異4件（条件語「双方」の削除／旧語「無効化」の復活／断定表現への差し戻し／severity の medium 化）がいずれも赤くなること・意味を変えない書き換えでは緑のままであること（陽性対照）を実測した。外部レビュー（codex・別系統1本）で [Must] 5件を受けて是正済み。
 - **fix(results_board): rule 反映として記録した採用が `pending` に落ち revert 一覧にも戦果ボードにも
   出ない不具合を修正（#512）** — `classify_decision` は「フィールドの実在と bool 型を優先」する規則で
   canonical writer 3 種を判定していたが、#475 §8.2 で追加された 4 番目の writer

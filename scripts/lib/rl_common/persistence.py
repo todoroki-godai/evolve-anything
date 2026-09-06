@@ -5,8 +5,9 @@
 """
 import json
 import sys
+from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional
+from typing import Callable, Iterator, List, Optional
 
 try:
     import fcntl as _fcntl
@@ -19,6 +20,42 @@ except ImportError:
 # おり、フルパスが無いため本体 repo 名に遡及復元できない（#489 レビュー）。以後の書込は
 # worktree cwd でも本体 repo 名で記録される。#478 の USAGE_RECORDING_FIX_DATE と同型。
 PJ_SLUG_NORMALIZATION_DATE = "2026-06-12"
+
+
+@dataclass
+class IndexedLine:
+    record_index: int
+    physical_line_index: int
+    record: object
+    raw_line: str
+
+
+def split_corrections_lines(text: str) -> list[str]:
+    """corrections.jsonl を JSONL の物理改行 LF だけで分割する。"""
+    return text.split("\n")
+
+
+def iter_indexed_lines(text: str) -> Iterator[IndexedLine]:
+    """JSON decode に成功した行へ、単一規約の論理・物理 index を付ける。"""
+    record_index = 0
+    for physical_line_index, line in enumerate(split_corrections_lines(text)):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        try:
+            record = json.loads(stripped)
+        except json.JSONDecodeError:
+            continue
+        yield IndexedLine(record_index, physical_line_index, record, line)
+        record_index += 1
+
+
+def record_identity(record: dict) -> tuple:
+    """更新対象を lock 取得後に再確認するための位置非依存 identity。"""
+    correction_id = record.get("correction_id")
+    if isinstance(correction_id, str) and correction_id:
+        return ("id", correction_id)
+    return ("legacy", record.get("session_id", ""), record.get("timestamp", ""))
 
 
 def project_name_from_dir(project_dir: str) -> str:
@@ -151,16 +188,50 @@ def get_preceding_tool_calls(
     return entries[-n:] if len(entries) > n else entries
 
 
-def append_jsonl(filepath: Path, record: dict) -> None:
-    """JSONL ファイルに1行追記する。新規作成時はパーミッション 600 を設定。失敗時はサイレント。"""
+@dataclass
+class WriteResult:
+    status: str
+    reason: Optional[str] = None
+
+
+def _read_records_locked(filepath: Path) -> list[dict]:
+    """呼出側が排他ロックを保持している間に既存 dict レコードを読む。"""
+    records: list[dict] = []
+    try:
+        for line in split_corrections_lines(filepath.read_text(encoding="utf-8")):
+            try:
+                value = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(value, dict):
+                records.append(value)
+    except FileNotFoundError:
+        pass
+    return records
+
+
+def append_jsonl(
+    filepath: Path,
+    record: dict,
+    *,
+    duplicate_check: Optional[Callable[[list[dict]], bool]] = None,
+) -> WriteResult:
+    """JSONLへ排他的に追記する。重複判定callbackはロック保持中に評価する。"""
     is_new = False
     try:
         with open(filepath, "a", encoding="utf-8") as f:
             if _HAVE_FCNTL:
                 _fcntl.flock(f, _fcntl.LOCK_EX)  # ブロッキング取得（意図的）
             try:
+                if duplicate_check is not None:
+                    existing = _read_records_locked(filepath)
+                    if duplicate_check(existing):
+                        return WriteResult(status="duplicate")
                 is_new = f.tell() == 0  # flock 取得後に判定し TOCTOU を回避
                 f.write(json.dumps(record, ensure_ascii=False) + "\n")
+                # buffered data を可視化してからロックを解放する。同一IDの次writerが
+                # ロック取得後に必ず直前の行を読めることが一意性保証の一部。
+                f.flush()
             finally:
                 if _HAVE_FCNTL:
                     _fcntl.flock(f, _fcntl.LOCK_UN)
@@ -169,5 +240,7 @@ def append_jsonl(filepath: Path, record: dict) -> None:
                 filepath.chmod(0o600)
             except OSError as e:
                 print(f"[evolve-anything] chmod file warning: {e}", file=sys.stderr)
+        return WriteResult(status="written")
     except OSError as e:
         print(f"[evolve-anything] write failed: {e}", file=sys.stderr)
+        return WriteResult(status="retry_required", reason=str(e))

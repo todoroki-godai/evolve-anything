@@ -98,8 +98,17 @@ def main(argv: Optional[List[str]] = None) -> int:
 def _run_list(args: argparse.Namespace) -> int:
     items = build_revert_listing()
     if args.json:
+        measured = bool(getattr(items, "measured", True))
         print(json.dumps(
-            {"total": len(items), "items": items}, ensure_ascii=False, indent=2,
+            {
+                "measured": measured,
+                "reason": getattr(items, "reason", None),
+                "dropped_lines": int(getattr(items, "dropped_lines", 0)),
+                "total": len(items) if measured else None,
+                "items": items,
+            },
+            ensure_ascii=False,
+            indent=2,
         ))
         return 0
     for line in render_revert_listing(items):

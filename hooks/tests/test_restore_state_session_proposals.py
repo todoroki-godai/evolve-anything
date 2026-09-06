@@ -81,6 +81,47 @@ def _set_project_dir(tmp_path, monkeypatch, name="myproj") -> str:
     return proj.name  # = 期待される pj_slug
 
 
+def test_additional_context_carries_recommendation_contract(tmp_path, monkeypatch):
+    """#582: 「推奨を添える」契約が、実際の SessionStart 配線（hookSpecificOutput の
+    additionalContext）まで到達すること。
+
+    build_proposal_prompt を直接叩くテストだけでは、collector 側が別 builder や旧本文へ
+    差し替わっても緑のままになる（codex レビュー [Must]）。ここは実 hook 出力で固定する。
+    """
+    from lib.daily import proposal_digest as _pd
+
+    source = _install_env(tmp_path, monkeypatch)
+    slug = _set_project_dir(tmp_path, monkeypatch)
+    _write_queue(source, {"per_pj": {slug: [_group(["k1"])]}, "global": []})
+
+    output = restore_state._build_session_proposal_output()
+    assert output is not None
+    msg = output["hookSpecificOutput"]["additionalContext"]
+    assert _pd.RECOMMENDATION_INSTRUCTION in msg
+
+
+def test_session_start_stdout_carries_recommendation_contract(tmp_path, monkeypatch, capsys):
+    """#582 round2 [Must]: collector の戻り値ではなく、hook が実際に stdout へ出す
+    最終 JSON の hookSpecificOutput.additionalContext に契約文が到達すること。
+
+    collector を通ったあと restore_state → session_notify.merge を経由するため、
+    collector 出力だけを検査していると merge 側で契約文を除去する変異が緑のまま通る。
+    """
+    import json as _json
+    from lib.daily import proposal_digest as _pd
+
+    source = _install_env(tmp_path, monkeypatch)
+    slug = _set_project_dir(tmp_path, monkeypatch)
+    _write_queue(source, {"per_pj": {slug: [_group(["k1"])]}, "global": []})
+
+    restore_state.handle_session_start({})
+    out = capsys.readouterr().out.strip()
+    assert out, "hook が何も出力していない"
+    payload = _json.loads(out)
+    ctx = payload["hookSpecificOutput"]["additionalContext"]
+    assert _pd.RECOMMENDATION_INSTRUCTION in ctx
+
+
 def test_build_fires_with_proposals_for_this_pj(tmp_path, monkeypatch):
     source = _install_env(tmp_path, monkeypatch)
     slug = _set_project_dir(tmp_path, monkeypatch)

@@ -10,6 +10,7 @@ import os
 import re
 import sys
 from collections import Counter
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -20,7 +21,12 @@ sys.path.insert(0, str(PLUGIN_ROOT / "scripts"))
 sys.path.insert(0, str(PLUGIN_ROOT / "scripts" / "lib"))
 
 from memory_temporal import make_source_correction_id
-from reflect_apply_match import check_line_applied
+from reflect_apply_match import (
+    check_line_applied,
+    classify_reflect_target_kind,
+    normalize_reflect_target_path,
+)
+from reflect_fold import _hash_correction_message
 from reflect_utils import (
     read_all_memory_entries,
     read_auto_memory,
@@ -32,7 +38,21 @@ from line_limit import check_line_limit, suggest_separation
 from semantic_detector import detect_contradictions, validate_corrections
 from similarity import jaccard_coefficient, tokenize
 
-from rl_common import cleanup_false_positives
+from rl_common import (
+    append_unique_record,
+    cleanup_false_positives,
+    new_correction_id,
+    resolve_correction_id,
+)
+from rl_common import persistence
+from rl_common.persistence import split_corrections_lines
+from rl_common.correction_id import (
+    assert_no_unexpected_content_loss,
+    atomic_write_text_preserving_mode,
+    corrections_write_lock,
+    fcntl_unsupported_reason,
+    snapshot_identities,
+)
 
 try:
     from episodic_retriever import find_episodic_duplicates, promote_to_episodic
@@ -112,16 +132,45 @@ def load_corrections(filepath: Path = CORRECTIONS_FILE) -> list[dict]:
     """corrections.jsonl を読み込む。"""
     if not filepath.exists():
         return []
-    records = []
-    for line in filepath.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line:
+    return [
+        indexed.record
+        for indexed in persistence.iter_indexed_lines(filepath.read_text(encoding="utf-8"))
+    ]
+
+
+@dataclass(frozen=True)
+class UpdateTarget:
+    index: int
+    expected_identity: tuple
+
+
+def resolve_source_correction_id(records: list[dict], source_correction_id: str) -> dict:
+    """既存の複合 source ID から不変 correction_id を読取専用で解決する。"""
+    candidates = []
+    for record in records:
+        if not isinstance(record, dict):
             continue
-        try:
-            records.append(json.loads(line))
-        except json.JSONDecodeError:
-            continue
-    return records
+        session_id = record.get("session_id", "")
+        timestamp = record.get("timestamp", "")
+        if (
+            session_id
+            and timestamp
+            and make_source_correction_id(session_id, timestamp) == source_correction_id
+        ):
+            candidates.append(record)
+    if not candidates:
+        return {"status": "not_found"}
+    if len(candidates) > 1:
+        return {"status": "ambiguous", "match_count": len(candidates)}
+
+    correction_id = candidates[0].get("correction_id")
+    result = resolve_correction_id(records, correction_id)
+    if result.status != "found":
+        output = {"status": result.status}
+        if result.match_count:
+            output["match_count"] = result.match_count
+        return output
+    return {"status": "found", "correction_id": correction_id}
 
 
 def extract_pending(records: list[dict]) -> list[dict]:
@@ -601,7 +650,7 @@ def record_rule_revert_entry(
 
 def update_reflect_status(
     filepath: Path,
-    indices: list[int],
+    targets: list[UpdateTarget],
     status: str,
     *,
     target_path: str | None = None,
@@ -618,14 +667,34 @@ def update_reflect_status(
 
     Args:
         filepath: corrections.jsonl のパス。
-        indices: 更新対象の行インデックス（0始まり、全レコード中の位置）。
+        targets: 更新対象のインデックス（0始まり）と読取時 identity。
+            index は **load_corrections が返す配列の
+            index と同じ空間**（空行・壊れた JSON 行は数えない）。物理行番号ではない
+            （#588 — 以前は物理行番号で照合しており、空行1つで全体が1つずれ、
+            指定と別のレコードが書き換わっていた）。
         status: 新しい reflect_status 値。
         target_path: status="applied" のときのみ必須。反映先ファイルのパス。
         draft_line: status="applied" のときのみ必須。起草行の全文（照合用）。
 
     Returns:
-        {"status": "applied" | "apply_unverified" | <status>, "target": str | None,
-         "reason": str | None}
+        {"status": "applied" | "apply_unverified" | "not_found" | <status>,
+         "target": str | None, "reason": str | None}
+        indices の一部/全部に対応するレコードが見つからない場合（#588 blocking (c)）、
+        黙って成功を返さず "not_found" を返す。見つかった分のみ書き込む。
+        非空の indices を渡されたのに filepath 自体が存在しない場合も "not_found"。
+        indices が空のときだけは「更新すべきものが無い」no-op 成功として <status> を返す。
+
+        **呼出側の契約**: "not_found" は失敗である。CLI は非0終了させ、
+        後続処理（revert 記録等）へ進めてはならない（#588 [Must]）。
+
+    既知の限界（#587 で根治する。本 issue のスコープ外）:
+        - index は「呼出側が読んだスナップショットの位置」であり、更新時に同じ
+          correction であることを identity で再確認していない。読取後に有効レコードが
+          挿入・削除されると別 correction を更新して成功を返す。
+        - 全文置換のため、追記 writer（persistence の flock）と協調しない。読取後に
+          追記された行が消える／2つの status 更新が後勝ちで巻き戻る。
+        どちらも「レコードを書き換える」という現在の記録方式そのものに由来する。
+        追記イベント行 + source_correction_id + read 時 fold へ変える #587 が受け皿。
     """
     if status == "applied":
         if target_path is None or draft_line is None:
@@ -641,25 +710,74 @@ def update_reflect_status(
                 "reason": match["reason"],
             }
 
-    if not filepath.exists() or not indices:
+    if not targets:
+        # 更新対象の指定が無い＝更新すべきものが無いので no-op 成功。
+        # 「指定したのに見つからない」(not_found) とは区別する。
         return {"status": status, "target": target_path, "reason": None}
 
-    lines = filepath.read_text(encoding="utf-8").splitlines()
-    index_set = set(indices)
+    reason = fcntl_unsupported_reason()
+    if reason is not None:
+        return {"status": "retry_required", "target": target_path, "reason": reason}
 
-    updated_lines = []
-    for i, line in enumerate(lines):
-        if i in index_set and line.strip():
-            try:
-                record = json.loads(line)
-                record["reflect_status"] = status
-                updated_lines.append(json.dumps(record, ensure_ascii=False))
-            except json.JSONDecodeError:
-                updated_lines.append(line)
-        else:
-            updated_lines.append(line)
+    with corrections_write_lock(filepath):
+        if not filepath.exists():
+            return {
+                "status": "not_found", "target": target_path,
+                "reason": f"corrections ファイルが存在しません: {filepath}",
+            }
+        text = filepath.read_text(encoding="utf-8")
+        by_physical = {
+            line.physical_line_index: line
+            for line in persistence.iter_indexed_lines(text)
+        }
+        target_by_index = {target.index: target for target in targets}
+        updated_lines = []
+        matched_indices: set[int] = set()
+        mismatched: list[int] = []
+        touched_raw: list[str] = []
+        physical_lines = split_corrections_lines(text)
+        for physical_index, raw_line in enumerate(physical_lines):
+            if physical_index == len(physical_lines) - 1 and not raw_line and text.endswith("\n"):
+                continue
+            indexed = by_physical.get(physical_index)
+            if indexed is None:
+                updated_lines.append(raw_line)
+                continue
+            target = target_by_index.get(indexed.record_index)
+            if target is None:
+                updated_lines.append(raw_line)
+                continue
+            if (
+                not isinstance(indexed.record, dict)
+                or persistence.record_identity(indexed.record) != target.expected_identity
+            ):
+                mismatched.append(indexed.record_index)
+                updated_lines.append(raw_line)
+                continue
+            record = dict(indexed.record)
+            record["reflect_status"] = status
+            updated_lines.append(json.dumps(record, ensure_ascii=False))
+            matched_indices.add(indexed.record_index)
+            touched_raw.append(raw_line)
 
-    filepath.write_text("\n".join(updated_lines) + "\n", encoding="utf-8")
+        if mismatched:
+            return {
+                "status": "identity_mismatch", "target": target_path,
+                "reason": f"index は範囲内だが対象が入れ替わっています: {sorted(mismatched)}",
+            }
+        missing = set(target_by_index) - matched_indices
+        if missing:
+            return {
+                "status": "not_found", "target": target_path,
+                "reason": "指定インデックスに対応するレコードが見つかりません "
+                f"(index: {sorted(missing)})",
+            }
+        new_content = "\n".join(updated_lines) + "\n"
+        assert_no_unexpected_content_loss(
+            snapshot_identities(text), snapshot_identities(new_content),
+            touched_before=snapshot_identities("\n".join(touched_raw)),
+        )
+        atomic_write_text_preserving_mode(filepath, new_content)
     return {"status": status, "target": target_path, "reason": None}
 
 
@@ -913,6 +1031,13 @@ def main():
     parser.add_argument("--skip-semantic", action="store_true", help="セマンティック検証をスキップ")
     parser.add_argument("--model", default="sonnet", help="セマンティック検証のモデル")
     parser.add_argument("--corrections-file", type=str, default=None, help="corrections.jsonl のパス（テスト用）")
+    parser.add_argument(
+        "--resolve-source-id",
+        type=str,
+        default=None,
+        metavar="SOURCE_CORRECTION_ID",
+        help="複合 source_correction_id に対応する不変 correction_id を読取専用で返す",
+    )
     parser.add_argument("--promote-episodic", action="store_true", help="指定 correction を episodic 層に昇格")
     parser.add_argument("--session-id", type=str, default=None, help="--promote-episodic: 昇格する correction の session_id")
     parser.add_argument("--timestamp", type=str, default=None, help="--promote-episodic: 昇格する correction の timestamp")
@@ -989,6 +1114,13 @@ def main():
     project_root = Path(current_project) if current_project else Path.cwd()
     weak_signals_file = Path(args.weak_signals_file) if args.weak_signals_file else None
     idioms_file = Path(args.idioms_file) if args.idioms_file else None
+
+    if args.resolve_source_id is not None:
+        result = resolve_source_correction_id(
+            load_corrections(corrections_file), args.resolve_source_id
+        )
+        print(json.dumps(result, ensure_ascii=False))
+        return
 
     # --show-weak-signals: weak_signals レーンの未昇格レコードを表示（#431/#432 二層化）
     # --context が渡されたら relevance_gate（#565）で「現在の文脈」と無関係な過去経験を
@@ -1205,6 +1337,19 @@ def main():
         draft_line = draft_line_path.read_text(encoding="utf-8").rstrip("\n")
 
         all_records = load_corrections(corrections_file)
+        source_resolution = resolve_source_correction_id(all_records, args.apply)
+        if source_resolution.get("status") != "found":
+            status = source_resolution.get("status")
+            if status == "ambiguous":
+                status = "ambiguous_source"
+            elif status == "invalid_id":
+                status = "unmigrated_source"
+            print(json.dumps({
+                **source_resolution,
+                "status": status,
+            }, ensure_ascii=False))
+            sys.exit(1)
+        target_correction_id = source_resolution["correction_id"]
         target_index = None
         for i, r in enumerate(all_records):
             sid = r.get("session_id", "")
@@ -1228,10 +1373,66 @@ def main():
             }, ensure_ascii=False, indent=2))
             return
 
+        correction_message_sha256 = _hash_correction_message(
+            all_records[target_index]
+        )
+        if correction_message_sha256 is None:
+            print(json.dumps({
+                "status": "pillar2_event_failed",
+                "pillar2_event": {
+                    "status": "invalid_correction_message",
+                    "reason": (
+                        "correction 本文が無いため反映イベントを記録できません。"
+                        "correction に message を補って再実行するか、"
+                        "--skip で在庫から外してください"
+                    ),
+                },
+            }, ensure_ascii=False, indent=2))
+            sys.exit(1)
+
+        attempt_id = new_correction_id()
+        attempt_event = {
+            "correction_id": attempt_id,
+            "schema_version": 1,
+            "event_type": "correction_apply_attempted",
+            "target_correction_id": target_correction_id,
+            "reflect_target_kind": classify_reflect_target_kind(args.target_path),
+            "reflect_target_path": normalize_reflect_target_path(args.target_path),
+            "reflect_draft_line": draft_line,
+            "correction_message_sha256": correction_message_sha256,
+            "attempted_at": datetime.now(timezone.utc).isoformat(),
+        }
+        phase1 = append_unique_record("reflect_apply_events.jsonl", attempt_event)
+        if phase1.status != "appended":
+            print(json.dumps({
+                "status": "pillar2_event_failed",
+                "pillar2_event": {
+                    "status": phase1.status,
+                    "reason": phase1.reason,
+                },
+            }, ensure_ascii=False, indent=2))
+            sys.exit(1)
+
         result = update_reflect_status(
-            corrections_file, [target_index], "applied",
+            corrections_file, [UpdateTarget(
+                target_index, persistence.record_identity(all_records[target_index])
+            )], "applied",
             target_path=args.target_path, draft_line=draft_line,
         )
+        if result.get("status") == "applied":
+            confirmation = append_unique_record("reflect_apply_events.jsonl", {
+                "correction_id": new_correction_id(),
+                "schema_version": 1,
+                "event_type": "correction_applied",
+                "target_correction_id": target_correction_id,
+                "confirms_attempt_id": attempt_id,
+                "reflect_applied_at": datetime.now(timezone.utc).isoformat(),
+            })
+            if confirmation.status != "appended":
+                result["pillar2_event"] = {
+                    "status": confirmation.status,
+                    "reason": confirmation.reason,
+                }
         # #475 §8.2/rev2: 反映先が rules 配下（= rule_identity is not None）で applied に
         # なったときは、必ず revert 記録を試みる（--before-content-file は上で必須化済み）。
         # 新規ファイル作成（before が空）は §8.2「やらないこと」どおり revert 未対応を
@@ -1258,6 +1459,11 @@ def main():
             "source_correction_id": args.apply,
             **result,
         }, ensure_ascii=False, indent=2))
+        # #588 [Must]: 検索時の not_found は sys.exit(1) なのに、検索後の競合で
+        # 更新側が not_found を返した場合だけ exit 0 になっていた。同じ事象が
+        # 発生タイミングだけで shell 上の成功/失敗に分かれるのを止める。
+        if result.get("status") in ("not_found", "identity_mismatch", "retry_required"):
+            sys.exit(1)
         return
 
     # --skip: 指定 correction を skipped にする（#514・修正在庫の『もう出さない』）。
@@ -1266,6 +1472,24 @@ def main():
     # skipped に巻き戻さない安全弁）。
     if args.skip:
         all_records = load_corrections(corrections_file)
+        source_resolution = resolve_source_correction_id(all_records, args.skip)
+        resolution_status = source_resolution.get("status")
+        if resolution_status not in ("found", "invalid_id"):
+            status = source_resolution.get("status")
+            if status == "ambiguous":
+                status = "ambiguous_source"
+            print(json.dumps({
+                **source_resolution,
+                "status": status,
+            }, ensure_ascii=False))
+            sys.exit(1)
+        target_correction_id = source_resolution.get("correction_id")
+        unresolved_note = None
+        if resolution_status == "invalid_id":
+            unresolved_note = (
+                "correction_id が未移行または不正なため、skip は続行しましたが"
+                "監査イベントは記録していません"
+            )
         target_index = None
         for i, r in enumerate(all_records):
             sid = r.get("session_id", "")
@@ -1290,17 +1514,40 @@ def main():
 
         if args.dry_run:
             # --dry-run では一切書かない（--apply と同じ dry-run ゲート貫通規約）。
-            print(json.dumps({
+            output = {
                 "status": "dry_run",
                 "source_correction_id": args.skip,
-            }, ensure_ascii=False, indent=2))
+            }
+            if unresolved_note is not None:
+                output.update(event_recorded=False, note=unresolved_note)
+            print(json.dumps(output, ensure_ascii=False, indent=2))
             return
 
-        result = update_reflect_status(corrections_file, [target_index], "skipped")
+        result = update_reflect_status(corrections_file, [UpdateTarget(
+            target_index, persistence.record_identity(all_records[target_index])
+        )], "skipped")
+        if result.get("status") == "skipped" and target_correction_id is not None:
+            skipped_event = append_unique_record("reflect_apply_events.jsonl", {
+                "correction_id": new_correction_id(),
+                "schema_version": 1,
+                "event_type": "correction_skipped",
+                "target_correction_id": target_correction_id,
+                "skipped_at": datetime.now(timezone.utc).isoformat(),
+            })
+            if skipped_event.status != "appended":
+                result["pillar2_event"] = {
+                    "status": skipped_event.status,
+                    "reason": skipped_event.reason,
+                }
+        elif result.get("status") == "skipped":
+            result.update(event_recorded=False, note=unresolved_note)
         print(json.dumps({
             "source_correction_id": args.skip,
             **result,
         }, ensure_ascii=False, indent=2))
+        # #588 [Must]: --apply と同じく、更新側の not_found も非0終了へ統一する。
+        if result.get("status") in ("not_found", "identity_mismatch", "retry_required"):
+            sys.exit(1)
         return
 
     # --promote-episodic: 指定 session_id + timestamp の correction を episodic に昇格
@@ -1347,15 +1594,30 @@ def main():
             print(json.dumps({"status": "empty", "message": "未処理の修正はありません"}, ensure_ascii=False, indent=2))
             return
         # pending + promoted のインデックスを特定（全レコード中の位置。#475 §5.1）
-        pending_indices = [
-            i for i, r in enumerate(all_records)
+        pending_targets = [
+            UpdateTarget(i, persistence.record_identity(r)) for i, r in enumerate(all_records)
             if r.get("reflect_status", "pending") in ("pending", "promoted")
         ]
+        # #588 [Must]: 以前は戻り値を捨てて "skipped_all" を無条件で出していたため、
+        # 読取後の並行変更で更新側が not_found を返しても成功表示になっていた。
+        update_result = None
         if not args.dry_run:
-            update_reflect_status(corrections_file, pending_indices, "skipped")
+            update_result = update_reflect_status(
+                corrections_file, pending_targets, "skipped"
+            )
+        if update_result is not None and update_result.get("status") in (
+            "not_found", "identity_mismatch", "retry_required"
+        ):
+            print(json.dumps({
+                "status": "not_found",
+                "count": len(pending_targets),
+                "dry_run": args.dry_run,
+                "reason": update_result.get("reason"),
+            }, ensure_ascii=False, indent=2))
+            sys.exit(1)
         print(json.dumps({
             "status": "skipped_all",
-            "count": len(pending_indices),
+            "count": len(pending_targets),
             "dry_run": args.dry_run,
         }, ensure_ascii=False, indent=2))
         return

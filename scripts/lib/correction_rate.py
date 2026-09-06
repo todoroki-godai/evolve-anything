@@ -56,6 +56,7 @@ from correction_semantic.judge_runner import (  # noqa: E402
 )
 from pj_slug import canonical_pj_slug as _canonical_pj_slug  # noqa: E402
 from pj_slug import pj_slug_fast as _pj_slug_fast  # noqa: E402
+from measurement_result import MeasuredDict, metadata as _measurement_metadata  # noqa: E402
 
 # D の値（§2.2）: 実測（週最大1,566件 > 週上限1,400件）から初期値として設定した**仮の運用値**。
 # 100%表示ゲートがあるため D の誤差は誤った率でなく「未測定週の増加」として現れる（安全側）。
@@ -112,7 +113,7 @@ def _parse_iso(raw: Any) -> Optional[datetime]:
 # ─────────────────────────────────────────────────────────────────
 # 生データ収集（production 既定は3ストアを read-only で読む）
 # ─────────────────────────────────────────────────────────────────
-def collect_raw_data() -> Dict[str, List[Dict[str, Any]]]:
+def collect_raw_data() -> Dict[str, Any]:
     """3ストアを read-only で読む（production 既定経路）。
 
     utterances は dialogue のみ・sidechain（``/subagents/``）除外済み
@@ -123,10 +124,18 @@ def collect_raw_data() -> Dict[str, List[Dict[str, Any]]]:
     from utterance_archive.query import query_utterances_all_projects
     from weak_signals.store import read_signals
 
+    utterances = query_utterances_all_projects(source_kinds=("dialogue",))
+    judged = read_judged_records()
+    weak_signals = read_signals()
     return {
-        "utterances": query_utterances_all_projects(source_kinds=("dialogue",)),
-        "judged": read_judged_records(),
-        "weak_signals": read_signals(),
+        "utterances": utterances,
+        "judged": judged,
+        "weak_signals": weak_signals,
+        "_measurement_health": {
+            "utterances": _measurement_metadata(utterances),
+            "judged": _measurement_metadata(judged),
+            "weak_signals": _measurement_metadata(weak_signals),
+        },
     }
 
 
@@ -177,6 +186,56 @@ def _physical_key(source_path: Any, line_no: Any) -> str:
     return f"{source_path or ''}:{line_no if line_no is not None else ''}"
 
 
+def _coverage_gap_reason(
+    *,
+    population_keys: List[str],
+    judged_key_set: Set[str],
+    judged_at_by_key: Dict[str, datetime],
+    judged_record_keys: Set[str],
+    cutoff: datetime,
+    expected_gap_count: int,
+    judged_source_measured: bool,
+    judged_source_reason: Optional[str] = None,
+) -> Dict[str, Any]:
+    """カバレッジ不足を締切超過・未判定・分類不能へ排他的に分ける。
+
+    ``unclassified_count`` は判定レコード自体は存在するものの ``judged_at`` を解釈
+    できない件数。内訳合計が呼び出し側の ``母集団 − 判定済`` と違えば、数値を正常値
+    として扱わず明示的に評価不能へ倒す。
+    """
+    if not judged_source_measured:
+        return {
+            "measured": False,
+            "deadline_exceeded_count": None,
+            "unjudged_count": None,
+            "unclassified_count": None,
+            "reason": judged_source_reason or "判定記録を取得できません",
+        }
+
+    unresolved_keys = set(population_keys) - judged_key_set
+    deadline_exceeded_count = sum(
+        1 for key in unresolved_keys
+        if (judged_at_by_key.get(key) is not None and judged_at_by_key[key] > cutoff)
+    )
+    unjudged_count = sum(1 for key in unresolved_keys if key not in judged_record_keys)
+    unclassified_count = sum(
+        1 for key in unresolved_keys
+        if key in judged_record_keys and key not in judged_at_by_key
+    )
+    classified_total = deadline_exceeded_count + unjudged_count + unclassified_count
+    measured = classified_total == expected_gap_count
+    return {
+        "measured": measured,
+        "deadline_exceeded_count": deadline_exceeded_count,
+        "unjudged_count": unjudged_count,
+        "unclassified_count": unclassified_count,
+        "reason": (
+            None if measured
+            else f"内訳合計が母集団と一致しません（{classified_total}/{expected_gap_count} 件）"
+        ),
+    }
+
+
 # ─────────────────────────────────────────────────────────────────
 # 週次集計本体
 # ─────────────────────────────────────────────────────────────────
@@ -212,6 +271,12 @@ def compute_weekly_correction_rate(
     """
     _now = now or datetime.now(timezone.utc)
     raw = raw if raw is not None else collect_raw_data()
+    source_health = raw.get("_measurement_health", {}) or {}
+    source_failure_reasons = [
+        f"{name}: {health.get('reason') or '読取失敗'}"
+        for name, health in source_health.items()
+        if not (health or {}).get("measured", True)
+    ]
 
     raw_utterances = raw.get("utterances", []) or []
     utterances_no_home, excluded_home_dir_total = _split_home_dir_utterances(raw_utterances)
@@ -229,6 +294,7 @@ def compute_weekly_correction_rate(
     raw["utterances"] = filtered_utterances
 
     diagnostics: Dict[str, Any] = {
+        "measurement_source_health": source_health,
         # #466: 分母から除外した件数（judge の母集団と揃えるため・silence != evaluated）。
         "excluded_home_dir_total": excluded_home_dir_total,
         "excluded_untracked_total": excluded_untracked_total,
@@ -252,11 +318,13 @@ def compute_weekly_correction_rate(
 
     # ── judged_at_by_key（最古の有効判定を採用・§2.2 競合解決） ──────
     judged_at_by_key: Dict[str, datetime] = {}
+    judged_record_keys: Set[str] = set()
     for rec in raw.get("judged", []) or []:
         key = rec.get("key")
         if key is None:
             diagnostics["judged_missing_key"] += 1
             continue
+        judged_record_keys.add(key)
         jat = _parse_iso(rec.get("judged_at"))
         if jat is None:
             diagnostics["judged_unparseable_judged_at"] += 1
@@ -345,8 +413,18 @@ def compute_weekly_correction_rate(
                 judged_keys.append(key)
         judged_count = len(judged_keys)
         judged_key_set = set(judged_keys)
+        coverage_gap_reason = _coverage_gap_reason(
+            population_keys=population_keys,
+            judged_key_set=judged_key_set,
+            judged_at_by_key=judged_at_by_key,
+            judged_record_keys=judged_record_keys,
+            cutoff=cutoff,
+            expected_gap_count=total_population - judged_count,
+            judged_source_measured=(source_health.get("judged") or {}).get("measured", True),
+            judged_source_reason=(source_health.get("judged") or {}).get("reason"),
+        )
 
-        failure_reasons: List[str] = []
+        failure_reasons: List[str] = list(source_failure_reasons)
         tp_keys: List[str] = []
         top3_source: List[Dict[str, Any]] = []
         for key in population_keys:
@@ -404,6 +482,7 @@ def compute_weekly_correction_rate(
             "measured": measured,
             "rate": rate,
             "failure_reasons": sorted(set(failure_reasons)),
+            "coverage_gap_reason": coverage_gap_reason,
             "pj_breakdown": pj_breakdown,
             "top3_examples": top3_examples,
             "category_breakdown": category_breakdown,
@@ -644,10 +723,40 @@ def build_correction_rate_summary(
         if latest else None
     )
 
-    return {
+    utterances_health = (result["diagnostics"].get("measurement_source_health", {}) or {}).get(
+        "utterances"
+    ) or {}
+    coverage_gaps = None if not utterances_health.get("measured", True) else [
+        {
+            "week_id": week["week_id"],
+            "judged": week["judged_count"],
+            "total": week["total_population"],
+            "reason": week["coverage_gap_reason"],
+        }
+        for week in weeks
+        if week["total_population"] > 0 and week["coverage"] < 1.0
+    ]
+
+    summary = {
         "gate": gate,
         "displayed_weeks": displayed,
         "latest_coverage": latest_coverage,
+        "coverage_gaps": coverage_gaps,
         "diagnostics": result["diagnostics"],
         "generated_at": result["generated_at"],
     }
+    source_health = result["diagnostics"].get("measurement_source_health", {}) or {}
+    failures = [
+        f"{name}: {health.get('reason') or '読取失敗'}"
+        for name, health in source_health.items()
+        if not (health or {}).get("measured", True)
+    ]
+    return MeasuredDict(
+        summary,
+        measured=not failures,
+        reason="; ".join(failures) or None,
+        dropped_lines=sum(
+            int((health or {}).get("dropped_lines", 0))
+            for health in source_health.values()
+        ),
+    )

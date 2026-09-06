@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 from rl_common.file_lock import file_lock
+from measurement_result import MeasuredList
 
 _PLUGIN_DATA_ENV = os.environ.get("CLAUDE_PLUGIN_DATA", "")
 DATA_DIR = Path(_PLUGIN_DATA_ENV) if _PLUGIN_DATA_ENV else Path.home() / ".claude" / "evolve-anything"
@@ -69,19 +70,30 @@ def history_path(slug: str) -> Path:
 
 
 def _read_jsonl(path: Path) -> List[Dict[str, Any]]:
-    """1 ファイルを読み込む。未存在なら []。空行・壊れた JSON 行はスキップ。"""
+    """1 ファイルを読み込む。壊れた行は数え、全行破損なら測定不能にする。"""
     if not path.exists():
-        return []
+        return MeasuredList()
     records: List[Dict[str, Any]] = []
+    dropped_lines = 0
     for line in path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line:
             continue
         try:
-            records.append(json.loads(line))
+            record = json.loads(line)
+            if not isinstance(record, dict):
+                dropped_lines += 1
+                continue
+            records.append(record)
         except json.JSONDecodeError:
-            continue
-    return records
+            dropped_lines += 1
+    reason = f"破損 JSONL を {dropped_lines} 行スキップ" if dropped_lines else None
+    return MeasuredList(
+        records,
+        measured=not (dropped_lines and not records),
+        reason=reason,
+        dropped_lines=dropped_lines,
+    )
 
 
 def _merge_dedup(
@@ -101,7 +113,14 @@ def _merge_dedup(
     """
     by_id: Dict[Any, Dict[str, Any]] = {}
     out: List[Dict[str, Any]] = []
+    dropped_lines = 0
+    measured = True
+    reasons: List[str] = []
     for batch in batches:
+        dropped_lines += int(getattr(batch, "dropped_lines", 0))
+        measured = measured and bool(getattr(batch, "measured", True))
+        if getattr(batch, "reason", None):
+            reasons.append(str(batch.reason))
         for rec in batch:
             rid = rec.get("id")
             if rid is not None:
@@ -111,7 +130,15 @@ def _merge_dedup(
                     continue  # 候補列は先頭ほど優先 → 先勝ち
                 by_id[rid] = rec
             out.append(rec)
-    return out
+    reason = f"破損 JSONL を {dropped_lines} 行スキップ" if dropped_lines else None
+    if not reason and reasons:
+        reason = "; ".join(dict.fromkeys(reasons))
+    return MeasuredList(
+        out,
+        measured=measured if out else not bool(dropped_lines),
+        reason=reason,
+        dropped_lines=dropped_lines,
+    )
 
 
 def load_raw_history(slug: str) -> List[Dict[str, Any]]:
@@ -363,7 +390,13 @@ def load_effective_history(slug: str) -> List[Dict[str, Any]]:
     ``_aliased_raw_records``（alias 6段階集約）→ ``fold_effective``（1回適用）。
     revert 済み accept entry・revert イベント自体は出力に含まれない（§1 出力契約）。
     """
-    return fold_effective(_aliased_raw_records(slug))
+    raw = _aliased_raw_records(slug)
+    return MeasuredList(
+        fold_effective(raw),
+        measured=bool(getattr(raw, "measured", True)),
+        reason=getattr(raw, "reason", None),
+        dropped_lines=int(getattr(raw, "dropped_lines", 0)),
+    )
 
 
 def load_revert_events(slug: str) -> List[Dict[str, Any]]:
@@ -372,7 +405,13 @@ def load_revert_events(slug: str) -> List[Dict[str, Any]]:
     revert の事実そのものが必要な reader が使う。``load_effective_history`` と同じ
     alias 6段階集約から抽出するため、集約結果に矛盾は生じない。
     """
-    return [rec for rec in _aliased_raw_records(slug) if is_revert_event(rec)]
+    raw = _aliased_raw_records(slug)
+    return MeasuredList(
+        [rec for rec in raw if is_revert_event(rec)],
+        measured=bool(getattr(raw, "measured", True)),
+        reason=getattr(raw, "reason", None),
+        dropped_lines=int(getattr(raw, "dropped_lines", 0)),
+    )
 
 
 def load_raw_history_with_aliases(

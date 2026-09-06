@@ -4,6 +4,9 @@ CLAUDE.md のコンポーネント表の詳細版（SoT）の一部。全体索�
 新コンポーネント追加・既存変更時は、該当ドメインのこのファイルに詳細を書き、
 CLAUDE.md のサマリ表には 1 行（名前 + 一言 + 参照）だけ追記する。
 
+`shrink_freeze` の例外として、#587（2026-09-01）の `reflect_apply_events.jsonl` 1件だけは
+ユーザー裁定により凍結スナップショットへの追加を認める。
+
 | コンポーネント | 説明 |
 |----------------|------|
 | pitfall 自動強制 (`pitfall_lint` / `pitfall_commit_gate`) | install + `pitfall-curate enable` で登録した pitfalls.md に対し、編集時 hook（PostToolUse・警告のみ）と commit 時ゲート（PreToolUse Bash・staged を検査し danger を exit 2 でブロック）の二段で正準フォーマットを自動 lint。判定は `normalize --check`（ok/drift/danger、書き換えなし）、台帳は `scripts/lib/pitfall_registry.py`（オプトイン・決定論、`unmanaged_candidates` で未登録を集合差検出。探索は `_DISCOVERY_IGNORE` で `.git`/`node_modules` 等に加え `worktrees` を除外し、`.claude/worktrees/<name>/...` の一時作業コピーを未登録誤検知しない＝#393）。自動書き換えはしない（silent wipe 防止、ADR-027）。audit は「育っている（エントリ3+件）のに未登録」の pitfalls.md を `Unmanaged Pitfalls` セクションで可視化し enable を誘導（evolve のたびに発火、liveness 判定は `parse.count_entries`）。pitfalls.md が1件でもある PJ では該当なしでも「評価したが対象なし ✓」を1行残し（沈黙=配線漏れ誤認を防止）、1件も無い PJ のみ非表示 |

@@ -241,7 +241,8 @@ def _run_drain(repo_root: Path, result_json: Path, env: Optional[dict] = None) -
     apply 境界の drain は **非 dry-run・tool 文脈**で走り、weak_signals / optimize_history を
     正準 DATA_DIR（CLAUDE_PLUGIN_DATA 由来）に書く（#484/#513）。``--result-json`` を渡すことで
     drain_pending は home 固定の MARKER_ROOT を読まず result JSON の ``evolve_decisions.pending``
-    から pending を取る（#402）。これにより隔離が完全になり、home の実マーカーに依存しない。
+    から pending を取る（#402）。さらに判断（accepted/rejected）を伴わないため purge も no-op
+    となり、MARKER_ROOT に一切書き込まない。
     LLM は drain 経路では呼ばれない（決定論 weak_signals + 既存 pending の ingest のみ）。
     """
     run_env = dict(os.environ if env is None else env)
@@ -283,7 +284,8 @@ def check_store_diff_1b(
     【隔離コピー方式（#515 流用）】
     (a) DATA_DIR を一時ディレクトリへコピー（実環境を汚さない）
     (b) CLAUDE_PLUGIN_DATA=<コピー先> で ``--drain --result-json <result>`` を起動。
-        ``--result-json`` 指定により MARKER_ROOT=home 固定マーカーを読まないため隔離が完全になる。
+        ``--result-json`` 指定で MARKER_ROOT=home 固定マーカーを読まず、判断
+        （accepted/rejected）を伴わないため purge も no-op となり、MARKER_ROOT に一切書き込まない。
     (c) コピー側の store 差分 + drain サマリで assert:
         - サマリに ``weak_signals_persisted`` があり ``dry_run`` が False（配線の生存 + 非 dry-run）
         - weak_signals.jsonl 等の決定論チャネル書込が isolated copy に現れる（書込方向）

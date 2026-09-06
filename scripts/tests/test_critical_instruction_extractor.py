@@ -36,8 +36,24 @@ from critical_instruction_extractor import (
     extract_critical_lines,
     ingest_rephrase,
     ingest_violation_judges,
+    _build_judge_prompt,
     rephrase_to_calm,
 )
+
+
+def test_build_judge_prompt_exact_snapshot_without_chain_of_thought() -> None:
+    item = {
+        "correction_message": "SENTINEL_CORRECTION",
+        "instruction_text": "SENTINEL_INSTRUCTION",
+    }
+    assert _build_judge_prompt(item) == (
+        "以下のユーザー修正が、スキル指示への違反を示しているか判定してください。\n\n"
+        "スキル指示: SENTINEL_INSTRUCTION\n"
+        "ユーザー修正: SENTINEL_CORRECTION\n\n"
+        "違反していれば is_violation=true、していなければ false。\n\n"
+        'JSON形式で回答: {"is_violation": true/false, "confidence": 0.0-1.0, '
+        '"reason": "..."}'
+    )
 
 # ── extract_critical_lines ──────────────────────────────
 

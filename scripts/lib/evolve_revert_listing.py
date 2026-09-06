@@ -27,6 +27,7 @@ from typing import Any, Dict, List, Optional
 from optimize_history_store import load_effective_history, resolve_slug
 from evolve_revert import REASON_LABELS, compute_revert_availability, detect_subsequent_change
 from results_board import classify_decision
+from measurement_result import MeasuredList, read_measurement
 
 
 def build_revert_listing(slug: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -45,9 +46,10 @@ def build_revert_listing(slug: Optional[str] = None) -> List[Dict[str, Any]]:
     if slug is None:
         slug = resolve_slug()
 
-    try:
-        history = load_effective_history(slug) or []
-    except Exception:
+    history, history_measurement = read_measurement(
+        lambda: load_effective_history(slug), fallback=[]
+    )
+    if history is None:
         history = []
 
     items: List[Dict[str, Any]] = []
@@ -70,11 +72,13 @@ def build_revert_listing(slug: Optional[str] = None) -> List[Dict[str, Any]]:
     # timestamp 欠落は最古扱い（末尾）にする。新しい順（reverse=True）と組合わせ、
     # 欠落キー（空文字列）は辞書順で最小になるため sort 前に降順で末尾へ回る。
     items.sort(key=lambda x: x.get("timestamp") or "", reverse=True)
-    return items
+    return MeasuredList(items, **history_measurement)
 
 
 def render_revert_listing(items: List[Dict[str, Any]]) -> List[str]:
     """人間向けテキスト表示を生成する（``bin/evolve-revert --list`` の既定出力）。"""
+    if not bool(getattr(items, "measured", True)):
+        return [f"採用履歴: 測定不能（{getattr(items, 'reason', None) or '理由不明'}）"]
     if not items:
         return ["採用の記録はありません（0件）"]
 
@@ -89,6 +93,8 @@ def render_revert_listing(items: List[Dict[str, Any]]) -> List[str]:
         f"採用 {len(items)} 件（戻せる {revertible_count} 件 / 戻せない {unavailable_count} 件）",
         "",
     ]
+    if getattr(items, "dropped_lines", 0):
+        lines.insert(1, str(getattr(items, "reason", "")))
     for it in items:
         ts = (it.get("timestamp") or "")[:10] or "(日時不明)"
         entry_id = it.get("entry_id") or "(id不明)"

@@ -108,6 +108,195 @@ class TestExtractProhibitedCommandHeads:
         assert "git checkout -b" in heads
         assert "git" not in heads
 
+    def test_recommended_command_far_from_keyword_is_not_prohibited(self, tmp_path):
+        """実測回帰: 1 行の長文 rule で、推奨として書かれたコマンドを
+        遠くの禁止キーワードに引きずられて禁止扱いしない。
+
+        既知の並びのみ検出する advisory であり、判定に使うのは
+        「キーワードと同じ文に属し、キーワードより前に閉じた backtick」という
+        文字位置の近さ。
+        """
+        rules_dir = tmp_path / "rules"
+        rules_dir.mkdir()
+        (rules_dir / "delegate.md").write_text(
+            "- **同一タスクに2体目を spawn しない**。回復手順は有界にする: "
+            "頭が次に作業先の実体（`git log`/`git status`）を見た時点までに"
+            "指示が反映されていなければ、同じ worker へ 1 回だけ再送する。"
+            "**不達の判定に `ListAgents` の在否を使わない**\n",
+            encoding="utf-8",
+        )
+        heads = extract_prohibited_command_heads([rules_dir])
+        assert "git log" not in heads
+        assert "git status" not in heads
+        # 同じ fixture で真陽性の維持も固定する（抽出そのものが空になる退行を検出）。
+        assert "ListAgents" in heads
+
+    def test_multiple_keywords_each_take_their_own_preceding_token(self, tmp_path):
+        """1 行に禁止表現が複数あるとき、各キーワードの直前をそれぞれ拾う。"""
+        rules_dir = tmp_path / "rules"
+        rules_dir.mkdir()
+        (rules_dir / "x.md").write_text(
+            "- `cd` は禁止。代わりに `git -C` を使う。なお `sudo` も使わない。\n",
+            encoding="utf-8",
+        )
+        heads = extract_prohibited_command_heads([rules_dir])
+        assert "cd" in heads
+        assert "sudo" in heads
+        assert "git -C" not in heads
+
+    def test_keyword_without_preceding_backtick_yields_nothing(self, tmp_path):
+        """キーワードの前に backtick が無い行からは何も抽出しない。"""
+        rules_dir = tmp_path / "rules"
+        rules_dir.mkdir()
+        (rules_dir / "x.md").write_text(
+            "- 破壊的な操作は禁止。確認してから `rm` を実行する。\n",
+            encoding="utf-8",
+        )
+        heads = extract_prohibited_command_heads([rules_dir])
+        assert heads == set()
+
+    def test_keyword_inside_backtick_does_not_select_that_backtick(self, tmp_path):
+        """backtick の内側に禁止キーワードが現れる行で、その backtick 自身を
+        「キーワードの直前のトークン」として採用しない。
+
+        採用判定は backtick の**閉じ位置**がキーワード開始位置以下であること。
+        開始位置で比較すると、キーワードをまたぐ backtick が自分自身を選ぶ。
+        """
+        rules_dir = tmp_path / "rules"
+        rules_dir.mkdir()
+        (rules_dir / "x.md").write_text(
+            "- 説明文に `MUST NOT` という表現を含めてよい\n",
+            encoding="utf-8",
+        )
+        heads = extract_prohibited_command_heads([rules_dir])
+        assert heads == set()
+
+    def test_same_keyword_repeated_in_one_line_is_scanned_every_time(self, tmp_path):
+        """同一の禁止キーワードが 1 行に複数回現れるとき、2 回目以降も走査する。"""
+        rules_dir = tmp_path / "rules"
+        rules_dir.mkdir()
+        (rules_dir / "x.md").write_text(
+            "- `cd` は禁止。同様に `sudo` も禁止。\n", encoding="utf-8"
+        )
+        heads = extract_prohibited_command_heads([rules_dir])
+        assert "cd" in heads
+        assert "sudo" in heads
+
+    def test_symbol_only_backtick_is_not_a_command(self, tmp_path):
+        """コマンド名の形をしない backtick（記号のみ）は禁止コマンドにしない。"""
+        rules_dir = tmp_path / "rules"
+        rules_dir.mkdir()
+        (rules_dir / "x.md").write_text(
+            "- パイプ `|` の乱用は禁止\n", encoding="utf-8"
+        )
+        heads = extract_prohibited_command_heads([rules_dir])
+        assert heads == set()
+
+    def test_one_keyword_governs_parallel_targets_in_same_sentence(self, tmp_path):
+        """1 つの禁止キーワードが同じ文の複数の対象を支配する並列文型で、
+        列挙されたすべてを保持する（外部レビュー巡1 [Must]）。"""
+        rules_dir = tmp_path / "rules"
+        rules_dir.mkdir()
+        (rules_dir / "x.md").write_text(
+            "- `rm` と `sudo` は禁止する。\n", encoding="utf-8"
+        )
+        heads = extract_prohibited_command_heads([rules_dir])
+        assert heads == {"rm", "sudo"}
+
+    def test_quoted_keyword_does_not_arm_earlier_tokens(self, tmp_path):
+        """backtick の内側に引用された禁止キーワードは、禁止の宣言として扱わない。
+
+        その backtick 自身だけでなく、同じ文の**手前**の backtick も
+        禁止扱いにしない（外部レビュー巡1 [Must]（追加））。
+        """
+        rules_dir = tmp_path / "rules"
+        rules_dir.mkdir()
+        (rules_dir / "x.md").write_text(
+            "- `git status` でログを確認し、`MUST NOT` という表現が"
+            "残っていないか検索する。\n",
+            encoding="utf-8",
+        )
+        heads = extract_prohibited_command_heads([rules_dir])
+        assert heads == set()
+
+    def test_previous_sentence_tokens_are_out_of_scope(self, tmp_path):
+        """前の文に現れた推奨コマンドは、後続の文の禁止キーワードに支配されない。"""
+        rules_dir = tmp_path / "rules"
+        rules_dir.mkdir()
+        (rules_dir / "x.md").write_text(
+            "- 状態は `git status` で確認する。破壊的な操作は `rm -rf` を含め禁止。\n",
+            encoding="utf-8",
+        )
+        heads = extract_prohibited_command_heads([rules_dir])
+        assert "git status" not in heads
+        assert "rm -rf" in heads
+
+
+class TestKnownLimitations:
+    """文字位置の近さで判定する方式の、既知の作動しない条件を現状挙動として固定する。
+
+    これらは「正しい振る舞い」ではなく「いまこう振る舞う」の記録である。
+    方式を明示的な禁止 spec へ置き換えて解消した時点で、このクラスは赤くなるので
+    そのとき削除または更新する（外部レビュー巡2 で構成された反例）。
+
+    実 rules（`~/.claude/rules` と当PJ `.claude/rules`）に該当する文面は
+    2026-09-04 時点で 0 件。
+    """
+
+    def test_contrast_sentence_also_captures_the_recommended_command(self, tmp_path):
+        """1 つの文で推奨と禁止を対比すると、推奨側も抽出する（既知の限界）。"""
+        rules_dir = tmp_path / "rules"
+        rules_dir.mkdir()
+        (rules_dir / "x.md").write_text(
+            "- 状態は `git status` で確認し、`rm` は禁止する。\n", encoding="utf-8"
+        )
+        heads = extract_prohibited_command_heads([rules_dir])
+        assert heads == {"git status", "rm"}
+
+    def test_target_written_after_the_keyword_is_not_captured(self, tmp_path):
+        """禁止対象をキーワードより後ろに書く文型は拾わない（既知の限界）。"""
+        rules_dir = tmp_path / "rules"
+        rules_dir.mkdir()
+        (rules_dir / "x.md").write_text(
+            "- 禁止コマンドは `rm` とする。\n", encoding="utf-8"
+        )
+        heads = extract_prohibited_command_heads([rules_dir])
+        assert heads == set()
+
+    def test_negated_keyword_is_still_treated_as_a_prohibition(self, tmp_path):
+        """キーワードが否定される文型でも禁止として抽出する（既知の限界）。"""
+        rules_dir = tmp_path / "rules"
+        rules_dir.mkdir()
+        (rules_dir / "x.md").write_text(
+            "- `git status` は禁止対象外。\n", encoding="utf-8"
+        )
+        heads = extract_prohibited_command_heads([rules_dir])
+        assert heads == {"git status"}
+
+    def test_ascii_period_is_not_a_sentence_boundary(self, tmp_path):
+        """英文の終止符は文境界として扱わない（既知の限界）。
+
+        ASCII `.` を境界へ加えると `script.py` / `python3.12` のような
+        トークン内の点まで境界になり、真の陽性を落とすため加えていない。
+        """
+        rules_dir = tmp_path / "rules"
+        rules_dir.mkdir()
+        (rules_dir / "x.md").write_text(
+            "- Use `git status` first. `rm` is MUST NOT.\n", encoding="utf-8"
+        )
+        heads = extract_prohibited_command_heads([rules_dir])
+        assert "git status" in heads
+
+    def test_version_like_token_is_still_captured(self, tmp_path):
+        """陽性対照: トークン内に点を含む禁止対象は落とさない。"""
+        rules_dir = tmp_path / "rules"
+        rules_dir.mkdir()
+        (rules_dir / "x.md").write_text(
+            "- `python3.12` は禁止。\n", encoding="utf-8"
+        )
+        heads = extract_prohibited_command_heads([rules_dir])
+        assert "python3.12" in heads
+
 
 class TestPartitionRuleViolations:
     def test_splits_prohibited_pattern_into_violation_lane(self):

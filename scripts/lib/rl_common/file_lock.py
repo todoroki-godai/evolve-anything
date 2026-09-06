@@ -12,6 +12,7 @@ evolve の decision 状態は marker / queue / optimize_history の3ファイル
 from __future__ import annotations
 
 import fcntl
+import os
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
@@ -29,12 +30,24 @@ def file_lock(lock_path: Path) -> Iterator[None]:
     呼び出し元は ``try_file_lock``（non-blocking 版）を使うこと。
     """
     lock_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(lock_path, "a", encoding="utf-8") as fh:
-        fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+    while True:
+        fh = open(lock_path, "a", encoding="utf-8")
         try:
-            yield
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+            try:
+                try:
+                    current = os.stat(lock_path)
+                except OSError:
+                    continue
+                held = os.fstat(fh.fileno())
+                if (current.st_dev, current.st_ino) != (held.st_dev, held.st_ino):
+                    continue
+                yield
+                return
+            finally:
+                fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
         finally:
-            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+            fh.close()
 
 
 @contextmanager

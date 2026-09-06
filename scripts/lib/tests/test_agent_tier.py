@@ -169,6 +169,35 @@ def test_env_override_none_when_empty_string():
     ) is None
 
 
+def test_env_override_detail_states_post_2_1_251_semantics():
+    """CC 2.1.251 の意味変更に説明文が追随していることを固定する契約テスト。
+
+    この env は 2.1.251 で「全指定の上書き」から「既定値」に変わった。旧仕様の
+    説明（frontmatter を上書き／ティア宣言が無効化される）へ戻ると、読み手が
+    誤ったモデル配分の運用判断をするため、決定論で検出する。
+
+    出所: 2026-08-30 の外部レビュー（codex）。旧説明が事実誤りであることと、
+    「model 未指定の spawn が env に倒れる」を単独条件で書くと
+    `model:` 宣言のある agent で誤予測になることが指摘された。
+    """
+    finding = agent_tier.check_subagent_model_env_override(
+        env={"CLAUDE_CODE_SUBAGENT_MODEL": "haiku"}
+    )
+    assert finding is not None
+    detail = finding["detail"]
+
+    # 実効値に倒れる条件は「spawn 指定と agent 定義の双方が無い」ときだけ。
+    assert "双方" in detail, "env が効く条件（spawn と agent 定義の双方が無い）が欠落"
+    # 必ず起きるのではなく起こり得る、という潜在リスクの表現を保つ。
+    assert "得ます" in detail or "得る" in detail, "断定表現に戻っている"
+    # 旧仕様の記述（frontmatter を上書きする／ティア宣言が無効化される）へ戻さない。
+    assert "無効化" not in detail
+    assert "frontmatter の model 宣言は上書きされない" in detail
+
+    # severity の根拠は「指定漏れの既定値が変わる」であって全面無効化ではない。
+    assert finding["severity"] == "low"
+
+
 # --- 複合 ------------------------------------------------------------------
 
 

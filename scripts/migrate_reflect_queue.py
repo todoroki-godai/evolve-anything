@@ -11,6 +11,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Set, Tuple
 
+_PLUGIN_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_PLUGIN_ROOT / "scripts" / "lib"))
+
+from rl_common import append_correction_record, new_correction_id
+
 LEARNINGS_QUEUE = Path.home() / ".claude" / "learnings-queue.json"
 CORRECTIONS_FILE = Path.home() / ".claude" / "evolve-anything" / "corrections.jsonl"
 
@@ -45,6 +50,7 @@ def convert_learning(learning: Dict[str, Any]) -> Dict[str, Any]:
     message = learning.get("message", "")
 
     return {
+        "correction_id": new_correction_id(),
         "timestamp": timestamp,
         "original_text": message,
         "correction_type": learning.get("type", "correction"),
@@ -115,16 +121,36 @@ def migrate(dry_run: bool = False) -> Dict[str, Any]:
         result["status"] = "dry_run"
         return result
 
-    if converted:
-        CORRECTIONS_FILE.parent.mkdir(parents=True, exist_ok=True)
-        with open(CORRECTIONS_FILE, "a", encoding="utf-8") as f:
-            for rec in converted:
-                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    CORRECTIONS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    for index, rec in enumerate(converted):
+        append_result = append_correction_record(CORRECTIONS_FILE, rec)
+        if append_result.status != "appended":
+            result.update({
+                "status": "partial",
+                "appended": index,
+                "failed_index": index,
+                "failure_status": append_result.status,
+                "reason": append_result.reason,
+                "unprocessed": len(converted) - index - 1,
+            })
+            print(
+                f"[evolve-anything:correction] queue migration stopped at {index}: "
+                f"{append_result.status}",
+                file=sys.stderr,
+            )
+            return result
 
     # 元ファイルを空配列にする
     LEARNINGS_QUEUE.write_text("[]", encoding="utf-8")
 
     result["status"] = "completed"
+    result.update({
+        "appended": len(converted),
+        "failed_index": None,
+        "failure_status": None,
+        "reason": None,
+        "unprocessed": 0,
+    })
     return result
 
 

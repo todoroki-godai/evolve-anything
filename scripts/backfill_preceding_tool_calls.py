@@ -24,6 +24,7 @@ sys.path.insert(0, str(_PLUGIN_ROOT / "scripts" / "lib"))
 sys.path.insert(0, str(_PLUGIN_ROOT / "hooks"))
 
 import common
+from rl_common import append_correction_record, new_correction_id
 
 # ~/.claude/projects/<slug>/ のパス
 _PROJECTS_DIR = Path.home() / ".claude" / "projects" / "-Users-todoroki-tools-evolve-anything"
@@ -209,6 +210,7 @@ def process_sessions(days: int, max_files: int) -> list[dict]:
             preceding = get_tool_calls_from_messages(messages, idx)
 
             results.append({
+                "correction_id": new_correction_id(),
                 "correction_type": correction_type,
                 "message": text[:200],
                 "preceding_tool_calls": preceding,
@@ -227,7 +229,7 @@ def process_sessions(days: int, max_files: int) -> list[dict]:
     return results
 
 
-def persist_to_corrections(corrections: list[dict]) -> int:
+def persist_to_corrections(corrections: list[dict]) -> dict:
     """重複なしで corrections.jsonl に追記する。"""
     _DATA_DIR.mkdir(parents=True, exist_ok=True)
     existing_keys: set[str] = set()
@@ -243,16 +245,35 @@ def persist_to_corrections(corrections: list[dict]) -> int:
                 except json.JSONDecodeError:
                     pass
 
-    new_count = 0
-    with open(corrections_file, "a", encoding="utf-8") as f:
-        for c in corrections:
-            key = f"{c.get('session_id','')}-{c.get('timestamp','')}"
-            if key not in existing_keys:
-                f.write(json.dumps(c, ensure_ascii=False) + "\n")
-                existing_keys.add(key)
-                new_count += 1
+    candidates = []
+    for correction in corrections:
+        key = f"{correction.get('session_id','')}-{correction.get('timestamp','')}"
+        if key not in existing_keys:
+            candidates.append((key, correction))
+            existing_keys.add(key)
 
-    return new_count
+    for index, (key, correction) in enumerate(candidates):
+        result = append_correction_record(corrections_file, correction)
+        if result.status != "appended":
+            print(
+                f"[evolve-anything:correction] backfill stopped at {index}: {result.status}"
+                + (f" ({result.reason})" if result.reason else ""),
+                file=sys.stderr,
+            )
+            return {
+                "appended": index,
+                "failed_index": index,
+                "failure_status": result.status,
+                "reason": result.reason,
+                "unprocessed": len(candidates) - index - 1,
+            }
+    return {
+        "appended": len(candidates),
+        "failed_index": None,
+        "failure_status": None,
+        "reason": None,
+        "unprocessed": 0,
+    }
 
 
 def main() -> None:
@@ -268,8 +289,8 @@ def main() -> None:
     corrections = process_sessions(args.days, args.max_files)
 
     if args.persist and corrections:
-        added = persist_to_corrections(corrections)
-        print(f"corrections.jsonl に {added} 件追記", flush=True)
+        persist_result = persist_to_corrections(corrections)
+        print(f"corrections.jsonl に {persist_result['appended']} 件追記", flush=True)
 
     analysis = analyze_tool_call_patterns(corrections)
     elapsed = time.time() - t0

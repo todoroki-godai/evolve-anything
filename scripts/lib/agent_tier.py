@@ -175,9 +175,20 @@ def check_subagent_model_env_override(
 ) -> Optional[Dict[str, Any]]:
     """環境変数 CLAUDE_CODE_SUBAGENT_MODEL が設定されていれば warning finding を返す。
 
-    この env が非空だと **全 subagent の frontmatter model を実行時に上書き**する
-    （解決順 env > 起動時 > frontmatter > session）。ティア適合ゲートが読む
-    frontmatter の model 宣言が無効化されるため、設定中は advisory で surface する。
+    この env は **subagent の既定 model** を決める（CC 2.1.251 で意味が変わった。
+    それ以前は frontmatter を含む全指定を上書きしていた）。現行の優先順は
+    spawn 時の明示指定 > agent 定義の `model:` > この env であり、**frontmatter で
+    model を宣言している agent のティア宣言は、この env では無効化されない**。
+
+    それでも surface する理由は、**spawn 時の明示指定と agent 定義の `model:` の
+    双方が無い**呼び出しがこの env の値に静かに倒れるため（ティア台帳に無い配分が
+    生じ得る）。片方でも指定があれば env は実効値に使われないので、この finding は
+    「必ず起きている」ではなく「起こり得る」を surface する潜在リスク検出である。
+    env も未設定なら、その呼び出しは親（呼び出し元）のモデルを継承する。
+
+    **未確認**: 空白のみ以外で CC が受理しない値（不正なモデル名・未知の exact ID）を
+    この env に入れた場合の CC 側の挙動（拒否・正規化・fallback）は検証していない。
+    この finding の説明は「CC が有効な既定 model として受理する値」を前提とする。
 
     env=None のときは実環境 os.environ を参照する。
     """
@@ -189,8 +200,9 @@ def check_subagent_model_env_override(
         "type": "subagent_model_env_override",
         "agent": "(env)",
         "detail": (
-            f"{SUBAGENT_MODEL_ENV}={value!r} が設定されており、全 subagent の frontmatter "
-            f"model を実行時に上書きします（ティア宣言が無効化される）。試運転が終わったら解除を検討"
+            f"{SUBAGENT_MODEL_ENV}={value!r} が設定されており、spawn 時の明示指定と "
+            f"agent 定義の model: の双方が無い呼び出しがこの値に倒れ得ます（CC 2.1.251 以降 "
+            f"frontmatter の model 宣言は上書きされない）。試運転が終わったら解除を検討"
         ),
         "severity": "low",
     }

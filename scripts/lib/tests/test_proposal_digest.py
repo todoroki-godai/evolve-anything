@@ -1343,3 +1343,32 @@ def test_seen_filter_drops_cross_pj_when_only_confirmed_key_is_read():
     # 残存キーからは cross_pj が消えている。
     x_after = [g for g in after if g["signal_keys"] == ["kx-plain"]][0]
     assert pr._remaining_cross_pj(x_after) == []
+
+
+def test_build_proposal_prompt_requires_recommendation_per_item():
+    """朝の4択は判断材料だけでなく「推奨（どれを選ぶべきか＋理由1行）」を必ず添えさせる。
+
+    材料（記録される内容・背景）は答えではない。推奨行の指示が digest から消えると、
+    受け取った assistant は材料だけ並べて判断をユーザーへ丸投げする（grill-with-docs
+    の tech-eval で検出したギャップ）。
+    """
+    groups = [_group(["k1"], rep="rep")]
+    msg = pd.build_proposal_prompt(groups, "pj-a")
+    # 語句の存在ではなく契約文そのもの（共有定数）の完全一致を要求する。
+    # 語だけ残して意味を反転させる書き換えを通さないため（codex レビュー [Should]）。
+    assert pd.RECOMMENDATION_INSTRUCTION in msg
+    assert "推奨なし" in pd.RECOMMENDATION_INSTRUCTION
+
+
+def test_build_proposal_prompt_carries_recommendation_for_global_lane():
+    """#582 round2 [Must]: global レーン（keys_by_pj を持つ group）でも契約文が届くこと。
+
+    per-PJ 経路だけを検査していると「keys_by_pj がある group には契約文を出さない」
+    変異が緑のまま通る（全PJ横断の指摘だけ推奨なしになる）。
+    """
+    g = _group(["k1"], rep="rep")
+    g.pop("signal_keys", None)
+    g["keys_by_pj"] = {"pj-b": ["k1"]}
+    msg = pd.build_proposal_prompt([g], "pj-a", project_paths={"pj-b": "/tmp/pj-b"})
+    assert pd.RECOMMENDATION_INSTRUCTION in msg
+    assert "--pj pj-b" in msg
