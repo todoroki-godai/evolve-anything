@@ -1,0 +1,67 @@
+{
+  "harness_paths": {
+    "paths": [
+      "scripts/bench/judge_eval.py",
+      "scripts/lib/correction_semantic/__init__.py",
+      "scripts/lib/correction_semantic/judge_runner.py",
+      "scripts/lib/correction_semantic/prompt.py",
+      "scripts/lib/safe_llm_call.py"
+    ],
+    "sha": "7e75d3d3736cc2784babd0185170dfb11028ca4c764e7e7bbab7b32bb2cf4b97"
+  },
+  "metrics": [
+    {
+      "id": "accuracy",
+      "label": "accuracy",
+      "kind": "binary"
+    },
+    {
+      "id": "precision_hit",
+      "label": "precision",
+      "kind": "binary"
+    },
+    {
+      "id": "recall_hit",
+      "label": "recall",
+      "kind": "binary"
+    },
+    {
+      "id": "specificity_hit",
+      "label": "specificity",
+      "kind": "binary"
+    }
+  ],
+  "perf_fields": [
+    {
+      "id": "latency_s",
+      "label": "latency",
+      "unit": "s"
+    }
+  ],
+  "metrics_md": "prev_action 付き発話は本 eval コーパスでは 0/416（全件 prev_action 空）。本番母集団では約12%、本番判定実績では約34%が prev_action 付き（レビュー指摘値・本ランナーでは未計測）。このスライスの judge 精度は本 eval では測定していない。",
+  "confusion_summary": {
+    "n": 416,
+    "tp": 23,
+    "fn": 24,
+    "fp": 9,
+    "tn": 360,
+    "positives": 47,
+    "negatives": 369,
+    "accuracy": 0.9206730769230769,
+    "precision": 0.71875,
+    "precision_ci": [
+      0.546251630618882,
+      0.8443559315435214
+    ],
+    "recall": 0.48936170212765956,
+    "recall_ci": [
+      0.3527532433660351,
+      0.6275778241062712
+    ],
+    "specificity": 0.975609756097561,
+    "specificity_ci": [
+      0.954302209043424,
+      0.9871163451093313
+    ]
+  }
+}
