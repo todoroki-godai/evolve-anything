@@ -35,3 +35,9 @@ scripts/bench/_labels_r2/
 # A2 dispatch-marker リプレイの実コーパス成果物（同様に他PJの生発話を含むため commit しない。
 # ADR-054 / #379）
 scripts/bench/a2_dispatch_replay_result.json
+# judge_eval（修正発話 judge の hillclimb eval）の派生生成物のみ ignore。
+# results.jsonl / errors.jsonl / _state.json は監査対象として commit する
+# （shared/evals/build-eval.md「Commit the eval」方針）。
+.claude/hillclimb/**/traces/
+.claude/hillclimb/**/report.html
+.claude/hillclimb/**/trajectory/
