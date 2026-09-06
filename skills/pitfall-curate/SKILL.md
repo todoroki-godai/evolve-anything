@@ -21,6 +21,8 @@ figma-to-code で 200 件超まで pitfall を磨く過程で確立した運用�
 依存しない形で任意PJに提供する。evolve-anything 既存の `pitfall_manager`（自己進化スキル
 専用のライフサイクル管理）とは別物で、こちらは**どのPJの pitfalls.md でも使える汎用ツール**。
 
+> **台帳化の骨格は `correction-to-permanent-ledger`（グローバル型スキル）が正本。** このスキルはその「指摘の恒久台帳化」型の中身（AI 環境 pitfall/correction ドメインの具体化 — dedup / classify / distill / sync / 書込時 hook）を担う。台帳化の骨格そのもの（記録→分類/昇格→版管理→配布蒸留→同期ゲート→焼き戻し必須化）を他領域へ転用・診断したいときは型スキルを見る。
+
 ## なぜこのスキルが要るか
 
 pitfall は放置すると必ず次の3つで破綻する。このスキルはそれぞれに対応する:
