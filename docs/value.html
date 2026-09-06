@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>evolve-anything は何の役に立つか</title>
+<meta name="report-type" content="説明（対応不要）">
+<meta name="report-date" content="2026-09-05">
+<style>
+  :root { --bg:#fafafa; --fg:#1a1a1a; --muted:#666; --line:#ddd; --ok:#0a7a3d; --ng:#b3261e; --warn:#8a6d00; --card:#fff; --accent:#1d4ed8; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#111; --fg:#eee; --muted:#aaa; --line:#333; --card:#1b1b1b; --ok:#4ade80; --ng:#f87171; --warn:#fbbf24; --accent:#93c5fd; } }
+  body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.6 -apple-system,"Hiragino Sans","Noto Sans JP",sans-serif; }
+  main { max-width:960px; margin:0 auto; padding:24px 20px 60px; }
+  header { border-bottom:1px solid var(--line); padding-bottom:12px; margin-bottom:20px; }
+  h1 { font-size:20px; margin:0 0 4px; } h2 { font-size:16px; margin:26px 0 8px; } h3 { font-size:15px; margin:18px 0 6px; }
+  .meta { color:var(--muted); font-size:13px; } .meta span { margin-right:14px; }
+  .badge { display:inline-block; padding:1px 8px; border-radius:4px; font-size:12px; font-weight:600; border:1px solid var(--line); vertical-align:middle; }
+  .b-type { background:var(--accent); color:#fff; border-color:var(--accent); }
+  .b-inf { background:var(--warn); color:#fff; border-color:var(--warn); }
+  .context { background:var(--card); border:1px solid var(--line); border-left:4px solid var(--accent); border-radius:8px; padding:10px 16px; margin-bottom:16px; }
+  .context h2 { margin:0 0 6px; font-size:14px; color:var(--muted); }
+  .context pre.tree { background:transparent; padding:0; margin:0 0 6px; font-size:13px; }
+  .context p { margin:0; font-size:13px; }
+  .verdict { background:var(--card); border:2px solid var(--ok); border-radius:8px; padding:14px 16px; margin-bottom:20px; }
+  .verdict h2 { margin:0 0 6px; font-size:17px; } .verdict p { margin:4px 0; }
+  .wrap { overflow-x:auto; }
+  table { width:100%; border-collapse:collapse; background:var(--card); font-size:14px; }
+  th, td { border:1px solid var(--line); padding:6px 8px; vertical-align:top; text-align:left; }
+  th { background:rgba(128,128,128,.08); }
+  code, pre { font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace; white-space:pre-wrap; word-break:break-all; }
+  code { background:rgba(128,128,128,.12); padding:1px 4px; border-radius:3px; }
+  pre { background:rgba(128,128,128,.08); padding:8px 10px; border-radius:6px; }
+  details { margin:8px 0; background:var(--card); border:1px solid var(--line); border-radius:6px; padding:6px 12px; }
+  summary { cursor:pointer; font-weight:600; }
+  ol li, ul li { margin:4px 0; }
+  footer { margin-top:40px; color:var(--muted); font-size:12px; border-top:1px solid var(--line); padding-top:8px; }
+</style>
+</head>
+<body>
+<main>
+<header>
+  <h1>evolve-anything は何の役に立つか</h1>
+  <div class="meta"><span class="badge b-type">説明（対応不要）</span><span>2026-09-05</span><span>Claude Code を使うが、このプラグインを知らない人向け</span></div>
+</header>
+
+<section class="context">
+  <h2>背景</h2>
+  <pre class="tree">目的: AI アシスタント（Claude Code）に同じ注意を何度もしなくて済むようにする
+├─ ① あなたが AI を直した発言を、全プロジェクト横断で自動記録する … 稼働中
+├─ ② 記録から「ルールに書くべきこと」を毎朝1件ずつ y/n で提案する … 稼働中
+├─ ③ 採用した改善が効いたかを週1の数字で見せる … 稼働中（数字は下に） ★いまここ
+└─ ④ 効かなかった採用を1コマンドで元に戻す … 稼働中（対象は一部）</pre>
+  <p><strong>位置</strong>: 4機能すべて稼働。いまは「数字が本当に効き目を表しているか」を詰めている段階　<strong>あなたに</strong>: 同じ Claude Code を使っていて、導入の要否を判断する材料が要るため</p>
+</section>
+
+<section class="verdict">
+  <h2>要点 — AI への「注意」を人が覚えておかなくてよくなる。代わりに毎朝30秒の y/n と、週1で数字を見る</h2>
+  <p>裏付け: 人間の直し発言 <strong>45件</strong> が自動で記録済み。直近30日でルールに反映された改善 <strong>1件</strong>。AI が注意を受けた率（指摘率）は直近週 <strong>14.0%</strong>（605件中85件）。取得 2026-09-05 09:52 JST、出所は「詳細」。</p>
+</section>
+
+<h2>何が変わるか（あなたの1日の中で）</h2>
+<div class="wrap">
+<table>
+<thead><tr><th>場面</th><th>プラグイン無し</th><th>プラグイン有り</th></tr></thead>
+<tbody>
+<tr><td>AI が同じ間違いをした</td><td>毎回その場で注意し、翌週また同じ注意をする</td><td>注意した発言が自動で記録され、翌朝「ルールに書きますか？」と1件ずつ聞かれる。y で書き込まれる</td></tr>
+<tr><td>ルールを書き足した</td><td>効いたかどうかは体感</td><td>週1で「注意した率」の推移が出る。効いていなければ数字が下がらない</td></tr>
+<tr><td>書き足したルールが逆効果だった</td><td>どのファイルの何行を直したか思い出して手で戻す</td><td>採用の一覧から1コマンドで戻す（<span class="badge b-inf">Inferred</span> 対象は朝の提案経由で採用したものに限る。それ以外は手で戻す）</td></tr>
+<tr><td>複数プロジェクトを掛け持ち</td><td>プロジェクトごとに同じ注意を繰り返す</td><td>全プロジェクトの記録を横断して「今日どのプロジェクトを見直すべきか」が一覧で出る</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2>役に立たない場面（正直に）</h2>
+<ul>
+  <li>AI を直す発言をほとんどしない使い方（短い質問だけ）では記録が貯まらず、提案も出ない</li>
+  <li>効き目の数字は「注意した率」であって「作業が速くなった」ではない。速さは測っていない</li>
+  <li>導入しただけでは何も起きない。毎朝の y/n に答える習慣が要る（<span class="badge b-inf">Inferred</span> 答えないと提案が溜まるだけ）</li>
+</ul>
+
+<h2>あなたの対応は不要です</h2>
+<p>次に動くのは、導入を試すと決めた人。試すなら Claude Code のプラグイン一覧から入れるだけで、記録は無音で始まります。</p>
+
+<details>
+<summary>詳細</summary>
+<h3>数字の出所（取得 2026-09-05 09:52 JST）</h3>
+<pre>~/matsukaze-utils/evolve-anything/bin/evolve-audit --growth</pre>
+<ul>
+  <li>人間の直し発言 45件（total 60 のうち human）: 出力の「Corrections: 45 (human) / 60 (total)」</li>
+  <li>実際に反映された改善（直近30日）1件。新方式より前の旧記録4件は測定対象外</li>
+  <li>指摘率 2026-W35: 14.0%（判定605件中 TP 85件・カバレッジ100%）。全プロジェクト合算。分母から除外 3,197件（90日超 1,880件・ホーム起動 1,317件）</li>
+  <li>記録の捕捉率（人の直し発言を機械が拾えた率）: 21/47 = 44.7%（信頼区間 31.4%–58.8%）。精度 91.3%</li>
+  <li>直近の採用: 2026-09-02 pillars-before-polish.md / 2026-08-15 spec-keeper</li>
+</ul>
+<h3>4機能の対応（プラグイン内の呼び名）</h3>
+<ul>
+  <li>① 自動記録 = observe hook（無音）</li>
+  <li>② 朝の提案 = <code>/evolve-anything:evolve</code>（1件ずつ y/n）</li>
+  <li>③ 週1の数字 = <code>bin/evolve-audit --growth</code>（戦果ボード）</li>
+  <li>④ 戻す = <code>bin/evolve-revert --list</code> → <code>--apply</code></li>
+</ul>
+<h3>設計上の約束</h3>
+<ul>
+  <li>適用は必ず人間の y/n。無人でルールを書き換えない</li>
+  <li>表示する数字は分母が揃ったものだけ。揃うまでは「未測定」と出す</li>
+</ul>
+</details>
+
+<footer>readable-report スキルで作成。読み手はこのプラグインを知らない Claude Code 利用者。2026-09-05</footer>
+</main>
+</body>
+</html>
