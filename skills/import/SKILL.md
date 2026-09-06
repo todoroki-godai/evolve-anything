@@ -1,5 +1,5 @@
 ---
-name: evolve-anything:import
+name: import
 description: |
   コミュニティスキルを GitHub からワンコマンドで import する。
   Trigger: import skill, スキルをインポート, コミュニティスキル, evolve-fleet import
