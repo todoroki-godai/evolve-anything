@@ -563,6 +563,7 @@ def test_ingest_guard_unavailable_fails_closed_for_clean_content(
 
     assert result["stored"] == 0
     assert result["contaminated"] == 1
+    assert result["guard_unavailable"] == 1
     assert list(tmp_memory_dir.glob("auto_*.md")) == []
     assert amb.read_queue("slug", tmp_data_dir) == []
 
@@ -589,6 +590,7 @@ def test_ingest_guard_exception_fails_closed_for_secret_exfil(
 
     assert result["stored"] == 0
     assert result["contaminated"] == 1
+    assert result["guard_unavailable"] == 1
     assert list(tmp_memory_dir.glob("auto_*.md")) == []
     assert amb.read_queue("slug", tmp_data_dir) == []
 
@@ -624,6 +626,7 @@ def test_ingest_malformed_guard_result_fails_closed(
 
     assert result["stored"] == 0
     assert result["contaminated"] == 1
+    assert result["guard_unavailable"] == 1
     assert list(tmp_memory_dir.glob("auto_*.md")) == []
     assert amb.read_queue("slug", tmp_data_dir) == []
 
