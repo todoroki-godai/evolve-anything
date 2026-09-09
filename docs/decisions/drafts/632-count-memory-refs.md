@@ -15,6 +15,8 @@
 ① **守る対象**: 柱2の計上件数が CLAUDE.md の柱2定義（「反映先は rule に限らない — skill / hook / pitfall / memory も柱2の対象」）と一致すること。
 ② **信頼境界**: 脅威に数えるのは自分たちの実装ミス（分類漏れ・過剰計上）のみ。悪意ある第三者によるパス偽装は数えない（反映先は人間が `--apply` に明示的に渡す値）。
 ③ **対象外**: skill / hook / pitfall の分類（`skill` は既に実装済み。hook / pitfall は反映実績0件のため本変更では触らない）。`--growth` の表示文言の変更。#631 の実装。
+　**`~/.claude/agent-memory/<agent>/*.md` も対象外**（`other` のまま。反映実績0件・実測 2026-09-09。CLAUDE.md の柱2定義の「memory」に含めるかは未決で、実績が出た時点で別 issue とする）。
+　**`applied_list` の10件 cap**（`pillar2_metrics.py:259`）も対象外＝既存挙動。`count` は16でも `--growth` の一覧に新 kind は3件しか出ない。
 　**巡1 [Must] のうち実測0件で落とした2件**（`think-before-coding.md`「件数0の条件は既定で落とす」。0件でも落とさない3類型＝事故発生済み／法令・契約・ユーザー明示要求／初回も許容できない安全境界、のいずれにも該当しない。過少計上・二重計上はいずれも可逆で、対象は自分たちのデータのみ）:
 　- **macOS の大小文字別名**（`~/.CLAUDE/refs/...` を渡すと `Path.resolve()` が綴りを保存するため `other` に落ちる）。実測: `reflect_apply_events.jsonl` の総ユニークパス14件中、`.claude` 以外の綴りは **0件**（`python3` で `reflect_target_path` を集合化・2026-09-09）。
 　- **hard link による別名の二重計上**（`~/.claude/refs/shared.md` と `~/.claude/rules/shared.md` が同一 inode なら別 kind・別グループで2件計上される）。実測: `find ~/.claude/refs ~/.claude/rules -type f -links +1` = **0件**（2026-09-09）。
@@ -94,7 +96,7 @@
 4. **読み出し時に分類し直す（実装レビュー巡1 [Must]・必須）**。
    種別は `skills/reflect/scripts/reflect.py:1399` の apply 時にイベントへ**書き込まれて凍結**され、
    `scripts/lib/reflect_fold.py:252,273` は `attempt_event.get("reflect_target_kind")` を**そのまま使う**。
-   したがって**分類器を直しても既に記録済みのイベントは `other` のまま**で、⑥の +5件は達成できない
+   したがって**分類器を直しても既に記録済みのイベントは `other` のまま**で、⑥の増分は達成できない
    （実測: main `74d9f850` と分類器修正版 `cb28e2bb` の両方で `count=12` / `other_kind_count=5`＝差ゼロ）。
 
    `reflect_fold` の読み出し時に、**kind が `other` のイベントについてのみ**、
