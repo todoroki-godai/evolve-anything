@@ -41,7 +41,8 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 # = 76件。
 # 76件 + PR #495 narrow-deletion 一般化テストで発覚した fleet_plugins の無防備な句を追加
 # した1件 = 77件。
-REQUIRED_INVARIANTS_COUNT = 77
+# 77件 + #570 memory_guard の検査失敗時 fail-closed 契約 = 78件。
+REQUIRED_INVARIANTS_COUNT = 78
 
 
 def _write(path: Path, content: str) -> None:
@@ -94,7 +95,7 @@ def _full_claude_md_text() -> str:
         "| idiom | #379 Step1 で凍結中、autopromote() は no-op |",
         "| runtime | Codex hook 配線は保留 |",
         "| revert | conflict は上書きせず中止、CLI は既定 dry-run・のみ実書込 |",
-        "| memory_guard | secret_exfil のみ reject。"
+        "| memory_guard | secret_exfil のみ reject。検査失敗は fail-closed。"
         "同名エントリの上書きは決定論遷移検証でゲート |",
         "| fleet_pr | path allowlist・push account guard で強制、マージは人間 |",
         "| cleanup | 候補提示→個別承認→実行。のみに安全側限定 |",

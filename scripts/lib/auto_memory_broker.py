@@ -69,7 +69,7 @@ try:
 except ImportError:
     _HAS_MEMORY_TEMPORAL = False
 
-# runtime 記憶汚染検出（#108）— オプショナル import。未解決なら fail-open（belief と同方針）。
+# runtime 記憶汚染検出（#108）— オプショナル import。未解決なら fail-closed（#570）。
 try:
     from memory_guard import inspect_content as _inspect_memory_content
     from memory_guard import inspect_transition as _inspect_memory_transition
@@ -637,6 +637,7 @@ def ingest_memory_results(
 
     Returns:
         {"stored": int, "blocked": int, "skipped": int, "contaminated": int,
+         "guard_unavailable": int,
          "contamination_hits": [{"pattern_id", "category", "line"}],
          "transition_checked": int, "transition_rejected": int, "entries": [str paths]}
     """
@@ -657,6 +658,7 @@ def ingest_memory_results(
     blocked = 0
     skipped = 0
     contaminated = 0
+    guard_unavailable = 0
     contamination_hits: List[dict] = []
     transition_checked = 0
     transition_rejected = 0
@@ -684,34 +686,69 @@ def ingest_memory_results(
 
         # runtime 記憶汚染検出（#108）: prompt injection / secret exfil の payload を
         # 含む生成物は memory へ書き込まない（免疫層）。importance 採点・belief ゲートの
-        # 前に走らせ、汚染がスコアリング/ログにも到達しないようにする。fail-open。
-        if _HAS_MEMORY_GUARD:
-            try:
-                guard = _inspect_memory_content(llm_output)
-            except Exception:
-                guard = None
-            if guard and guard.get("hits"):
-                hit_details = [
-                    {"pattern_id": h.pattern_id, "category": h.category, "line": h.line}
-                    for h in guard["hits"]
-                ]
-                contamination_hits.extend(hit_details)
-                pattern_ids = [h["pattern_id"] for h in hit_details]
-                if guard.get("block"):
-                    # reject: 書込せず消化（terminal 判断・再キューで無限リトライしない）
-                    contaminated += 1
-                    consumed_keys.add(key)
-                    print(
-                        f"[evolve-anything:memory-guard] 汚染検出のため書込 skip: {pattern_ids}",
-                        file=sys.stderr,
-                    )
-                    continue
-                # warn: 書込は継続するが可視化する（緊急避難・無音にしない）
+        # 前に走らせ、汚染がスコアリング/ログにも到達しないようにする。fail-closed（#570）。
+        if not _HAS_MEMORY_GUARD:
+            contaminated += 1
+            guard_unavailable += 1
+            consumed_keys.add(key)
+            print(
+                "[evolve-anything:memory-guard] memory_guard 未解決のため書込 skip"
+                "（検査不能を安全側で扱う・#570）",
+                file=sys.stderr,
+            )
+            continue
+
+        try:
+            guard = _inspect_memory_content(llm_output)
+        except Exception as exc:
+            contaminated += 1
+            guard_unavailable += 1
+            consumed_keys.add(key)
+            print(
+                f"[evolve-anything:memory-guard] 検査失敗（{exc.__class__.__name__}）のため"
+                "書込 skip（検査不能を安全側で扱う・#570）",
+                file=sys.stderr,
+            )
+            continue
+
+        if (
+            not isinstance(guard, dict)
+            or not isinstance(guard.get("hits"), list)
+            or type(guard.get("block")) is not bool
+        ):
+            contaminated += 1
+            guard_unavailable += 1
+            consumed_keys.add(key)
+            print(
+                "[evolve-anything:memory-guard] inspect_content の戻り値契約が不正のため"
+                "書込 skip（検査不能を安全側で扱う・#570）",
+                file=sys.stderr,
+            )
+            continue
+
+        if guard["hits"]:
+            hit_details = [
+                {"pattern_id": h.pattern_id, "category": h.category, "line": h.line}
+                for h in guard["hits"]
+            ]
+            contamination_hits.extend(hit_details)
+            pattern_ids = [h["pattern_id"] for h in hit_details]
+            if guard["block"]:
+                # reject: 書込せず消化（terminal 判断・再キューで無限リトライしない）
+                contaminated += 1
+                consumed_keys.add(key)
                 print(
-                    f"[evolve-anything:memory-guard] 汚染検出（warn・書込継続）: {pattern_ids}",
+                    f"[evolve-anything:memory-guard] 汚染検出のため書込 skip: {pattern_ids}",
                     file=sys.stderr,
                 )
+                continue
+            # warn: 書込は継続するが可視化する（緊急避難・無音にしない）
+            print(
+                f"[evolve-anything:memory-guard] 汚染検出（warn・書込継続）: {pattern_ids}",
+                file=sys.stderr,
+            )
 
+        # #570 の対象外で、検査不能時も意図的に fail-open とする。
         # 記憶遷移検証（#93・TRUSTMEM Memory Transition Verifier の決定論移植）:
         # 同名（frontmatter name 一致）の既存エントリがあれば coverage/preservation/
         # fidelity を検証し、汚染候補（大量欠落 / 値矛盾 / 極性反転）を reject する。
@@ -779,6 +816,7 @@ def ingest_memory_results(
         "blocked": blocked,
         "skipped": skipped,
         "contaminated": contaminated,
+        "guard_unavailable": guard_unavailable,
         "contamination_hits": contamination_hits,
         "transition_checked": transition_checked,
         "transition_rejected": transition_rejected,
