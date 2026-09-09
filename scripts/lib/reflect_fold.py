@@ -6,21 +6,41 @@ import re
 import unicodedata
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
+from reflect_apply_match import classify_reflect_target_kind
 from rl_common.correction_id import find_duplicate_ids, validate_correction_id
 
 
-_KNOWN_TARGET_KINDS = frozenset({
+KNOWN_TARGET_KINDS = frozenset({
     "global_rule",
     "project_rule",
     "global_claude_md",
     "project_claude_md",
     "skill",
+    "global_refs",
+    "project_memory",
     "other",
 })
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _TZ_AWARE_RE = re.compile(r".+[+-]\d{2}:\d{2}$")
+
+
+def _read_reflect_target_kind(event: dict) -> Optional[str]:
+    """過去に other で記録された新しい柱2対象だけ読み出し時に再分類する。"""
+    recorded_kind = event.get("reflect_target_kind")
+    if recorded_kind != "other":
+        return recorded_kind
+    target_path = event.get("reflect_target_path")
+    global_root = Path.home() / ".claude"
+    normalized_prefix = f"{global_root}:"
+    if target_path.startswith(normalized_prefix):
+        target_path = str(global_root / target_path.removeprefix(normalized_prefix))
+    classified_kind = classify_reflect_target_kind(target_path)
+    if classified_kind in {"global_refs", "project_memory"}:
+        return classified_kind
+    return recorded_kind
 
 
 def _parse_iso8601_utc(raw) -> Optional[datetime]:
@@ -79,7 +99,7 @@ def _attempt_is_valid(event: dict) -> bool:
         return False
     if not validate_correction_id(event.get("target_correction_id")):
         return False
-    if event.get("reflect_target_kind") not in _KNOWN_TARGET_KINDS:
+    if event.get("reflect_target_kind") not in KNOWN_TARGET_KINDS:
         return False
     path = event.get("reflect_target_path")
     if not isinstance(path, str) or not path:
@@ -247,7 +267,7 @@ def fold_corrections(
         applied_event, attempt_event = pair
         folded = folded_by_id[target_id]
         folded.reflect_applied_at = applied_event.get("reflect_applied_at")
-        folded.reflect_target_kind = attempt_event.get("reflect_target_kind")
+        folded.reflect_target_kind = _read_reflect_target_kind(attempt_event)
         folded.reflect_target_path = attempt_event.get("reflect_target_path")
         folded.reflect_draft_line = attempt_event.get("reflect_draft_line")
         folded.correction_message_sha256 = attempt_event.get(
@@ -268,7 +288,7 @@ def fold_corrections(
         if latest is None:
             continue
         folded.reflect_applied_at = latest.get("attempted_at")
-        folded.reflect_target_kind = latest.get("reflect_target_kind")
+        folded.reflect_target_kind = _read_reflect_target_kind(latest)
         folded.reflect_target_path = latest.get("reflect_target_path")
         folded.reflect_draft_line = latest.get("reflect_draft_line")
         folded.correction_message_sha256 = latest.get("correction_message_sha256")
