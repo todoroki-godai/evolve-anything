@@ -165,7 +165,7 @@ claude plugin validate
 経緯・所要時間・keyset snapshot の設計等の詳細は [spec/testing.md](spec/testing.md) 参照。
 運用上ここだけは必ず押さえる:
 - 実 `~/.claude` を読む必要があるテストは `@pytest.mark.real_home`（または `bench`/`bench_ingest`）で opt-out する。root conftest の HOME 隔離 autouse は未 opt-out のテストを静かに緑にしうる
-- **並行 worker に回させるときは `-n 0` で直列**（targeted テストまで多プロセス化し CPU 飢餓するため）
+- **同時に走る worker が2体以上のときだけ `-n 0` で直列**（CPU 飢餓を避けるため。1体なら既定の並列でよい。実測 2026-09-05: 並列 108s / 直列 565〜602s）
 - `UPDATE_SNAPSHOTS=1` は golden 上書きでなく既存キーとの union merge（条件付きキーを golden から消さない、宣言済み prefix の増減のみ許容する二層 golden 方式）
 
 リリース前は `bin/evolve-dogfood-gate --layer all` も全緑を確認する。日常 push は軽量な `--layer light` が `pre-push` hook 経由で非ブロッキング警告として自動実行される。
