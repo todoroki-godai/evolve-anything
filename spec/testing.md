@@ -6,7 +6,11 @@ CLAUDE.md の `## テスト` から移設（#415 圧縮）。運用に必要な3
 フルスイートはデフォルトで全件実行する（slow マーカーによる deselect は無し）。
 収集パスは `pytest.ini` の `testpaths` が単一ソース。新しい tests/ を足したら testpaths に追記する
 （漏れは audit の Testpaths Coverage チェック = `scripts/lib/testpaths_coverage.py` が検出する。#468）。
-pytest-xdist `-n auto` で並列実行（`pytest.ini` の `addopts` に設定済み）、2026-06-12 時点で約 32 秒・4972件（直列だと約 135 秒）。#457 で run_evolve 系の実環境ストア読みを隔離し直列 32 分→1 分→xdist で約 32 秒に短縮。**並行 worker に回させるときは `-n 0` で直列**（targeted テストまで多プロセス化し CPU 飢餓するため）。
+pytest-xdist `-n auto` で並列実行（`pytest.ini` の `addopts` に設定済み）、2026-06-12 時点で約 32 秒・4972件（直列だと約 135 秒）。#457 で run_evolve 系の実環境ストア読みを隔離し直列 32 分→1 分→xdist で約 32 秒に短縮。**並行委譲された worker は `-n 0` で直列**（複数 worker 同時実行で CPU 飢餓するため。Claude Code subagent と Codex worker を区別せず、並行か否かは頭が委譲時に判定し、委譲期間全体の条件としてプロンプトに明記する。単独でも worker は targeted テストに留め、フルスイートは頭が実行する。単独委譲・頭のマージ前フルスイートは既定の `-n auto` でよい）。`-n 0` は `pytest.ini` の `addopts` にある `-n auto` を打ち消す。#629。
+
+2026-09-05 実測（worktree `wt/ea-artifact`・同一 commit 上で比較・**commit SHA は未記録**）:
+`python3 -m pytest -q` = 108s（10458 passed, 2 skipped） /
+`python3 -m pytest -q -n 0` = 565〜602s（同結果）
 
 `test_evolve_keyset_snapshot.py` は evolve-anything 自身の実スキル構成に dry-run するため、計測窓 suppress の暦日境界等で regression でないのに出たり消えたりするキーがある。`fixtures/evolve_keyset_optional.txt` に条件付き透明化キーの prefix を宣言し、宣言済み prefix の増減のみ許容する二層 golden 方式（#209）。`UPDATE_SNAPSHOTS=1` は golden 上書きでなく既存キーとの union merge（条件付きキーを golden から消さない）。
 
