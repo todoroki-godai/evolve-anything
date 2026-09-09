@@ -228,6 +228,10 @@ REQUIRED_INVARIANTS: Tuple[Invariant, ...] = (
         all_of=("secret_exfil のみ reject", "同名エントリの上書きは決定論遷移検証でゲート"),
     ),
     Invariant(
+        "memory_guard_fail_closed",
+        all_of=("secret_exfil のみ reject", "検査失敗は fail-closed"),
+    ),
+    Invariant(
         "fleet_pr_human_merge_gate",
         all_of=("path allowlist・push account guard で強制", "マージは人間"),
     ),

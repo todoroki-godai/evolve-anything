@@ -258,7 +258,7 @@ reflect は独立フェーズではなく discover に統合済み。discover �
 → 判定条件・4択/3択のテンプレ・コードは **[references/correction-review.md](references/correction-review.md)**。
 
 ### Step 6.5: auto-memory キュー drain（2相, [ADR-037] Phase 2）
-`DATA_DIR/auto_memory_queue/<slug>.jsonl`（Stop hook がゼロ LLM で enqueue 済み）を Phase A（emit・LLM ゼロ）→ Phase B/C（インライン生成→ingest）の2相で消化する。ingest は生成後ゲート（belief_entropy）を内蔵し、ソースを落とした要約は書込なしで `belief_blocks.jsonl` に記録（blocked カウント）。空応答（skipped）はキューに残り次回再試行。空キューなら「0件 ✓」で終了。結果（stored/blocked/skipped）を Report に報告する。
+`DATA_DIR/auto_memory_queue/<slug>.jsonl`（Stop hook がゼロ LLM で enqueue 済み）を Phase A（emit・LLM ゼロ）→ Phase B/C（インライン生成→ingest）の2相で消化する。ingest は生成後ゲート（belief_entropy）を内蔵し、ソースを落とした要約は書込なしで `belief_blocks.jsonl` に記録（blocked カウント）。空応答（skipped）はキューに残り次回再試行。空キューなら「0件 ✓」で終了。結果（stored/blocked/skipped/contaminated）を Report に報告する。
 → 実行コードは **[references/auto-memory-drain.md](references/auto-memory-drain.md)**。
 
 ### Step 6.6: correction_semantic 意味判定（2相 Phase A→B, #431/#339）
