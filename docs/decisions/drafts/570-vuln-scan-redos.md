@@ -1,9 +1,9 @@
-# 570: auto-memory の書込境界を fail-closed にする（R5・縮小版）
+# 570: auto-memory の書込境界を fail-closed にする（最終版・巡5反映済み）
 
 - issue: #570（refs #566）
-- 状態: ドラフト（R5・族2巡打ち切りにより「auto-memory の書込境界1本」へ縮小。
-  ユーザー裁定 2026-09-09）
-- 作成日: 2026-09-09（R5）
+- 状態: **確定**（巡5＝最終レビューの [Must] 3件・[Should] 2件を反映。
+  ユーザー裁定 2026-09-09「設計レビューはこれで終わり、反映後は実装へ進む」）
+- 作成日: 2026-09-09（R5 → 巡5反映で確定版）
 - 前身:
   - R1（`fix/570-redos-scan` commit `c37c7f9b`）: 正規表現の線形時間化を推奨。
     codex 設計レビュー巡1 **設計修正要・[Must] 5件**
@@ -19,6 +19,10 @@
   - **`review-gate` の規定により、追加レビューではなく縮小へ送る（族2巡打ち切り）。
     ユーザー裁定 2026-09-09**。**本 R5 は R1 の設計レビュー1巡を継続して引き継ぐ**
     （通算 codex レビュー3巡・[Must] 通算 16+α件。`review.md`: 変更系列はリセットできない）
+  - **巡5（最終）**: 「書込境界の縮小方針自体は成立している」との判定のもと [Must] 3件・
+    [Should] 2件。**いずれも仕組みを増やさずに閉じるもの**と判定され、反映後は実装へ進む
+    （設計レビューはここで終了。反映の正しさは実装後のコードレビューで確認する）。
+    対応内容は末尾「巡5 の指摘と対応」表を参照
 
 ## R4 からの変更点（族2巡打ち切りによる縮小）
 
@@ -83,9 +87,16 @@ codex 設計レビュー巡4（R4 に対する2巡目）の指摘（要点）:
   **保存が発生する**（＝fail-open のまま）
 - 正常な保存（guard が正常動作し汚染なしと判定したケース）が、変更後に失敗する（陽性対照）
 - `scan_text`/`reject_hits`/`guard_hits`/`inspect_content` の戻り値契約が不整合
-- `spec/components-fleet.md:29` の「④ fail-open」という記述を更新しないまま実装だけ変える
-  （仕様 SoT との乖離）
-- mutation test（陰性試験、下記4型）のいずれかが緑のまま残る
+- `inspect_content` の戻り値の形（`hits`/`block` キーの有無・型）が壊れているとき、
+  それを「問題なし」として通してしまう（巡5 [Should]1）
+- `CLAUDE.md:110` の「検査失敗は fail-open」という記述、`spec/components-fleet.md:29` の
+  「④ fail-open」という記述、`auto_memory_broker.py:72,687` の fail-open コメントの
+  いずれかを更新しないまま実装だけ変える（仕様 SoT との乖離。巡5 [Must]1）
+- **上記の更新漏れを、機械的な契約テストが検出できない**（巡5 [Must]1 の核心。
+  文言を直しただけで検査を追加しなければ blocking を満たさない）
+- drain の最終報告（`stored`/`blocked`/`skipped`）に、検査不能で消化した件数が
+  一切現れない（巡5 [Must]2）
+- mutation test（陰性試験、下記5型）のいずれかが緑のまま残る
 
 ⑤ **検証方法**: 「検証方法」節
 
@@ -220,6 +231,19 @@ except Exception as exc:
     )
     continue
 
+# 巡5 [Should]1: 戻り値契約が壊れている（空 dict・必須キー欠落・型不正）場合も
+# 「問題なし」として通してしまわないよう明示的に検証する。将来 inspect_content の
+# 実装が変わって戻り値の形が壊れたときに、静かに fail-open へ戻ることを防ぐ。
+if not isinstance(guard, dict) or "hits" not in guard or "block" not in guard:
+    contaminated += 1
+    consumed_keys.add(key)
+    print(
+        "[evolve-anything:memory-guard] inspect_content の戻り値契約が不正のため"
+        "書込 skip（検査不能を安全側で扱う・#570）",
+        file=sys.stderr,
+    )
+    continue
+
 if guard.get("hits"):
     hit_details = [
         {"pattern_id": h.pattern_id, "category": h.category, "line": h.line}
@@ -247,18 +271,85 @@ if guard.get("hits"):
 新カウンタを足す（`think-before-coding.md`: 最小の1つだけ）。stderr の print メッセージで
 理由は既に区別されているため、集計上は合算でも「検査不能で止めた」ことは可視ではある。
 
-## 既存テストと仕様 SoT の追従先（巡4指摘3への対応）
+**[Should]1 への対応（採用）**: 戻り値契約の防御的検証（上記擬似コードの `isinstance`/キー
+存在チェック）を実装対象に含める。**理由**: これは新しい仕組みではなく、既存の `guard` 変数を
+使う直前に1行の型・キー検証を挟むだけであり、「仕組みを増やさずに閉じる」という巡5の判定方針
+と矛盾しない。かつ、対応しないと [Must]3 で塞いだはずの fail-open が、`inspect_content` の
+将来の実装変更（戻り値の形が壊れるバグ）によって別経路から静かに復活しうる
+（`isinstance`/キー検証が無ければ、空 dict `{}` に対する `guard.get("hits")` は `None`
+（Falsy）を返し、そのまま素通りで保存されてしまう）。
+
+## 既存テストと仕様 SoT の追従先（巡4指摘3・巡5 [Must]1 への対応）
 
 - **既存テスト**: `scripts/lib/tests/test_auto_memory_broker.py` に `_HAS_MEMORY_GUARD`/
   `fail-open`/`fail-closed` を直接検証するテストは**現在1件も無い**（確認済み）。既存の
   正常系テスト（`test_ingest_writes_md_and_index` 等）はいずれも `_HAS_MEMORY_GUARD=True`
   かつ guard が正常動作する前提のため、本変更で挙動が変わらないことを陽性対照として
   流用できる（後述「検証方法」節）
-- **仕様 SoT**: `spec/components-fleet.md:29` の `memory_guard` 行にある
-  **「④ **fail-open** — guard 自体が例外を投げたら write を止めない」**という記述を、
-  「④ **fail-closed**（#570）— guard の import 失敗・呼び出し時の例外はいずれも
-  検査不能として保存を止める」へ書き換える。**実装対象ファイルに `spec/components-fleet.md`
-  を含める**（巡4が「仕様 SoT の追従が不足」と指摘した箇所）
+
+- **仕様 SoT（更新箇所は4つ。巡5 [Must]1 で `CLAUDE.md` と契約テストが漏れていた点を追加）**:
+  1. `spec/components-fleet.md:29` の `memory_guard` 行にある
+     **「④ **fail-open** — guard 自体が例外を投げたら write を止めない」**という記述を、
+     「④ **fail-closed**（#570）— guard の import 失敗・呼び出し時の例外・戻り値契約の
+     破損はいずれも検査不能として保存を止める」へ書き換える
+  2. **[Should] 同じ行の設計核②も実態へ同期する**: 現在の記述
+     「② reject は `prompt_injection` + `secret_exfil` の 2 カテゴリ限定」は、
+     実コード（`memory_guard.py:112` `_REJECT_CATEGORIES = frozenset({"secret_exfil"})`
+     ＝ secret_exfil のみ）および `CLAUDE.md:110` の正しい記述（secret_exfil のみ reject、
+     prompt_injection は advisory）と**既に食い違っている**。「② reject は `secret_exfil`
+     のみ限定（prompt_injection は advisory・reject せず書込継続）」へ修正する
+     （**採用**。理由: ① と同じ行を触るため追加コストがほぼ無く、放置すると仕様 SoT 内で
+     矛盾が残る）
+  3. **`CLAUDE.md:110`**: `memory_guard` の説明行にある「（検査失敗は fail-open）」を
+     「（検査失敗は fail-closed・#570）」へ書き換える（巡5 [Must]1 の中心）
+  4. `auto_memory_broker.py:72,687` の fail-open コメント（オプショナル import の説明・
+     runtime 記憶汚染検出の説明）を fail-closed の説明へ更新する（コードコメントの整合、
+     巡5 [Should] 明記事項）
+
+- **契約テスト（巡5 [Must]1 の核心）**: `scripts/lib/claude_md_contract.py` の
+  `REQUIRED_INVARIANTS`（`Invariant(name, all_of=(...))` の形式、`all_of` の全語が
+  `CLAUDE.md` 本文に含まれることを検査する）に、新しい Invariant を1件追加する:
+  ```python
+  Invariant(
+      "memory_guard_fail_closed",
+      all_of=("secret_exfil のみ reject", "検査失敗は fail-closed"),
+  ),
+  ```
+  既存の `memory_guard_transition_gate`（`all_of=("secret_exfil のみ reject",
+  "同名エントリの上書きは決定論遷移検証でゲート")`）とは別の Invariant として追加する
+  （既存の書き換え・削除はしない）。**これにより、実装だけ変えて `CLAUDE.md` の文言を
+  そのままにすると、この新しい Invariant が「検査失敗は fail-closed」という語を
+  本文中に見つけられず契約テストが赤くなる**（＝更新漏れの機械検出）。`claude_md_contract`
+  の設計は `all_of`（含まれるべき語）方式のみで「含まれてはいけない語」の検査機構は
+  存在しない（確認済み）ため、**新設せず既存パターンをそのまま使う**
+  （`think-before-coding.md`: 最小の1つだけ）。「検査失敗は fail-open」という**古い**
+  文言が本文に残っていても検出できない点は残るが、これは `no-denylist-checks.md` の
+  「安全境界の部分検出を無条件に禁止しない」範囲内の advisory 級の残存リスクとして
+  「残る穴」節に記載する
+
+## Report 出力への件数追加（巡5 [Must]2 への対応）
+
+**実コード確認**: `ingest_memory_results` の戻り値 dict は既に `contaminated` キーを持つ
+（`auto_memory_broker.py:781`）。**問題は戻り値ではなく、呼び出し元の表示（print 文）が
+それを無視していること。**
+
+呼び出し元は2箇所（いずれも「既存の出力へ件数を追加するだけ」で新しいストア・新しい章は
+作らない。#379 新設凍結に抵触しない）:
+
+1. `skills/evolve/references/auto-memory-drain.md:44`:
+   ```python
+   # 変更前
+   print(f"auto-memory: stored={summary['stored']} blocked={summary['blocked']} skipped={summary['skipped']}")
+   # 変更後
+   print(f"auto-memory: stored={summary['stored']} blocked={summary['blocked']} "
+         f"skipped={summary['skipped']} contaminated={summary['contaminated']}")
+   ```
+2. `skills/evolve/SKILL.md:261`（Step 6.5 の説明文）: 「結果（stored/blocked/skipped）を
+   Report に報告する」→「結果（stored/blocked/skipped/contaminated）を Report に報告する」
+   へ更新
+
+これにより、全件が検査不能で消化された場合（`stored=0 blocked=0 skipped=0`）でも
+`contaminated` の値で「止めた」ことが表に出る。
 
 ## 検証方法
 
@@ -270,24 +361,59 @@ if guard.get("hits"):
 - guard が正常動作し汚染ありと判定したケース（`block=True`）が、変更後も従来どおり
   reject されること（既存の warn/reject 系テストがあれば流用、無ければ新規追加）
 
-### 陰性試験（`verify-checks-by-breaking.md`）
+### 陰性試験（`verify-checks-by-breaking.md`。型①②は巡5 [Must]3 を反映して再設計）
 
 各変異について **(a) baseline との差分 (b) 変異行が実行で読まれたことの機械的な証跡
-（`coverage.py` 等） (c) 対象テストだけが期待どおり赤化** の3点を要求する。最低4型＋陽性対照:
+（`coverage.py` 等） (c) 対象テストだけが期待どおり赤化** の3点を要求する。最低5型＋陽性対照:
 
-1. **型①（`_HAS_MEMORY_GUARD=False` のときの `continue` を削除する変異）** →
-   (a) diff（数行） (b) coverage で `not _HAS_MEMORY_GUARD` 分岐が実行されたことを確認
-   (c) 経路1（import 失敗相当）の陰性テストのみ赤化し、正常系テストは影響を受けないこと
-2. **型②（`except Exception as exc:` 節の `continue` を削除し、元の
-   `guard = None` 相当へ戻す変異）** → (a) diff (b) coverage で except 節が実行された
-   ことを確認 (c) 経路2（例外）の陰性テストのみ赤化
-3. **型③（`guard.get("block")` の判定を削除し、汚染検出時も常に warn 継続にする変異）** →
-   (a) diff (b) coverage (c) 「正常な汚染検出時の reject」を直接アサートするテストのみ赤化
-   （fail-closed 化と既存の block 判定が別の変異で独立に守られていることを示す）
-4. **型④（`spec/components-fleet.md` の記述だけを更新せず実装のみ変える変異）** →
-   (a) diff（該当行を意図的に古い記述のまま残す） (b) 該当箇所を機械的に検出できる契約テスト
-   （実装対象ファイルの一覧と `spec/` の記述が一致するかを確認する軽量な文字列突合、
-   実装フェーズで具体化） (c) 仕様同期チェックのみ赤化
+**型①②の再設計の背景（巡5 [Must]3）**: 当初案の型①（`continue` を削除するだけ）は、
+テストで `_HAS_MEMORY_GUARD=False` をパッチしても `_inspect_memory_content` という実体は
+モジュールに残ったままのため、`continue` を消しても後続の `try` ブロックで実際に検査が
+実行されてしまい、「fail-open の復活」を検出できない（テストが緑のまま残る）。型②も
+`guard=None` へ戻すと、次の `if guard.get("hits")` で `AttributeError` が起き、
+「無検査保存」ではなく「例外停止」という別の失敗モードになり、fail-open 復活の証拠に
+ならない。**この2点を実際にシミュレーションして実証した**（取得日 2026-09-09T13:21:09Z、
+コードは変更せず簡易シミュレーション関数で検証）:
+
+```python
+# baseline（正しい実装）: HAS_GUARD=False・clean入力 → stored=False
+#                          HAS_GUARD=True・guard例外・poison入力 → stored=False
+# 変異1（HAS_GUARD=Falseのcontinueを削除）: HAS_GUARD=False・clean入力 → stored=True（検出！）
+# 変異2（exceptで guard={"hits": [], "block": False} を握り潰し代入）:
+#        HAS_GUARD=True・guard例外・poison入力 → stored=True（検出！）
+```
+
+**型①（修正版・`_HAS_MEMORY_GUARD=False` のときの `continue` を削除する変異）**: テストは
+**clean 入力**（汚染していない正常な生成物）を使う。理由: fail-closed の本質は
+「検査できないなら、入力の汚染有無に関わらず保存しない」ことなので、baseline では
+clean 入力でも `_HAS_MEMORY_GUARD=False` なら保存されない（`stored=False`）。変異①を
+当てると `continue` が無いため次の `try` ブロックへフォールスルーし、`_inspect_memory_content`
+（実体は残っている）が正常に検査を完了させ、clean 入力ゆえ `hits` なしで素通り保存
+（`stored=True`）される。**baseline と mutant の差（False→True）が明確に観測できる**。
+→ (a) diff（数行） (b) coverage で `not _HAS_MEMORY_GUARD` 分岐のフォールスルー経路が
+実行されたことを確認 (c) この型専用の陰性テストのみ赤化し、汚染入力を使う既存の
+正常系テストは影響を受けないこと
+
+**型②（修正版・`except Exception as exc:` 節で `guard = {"hits": [], "block": False,
+"mode": mode}` のように「検査失敗＝安全」を握り潰して代入する変異）**: テストは
+**汚染入力**（secret_exfil 相当）を使う。`guard=None` ではなく「安全側の値を偽装する」
+変異にすることで、次の `if guard.get("hits")` で例外を起こさず、素通りで保存される
+（`stored=True`）ことを観測する。→ (a) diff (b) coverage で except 節の代入行が実行された
+ことを確認 (c) この型専用の陰性テストのみ赤化
+
+**型③（`guard.get("block")` の判定を削除し、汚染検出時も常に warn 継続にする変異）** →
+(a) diff (b) coverage (c) 「正常な汚染検出時の reject」を直接アサートするテストのみ赤化
+（fail-closed 化と既存の block 判定が別の変異で独立に守られていることを示す）
+
+**型④（戻り値契約検証を削除する変異、`isinstance`/キー存在チェックを外す。巡5 [Should]1
+対応の回帰検出）** → (a) diff (b) coverage で検証行が実行されたことを確認 (c) 空 dict
+`{}` を `inspect_content` の戻り値として偽装注入するテストのみ赤化し、正常な dict を
+返すケースは影響を受けないこと
+
+**型⑤（`spec/components-fleet.md`/`CLAUDE.md`/`claude_md_contract.py` のいずれかの
+更新を欠落させる変異）** → (a) diff（該当ファイルを意図的に古い記述のまま残す）
+(b) `claude_md_contract` の Invariant チェックが実行されたことを確認 (c) 新規追加した
+`memory_guard_fail_closed` Invariant のテストのみ赤化（巡5 [Must]1 の核心を直接検証）
 
 **子プロセスの隔離は不要**（巡4指摘6）: R3/R4 の signal・別プロセス機構を採用しないため、
 テストは通常の pytest プロセス内で完結する。worker crash・子プロセス残留といった懸念自体が
@@ -298,12 +424,20 @@ if guard.get("hits"):
 
 ## 実装対象ファイル
 
-この集合を越えない:
+この集合を越えない（巡5対応で3ファイル追加）:
 - `scripts/lib/auto_memory_broker.py`（`ingest_memory_results` 内 `_HAS_MEMORY_GUARD`/
-  `try/except` の fail-closed 転換。実装対象の中心）
-- `scripts/lib/tests/test_auto_memory_broker.py`（陽性対照・陰性試験の新規テスト追加）
-- `spec/components-fleet.md`（`memory_guard` 行の「④ fail-open」記述を「④ fail-closed」へ
-  更新）
+  `try/except` の fail-closed 転換・戻り値契約検証の追加。実装対象の中心。`line 72,687`
+  の fail-open コメント更新を含む）
+- `scripts/lib/tests/test_auto_memory_broker.py`（陽性対照・陰性試験〈5型〉の新規テスト追加）
+- `spec/components-fleet.md`（`memory_guard` 行の「④ fail-open」記述を「④ fail-closed」へ、
+  「② reject は2カテゴリ限定」を「② reject は secret_exfil のみ」へ更新）
+- **`CLAUDE.md`**（`memory_guard` の説明行の「検査失敗は fail-open」を
+  「検査失敗は fail-closed・#570」へ更新。巡5 [Must]1）
+- **`scripts/lib/claude_md_contract.py`**（`REQUIRED_INVARIANTS` に
+  `memory_guard_fail_closed` Invariant を追加。巡5 [Must]1）
+- **`skills/evolve/references/auto-memory-drain.md`**（print 文へ `contaminated` 追加。
+  巡5 [Must]2）
+- **`skills/evolve/SKILL.md`**（Step 6.5 の説明文へ `contaminated` 追加。巡5 [Must]2）
 - （必要であれば）`spec/components-core.md` の `auto_memory_broker` 行に fail-closed 化の
   1行追記。**既存の記述量が多いため、追記は最小限（1文程度）に留める**（実装フェーズで判断）
 
@@ -336,6 +470,16 @@ if guard.get("hits"):
   目的が異なるため対象外とした（実測・確認はしていない）
 - カウンタ設計（`contaminated` への合算 vs 新カウンタ）は実装フェーズでの判断に委ねており、
   観測性（audit 表示等）に影響する可能性がある
+- **[Should]2（検査不能だった候補の扱い）への判断（採用: 永久消化）**: 検査不能時
+  （import 失敗・例外・戻り値契約破損）は、既存の `contaminated`（実際の汚染検出時の
+  reject）と同じ扱いで `consumed_keys.add(key)`（キューから消化・再試行しない）とする。
+  **理由**: ①新しい「再試行」状態管理機構を追加せずに済む（#379 新設凍結の精神と整合、
+  `think-before-coding.md` の最小案）②既存コードのコメント「terminal 判断・再キューで
+  無限リトライしない」という設計哲学と整合する。**トレードオフ（正直に明記）**:
+  **一時的な障害（例: memory_guard モジュールの一時的な import エラー、依存パッケージの
+  更新中の過渡状態等）でも、その時点でキューにあった正常な（汚染していない）候補は
+  永久に失われる。** 障害が解消した後も、失われた候補は復旧しない（生成のやり直しは
+  発生しない）。この点は本設計では未解決のまま残す
 
 ## 線形化 issue への追記
 
@@ -346,5 +490,17 @@ scratchpad `issue_570_linearize.md` に、本 R5 に至る4巡の経緯（R1〜R
 
 保存の有無という単一の観測可能な二値で判定するため blocking として扱う。本設計書自体の
 裁定は `review.md` の系統独立レビューに委ねる。R1 からの累計巡数（codex 設計レビュー
-巡1・巡2・巡3〈R4に対する巡4〉）を継承しており、本 R5 は縮小後の設計として新たな巡を
-開始する（`review-gate` の族2巡打ち切り規定によりスコープが変わったため）。
+巡1・巡2・巡3〈R4に対する巡4〉・巡5〈本設計への最終レビュー〉）を継承しており、
+**巡5をもって設計レビューを終了し実装へ進む**（ユーザー裁定 2026-09-09）。
+
+## 巡5 の指摘と対応（最終）
+
+| # | 種別 | 指摘 | 対応 |
+|---|---|---|---|
+| 1 | [Must] | `CLAUDE.md:110` に「検査失敗は fail-open」が残り、実装対象集合に無い。`claude_md_contract.py:227` の既存 Invariant はこの句を検査していないため更新漏れを検出できない | 実装対象に `CLAUDE.md`（該当句の書き換え）と `claude_md_contract.py`（新規 Invariant `memory_guard_fail_closed` を `REQUIRED_INVARIANTS` に追加）を含めた。陰性試験型⑤で更新漏れが赤くなることを検証する |
+| — | [Should]（1と同じ行） | `spec/components-fleet.md:29` 設計核②「prompt_injection + secret_exfil を reject」が現行コード・CLAUDE.md の「secret_exfil のみ reject」と食い違う | **採用**。①と同じ行を触るため追加コストがほぼ無いと判断し、「② reject は secret_exfil のみ限定」へ実態同期する。実装対象・「既存テストと仕様SoTの追従先」節に反映 |
+| — | [Should]（1と同じ行） | `auto_memory_broker.py:72,687` の fail-open コメントも更新対象に明記 | **採用**。実装対象ファイルに明記し、コメント更新を含めた |
+| 2 | [Must] | drain の最終報告は `stored`/`blocked`/`skipped` の3値のみで、全件検査不能で消化されると止めた件数が表に出ない | `ingest_memory_results` の戻り値は既に `contaminated` を持つ（実コード確認）ため、呼び出し元2箇所（`auto-memory-drain.md:44` の print 文・`SKILL.md:261` の説明文）へ `contaminated` を追加する最小変更で対応。新しいストア・章は作らない |
+| 3 | [Must] | 陰性試験の変異①②が「fail-open 復活」を保証しない（①は `_inspect_memory_content` の実体が残るため検査が実行されてしまう／②は `guard=None` だと `AttributeError` で停止し無検査保存にならない） | シミュレーションで実証（取得日 2026-09-09T13:21:09Z）した上で型①②を再設計: **型①は clean 入力＋`_HAS_MEMORY_GUARD=False`**（`continue` 削除で `stored=False→True` の差を観測）、**型②は汚染入力＋`except` 節で「安全側の値」を握り潰し代入**（`guard=None` ではなく `{"hits": [], "block": False}` を代入し `stored=False→True` の差を観測）に変更した |
+| — | [Should] | `inspect_content` の戻り値の形が壊れた場合、空 dict を「問題なし」として通してしまう | **採用**。`isinstance`/必須キー存在チェックを擬似コードに追加し、blocking の定義・陰性試験型④に反映した |
+| — | [Should] | 検査不能だった候補を永久消化するか、キューに残して復旧後に再検査するかの運用判断と理由が未記載 | **永久消化を採用**（既存の `contaminated` reject と同じ扱い）。理由と「一時的な障害でも正常な候補が失われる」トレードオフを「残る穴」節に明記した |
