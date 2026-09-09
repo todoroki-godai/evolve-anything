@@ -543,6 +543,91 @@ def test_ingest_clean_not_flagged(tmp_data_dir, tmp_memory_dir):
     assert result["stored"] == 1
 
 
+def test_ingest_guard_unavailable_fails_closed_for_clean_content(
+    tmp_data_dir, tmp_memory_dir, monkeypatch
+):
+    """#570 型①: guard 未解決なら clean な候補も無検査保存せず永久消化する。"""
+    corrections = _corrections(2)
+    amb.enqueue(corrections, "slug", tmp_data_dir)
+    records = amb.read_queue("slug", tmp_data_dir)
+    emit = amb.emit_memory_requests(records)
+    key = records[0]["dedup_key"]
+    responses = {key: _llm_output("絶対パスを使う。cd は避ける。")}
+    monkeypatch.setattr(amb, "_HAS_MEMORY_GUARD", False)
+
+    with mock.patch.dict("os.environ", {"RL_GATING_DISABLED": "1"}):
+        result = amb.ingest_memory_results(
+            records, emit["requests"], responses,
+            tmp_memory_dir, tmp_memory_dir.parent / "MEMORY.md", tmp_data_dir,
+        )
+
+    assert result["stored"] == 0
+    assert result["contaminated"] == 1
+    assert list(tmp_memory_dir.glob("auto_*.md")) == []
+    assert amb.read_queue("slug", tmp_data_dir) == []
+
+
+def test_ingest_guard_exception_fails_closed_for_secret_exfil(
+    tmp_data_dir, tmp_memory_dir, monkeypatch
+):
+    """#570 型②: guard 呼び出し例外を安全判定に偽装せず保存を止める。"""
+    corrections = _corrections(2)
+    amb.enqueue(corrections, "slug", tmp_data_dir)
+    records = amb.read_queue("slug", tmp_data_dir)
+    emit = amb.emit_memory_requests(records)
+    key = records[0]["dedup_key"]
+    responses = {key: _llm_output(_SECRET_EXFIL)}
+    monkeypatch.setattr(
+        amb, "_inspect_memory_content", mock.Mock(side_effect=RuntimeError("boom")),
+    )
+
+    with mock.patch.dict("os.environ", {"RL_GATING_DISABLED": "1"}):
+        result = amb.ingest_memory_results(
+            records, emit["requests"], responses,
+            tmp_memory_dir, tmp_memory_dir.parent / "MEMORY.md", tmp_data_dir,
+        )
+
+    assert result["stored"] == 0
+    assert result["contaminated"] == 1
+    assert list(tmp_memory_dir.glob("auto_*.md")) == []
+    assert amb.read_queue("slug", tmp_data_dir) == []
+
+
+@pytest.mark.parametrize(
+    "malformed_guard",
+    [
+        {},
+        {"hits": []},
+        {"hits": "not-a-list", "block": False},
+        {"hits": [], "block": 0},
+    ],
+)
+def test_ingest_malformed_guard_result_fails_closed(
+    tmp_data_dir, tmp_memory_dir, monkeypatch, malformed_guard
+):
+    """#570 型④: hits/block の欠落・型不正を安全判定として通さない。"""
+    corrections = _corrections(2)
+    amb.enqueue(corrections, "slug", tmp_data_dir)
+    records = amb.read_queue("slug", tmp_data_dir)
+    emit = amb.emit_memory_requests(records)
+    key = records[0]["dedup_key"]
+    responses = {key: _llm_output("正常に見える候補")}
+    monkeypatch.setattr(
+        amb, "_inspect_memory_content", mock.Mock(return_value=malformed_guard),
+    )
+
+    with mock.patch.dict("os.environ", {"RL_GATING_DISABLED": "1"}):
+        result = amb.ingest_memory_results(
+            records, emit["requests"], responses,
+            tmp_memory_dir, tmp_memory_dir.parent / "MEMORY.md", tmp_data_dir,
+        )
+
+    assert result["stored"] == 0
+    assert result["contaminated"] == 1
+    assert list(tmp_memory_dir.glob("auto_*.md")) == []
+    assert amb.read_queue("slug", tmp_data_dir) == []
+
+
 # ─── 記憶遷移検証（#93・TRUSTMEM Memory Transition Verifier の決定論移植） ────────
 
 _TRANSITION_OLD_BODY = (
