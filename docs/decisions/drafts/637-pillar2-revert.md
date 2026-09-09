@@ -138,83 +138,126 @@ for L in (40, 60, 80, 120, 200, 10**9):
 
 ---
 
-## 3. 採用案（A + B）
+## 3. 採用案（R2・巡1 の指摘を反映した最小構成）
 
-機構を足す前に減らす順（`think-before-coding.md`）で検討した結果、**A（文言の是正・ゼロ機構）を
-土台に置き、その上に B（取り消しを1イベントで記録する）だけを足す**。層は重ねない。
+R1（A+B）は codex 設計レビュー巡1 で `設計修正要`（[Must] 6件 / [Should] 6件）。
+Q5 で提示された、より機構の少ない構成を採る（`think-before-coding.md`「機構を足す前に減らす」）。
 
-### A. 柱2が何を数えているかを正直に書く（ゼロ機構）
+**最小構成は4点**: ①既存ストアに取り消しイベント1種 ②柱2 reducer を target ごとの2状態へ
+③既存表示に固定1行 ④read-only の「いま有効な反映」一覧＋取り消しコマンド。
+**新ストア・新 observability section・文字列同一性検査は作らない。**
 
-- `count_applied_reflections` の結果に **`revert_tracking: "declared_only"`** の意味を持つ
-  既存 health フィールドを1つ足し、戦果ボードの柱2の行に
-  「**取り消しは申告があったぶんだけ反映**」の1行を出す（silence != evaluated）
-- `report-by-four-pillars.md` の柱2の説明に、同じ限界を1行で書く
-- **これ単独では ④(a) を満たさない**（人間が知っていても直す手段が無い）。だから B を足す
+### 3.1 取り消しイベント（既存ストア `reflect_apply_events.jsonl` に1種だけ追加）
 
-### B. 取り消しを1イベントで記録する
+| フィールド | 内容 |
+|---|---|
+| `event_type` | `correction_reverted` |
+| `schema_version` | `1`（既存2種と同じ） |
+| `correction_id` | このイベント自身の不変 ID |
+| `reverts_applied_id` | 打ち消す `correction_applied` イベントの `correction_id`。**参照の正典はこれ1つ** |
+| `reverted_at` | ISO8601（tz 必須） |
+| `revert_reason` | 1行・空不可。**監査用であって状態解決には使わない** |
 
-- **新ストアは作らない**。既存 `reflect_apply_events.jsonl` に `event_type`
-  `correction_reverted` を1種類だけ追加する（#379 の新設凍結は「新 store / 新 section /
-  新 channel」を対象としており、既存ストアへの遷移追加は対象外。**この解釈はレビューで確認する**）
-- スキーマ（既存2種と同じ `schema_version: 1`）:
-  | フィールド | 内容 |
-  |---|---|
-  | `event_type` | `correction_reverted` |
-  | `correction_id` | このイベント自身の不変 ID |
-  | `target_correction_id` | 取り消す対象の correction |
-  | `reverts_applied_id` | **打ち消す `correction_applied` イベントの `correction_id`** |
-  | `reverted_at` | ISO8601（tz 必須） |
-  | `revert_reason` | 自由記述（1行・監査用） |
-- `reflect_fold.fold_corrections` の扱い:
-  - `reverts_applied_id` が実在の `correction_applied` を指し、かつ
-    `target_correction_id` が一致するときだけ有効。**不一致・不在は `health.orphan_reverts` を
-    加算して無視**（黙って捨てない＝④(d)）
-  - 有効な取り消しは、対応する `applied` を **`applied_by_target` から除く**。
-    同じ target に別の（取り消されていない）`applied` が残っていればそちらが生きる
-  - 取り消しの後に**新しい `applied` が来たら、そちらが勝つ**（再反映。時刻順で最新を採る
-    既存の `latest_pair` の枠内で処理する）
-- 記録手段: `bin/evolve-reflect --revoke <target_correction_id> [--reason "..."]`。
-  対象の `applied` が1件に確定できないときは**書かずに終了**し、候補を印字する（fail-closed）
-- `evolve-revert --list` との関係: **統合しない**（③ 対象外）。`--revoke` は柱2の記録専用で、
-  ファイルを書き戻す機能は持たない（`evolve-revert` は skill diff の巻き戻し器で、対象も
-  ストアも別物。混ぜると2つの意味の「revert」が同じ CLI に同居する）
+**`target_correction_id` は持たせない**（巡1 Q5）。target は参照先の `correction_applied` から
+導出する。二重に ID を持つと「applied はあるが target が不一致」という状態と検証分岐が増える。
+
+`correction_reverted` の validator（不正値は既存 `invalid_events` へ接続）:
+`correction_id` / `reverts_applied_id` が正当な correction ID、`reverted_at` が tz-aware、
+`revert_reason` が空でない1行、`schema_version == 1`。
+
+### 3.2 reducer（`reflect_fold.fold_corrections`）— target ごとの2状態へ畳む
+
+target ごとに、時刻順（`(timestamp, correction_id)`・既存 `latest_pair` と同じ全順序）で
+`applied` / `reverted` の2状態を遷移させる。
+
+- **revert は CAS（compare-and-set）**: 参照先 `reverts_applied_id` が **その時点で有効な最新の
+  `applied`** であるときだけ状態を `reverted` に閉じる
+- **過去の applied は復活しない**。`A1 → A2 → revert(A2)` は無効（A1 は戻らない）
+- **revert より後の新しい `applied` だけが再反映になる**。`A1 → A2 → revert(A2) → A3` は A3 が生きる
+- **revert 済み target は reconciliation の対象外**。現行 `reflect_fold.py:279-296` は
+  confirmation が無くても base の `reflect_status == "applied"` なら最新 attempt から柱2情報を
+  再構成するので、これを通ると取り消した target が `reconciled=True` で復活する（巡1 [Must]）
+- **曖昧な状態は数えず health に出す**（巡1 [Must]・④(e) を過少にも過大にも倒さない）:
+  - `reverted_at` が参照先の `reflect_applied_at` より前（時刻の逆転）
+  - `applied` と `reverted` の時刻同着
+  → その target は件数に含めず `ambiguous_reverts` を加算する。
+  **ランダムな ID の大小で業務状態を決めない**
+
+### 3.3 health（既存の柱2 payload にフィールドを足す。新 section は作らない）
+
+| キー | 意味 |
+|---|---|
+| `stale_reverts` | 参照先が不在／validation 無効／その時点で有効でない／同じ applied の二重取り消し |
+| `ambiguous_reverts` | §3.2 の時刻逆転・同着 |
+
+- どちらも `pillar2_metrics.py` の `degraded` 条件（現行は列挙式・`:262-278`）に接続する
+- **読者向けの表示理由にも接続する**。`test_results_board.py:993-1024` は全数値キーに
+  表示理由を要求しているので、これを満たす
+- revert イベント自身の ID 重複は既存 `duplicate_event_row_count` が扱う（新設不要）
+
+### 3.4 CLI（`bin/evolve-reflect`）
+
+- **`--list-applied`**（read-only）: いま有効な反映を、`applied_id` / 反映先 / 反映日時つきで印字する。
+  現在の柱2 `applied_list` は kind/path/time しか返さず ID を出さないため、
+  **人間が取り消しを知っていても操作できない**（巡1 [Must]・④(a)）
+- **`--revoke <applied_id> --reason "<1行>"`**: 同じストアの **lock 内で
+  「その applied がいま有効な最新か」を再確認してから追記する**。
+  読取→追記の間に新しい `applied` が入っていたら**書かずに `retry-required` で終了**する
+  （成功表示のまま取り消しが効かない状態を作らない・巡1 [Must]）
+- **`--revoke` は `--apply` / `--skip` / weak decision 系フラグと相互排他**にする
+  （現行 parser で相互排他なのは weak decision の3フラグだけ・`reflect.py:1071-1089`）
+- `evolve-revert`（skill diff の巻き戻し器）とは**統合しない**。対象もストアも別物
+
+### 3.5 表示（ゼロ機構）
+
+- 柱2の行に固定の1行「**取り消しは申告があったぶんだけ反映**」を常時足す。
+  **`revert_tracking` のような新しい機械フィールドは作らない**（巡1 Q5）。
+  構造化された読み手に同じ限界を渡す必要が実際に出たら、そのときフィールド化する
+- `report-by-four-pillars.md` の柱2の説明にも同じ限界を1行で書く
 
 ### 不採用にした案
 
 | 案 | 不採用の理由 |
 |---|---|
-| 案2（read 時の文字列照合） | §2 の実測。取り消しと書き換えを分離できない |
-| `evolve-revert` 成功時に自動追記 | 今回の実害は `git revert` 由来で、`evolve-revert` を通っていない。自動化しても同じ穴が残るのに機構は増える |
-| 反映先を git で追跡して差分検出 | 反映先が git 管理外の PJ・別マシンにあり得る（`pillars-before-polish.md` の測定不能事例）。機構が大きく、③ の対象外へはみ出す |
+| 案2（read 時の文字列照合） | §2 の実測。取り消しと書き換えを分離できない。codex が独立に再現し数字も一致 |
+| `evolve-revert` 成功時に自動追記 | 今回の実害は `git revert` 由来で `evolve-revert` を通っていない。穴は残るのに機構だけ増える |
+| 反映先を git で追跡して差分検出 | 反映先が git 管理外・別マシンにあり得る（#602）。機構が大きく ③ の対象外へはみ出す |
+| `target_correction_id` を revert にも持たせる（R1） | 参照が二重になり、不一致状態と検証分岐が増える（巡1 Q5） |
 
 ---
 
 ## 4. 受け入れるトレードオフ（正直に書く）
 
-1. **申告ベースである**。人間が `--revoke` を打たなければ、取り消しは数字に出ない。
+1. **申告ベースである**。人間が `--revoke` を打たなければ取り消しは数字に出ない。
    `report-by-four-pillars.md` が「申告ベースは使わない」と定めたのは**水増しの方向**の申告
-   （`promoted` / `already_reflected`）についてで、本件は**件数を減らす方向**の申告なので
-   水増しには使えない。ただし「打ち忘れ」は残る＝ A の1行表示でその限界を可視化する
-2. **過去の1件は手で記録する**。`34cc2398…` の取り消しは、本 PR のマージ後に
-   `--revoke` を1回実行して記録する（自動移行はしない）
-3. **取り消しの取り消し（再反映）は、新しい `applied` を記録する運用**で表す。
-   専用の遷移は作らない
+   （`promoted` / `already_reflected`）についてで、本件は**件数を減らす方向**なので水増しには使えない。
+   打ち忘れは残る＝ §3.5 の固定1行でその限界を可視化する
+2. **過去の1件は手で記録する**。`34cc2398…` の取り消しは、マージ後に `--revoke` を1回実行する
+3. **取り消しの取り消し（再反映）は、新しい `applied` を記録する運用**で表す。専用の遷移は作らない
+4. **曖昧な状態（時刻逆転・同着）は「取り消された」とも「生きている」とも数えない**。
+   人間の再操作を求める。自動で片方に倒すと、どちらに倒しても嘘になる
 
 ---
 
-## 5. 検証計画（⑤ の具体化）
+## 5. 検証計画（⑤ の具体化・巡1 の指摘を反映）
 
 | 種別 | 内容 | 期待 |
 |---|---|---|
-| 陰性 (a) | `--revoke` を削除（CLI から到達不能にする）| 取り消しを記録するテストが赤 |
-| 陰性 (b) | `fold_corrections` の `correction_reverted` 分岐を no-op 化 | 畳み後の件数を見るテストが赤 |
-| 陰性 (c) | 柱2の表示から限界の1行を削除 | 表示契約テストが赤 |
-| 陰性 (d) | orphan な取り消しを health に加算せず無視 | health テストが赤 |
-| 陰性 (e) | 有効性検証を外し、`target_correction_id` だけで畳む | 別 attempt を巻き添えにするテストが赤 |
-| 陽性対照1 | 取り消していない反映のみのデータ | 件数・health とも変化なし |
-| 陽性対照2 | 取り消し→再反映の順に記録 | 件数が元に戻り degraded にならない |
+| 陰性 (a) | `--revoke` / `--list-applied` を CLI から到達不能にする | 取り消し操作のテストが赤 |
+| 陰性 (b) | `correction_reverted` の分岐を no-op 化 | 畳み後の件数テストが赤 |
+| 陰性 (b') | revert 済み target を reconciliation 対象から外す処理を消す | `attempt A → applied B → revert(B)` で件数が残り赤 |
+| 陰性 (c) | 柱2表示から固定1行を削除 | 表示契約テストが赤 |
+| 陰性 (d) | `stale_reverts` / `ambiguous_reverts` を health・degraded・表示理由に接続しない | health テストと `test_results_board` 相当が赤 |
+| 陰性 (e) | CAS を外し「参照先を消すだけ」にする | `A1 → A2 → revert(A2)` で A1 が復活し赤 |
+| 陰性 (f) | `--revoke` の lock 内再確認を外す | 読取→追記の間に `A3` を挿す決定論試験が赤 |
+| 陽性対照1 | 取り消していない反映のみ | 件数・health とも変化なし |
+| 陽性対照2 | `A1 → A2 → revert(A2) → A3` | A3 が1件として生き、degraded にならない |
+| 陽性対照3 | 正常データで既存テスト全緑（`test_reflect_fold.py` の並べ替え不変契約を含む） | 緑のまま |
 
-変異は適用後に「その分岐が実行で読まれたこと」を機械で確認してから陰性試験に数える。
+- 変異は適用後に「その分岐が当該テストの実行で読まれたこと」を機械で確かめてから陰性試験に数える
+- 並行性の検証は同期点だけに頼らず、**呼出順を記録して assert する決定論試験**を併用する（#593 の実測）
+- 委譲側が挙げた回避手段とは**種類の違うものを2件以上**、実際に適用して結果を報告する。
+  **緑のまま残ったものが1件でもあれば完了扱いにしない。** 探索した入力クラスと変換も列挙する
 
 ---
 
@@ -226,4 +269,27 @@ for L in (40, 60, 80, 120, 200, 10**9):
 
 | 巡 | 種別 | 発注日時 | 対象 SHA | レビュアー | 実測入力トークン | 判定 | 族タグ |
 |---|---|---|---|---|---|---|---|
-| 1 | 設計 | （発注時に記入） | | codex | | | |
+| 1 | 設計 | 2026-09-10 07:34 | `2deb1aff` | codex `rev637r1` | 102,130 | 設計修正要 | 状態遷移の未定義（復活・CAS・同着）／操作到達性 |
+| 2 | コード | （実装後に記入） | | tacchi | | | |
+
+巡1 の指摘の反映状況:
+
+| 指摘 | 反映先 |
+|---|---|
+| [Must] reconciliation で復活する | §3.2 4点目・§5 陰性 (b') |
+| [Must] 古い applied が再浮上する | §3.2 2〜3点目・§5 陰性 (e) |
+| [Must] 操作到達性（ID が取れない） | §3.4 `--list-applied` |
+| [Must] `reverts_applied_id` を CAS として定義 | §3.2 1点目 |
+| [Must] read→append の競合 | §3.4 lock 内再確認・§5 陰性 (f) |
+| [Must] 時刻順の全順序が未定義 | §3.2 最終点（曖昧は数えない） |
+| [Should] `--revoke` の排他契約 | §3.4 3点目 |
+| [Should] health を degraded と表示理由へ接続 | §3.3 |
+| [Should] orphan/duplicate の分類 | §3.3 `stale_reverts` の定義 |
+| [Should] validator | §3.1 末尾 |
+| [Should] 「既存 health フィールドを1つ足す」の語義 | §3.3 見出しで section でないことを明記 |
+| [Should] Q5 の最小構成 | §3 冒頭・§3.1・§3.5 |
+
+Q3（#379 新設凍結との整合）は codex が**抵触しないと判定**（`shrink_freeze.py:62-92` で
+`reflect_apply_events.jsonl` は登録済み、`assert_no_new_keys` が見るのはレジストリのキー集合で
+既存ストア内の `event_type` 追加は対象外）。
+Q2（§2 の実測）は codex が独立に再現し、数字は一致した。
