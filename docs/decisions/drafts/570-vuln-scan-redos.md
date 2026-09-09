@@ -1,315 +1,411 @@
-# 570: skill_vuln_scan の ReDoS（O(n²)化）を「合計時間の予算」で止血する（R3）
+# 570: skill_vuln_scan の ReDoS（O(n²)化）を別プロセス隔離の時間予算で止血する（R4）
 
 - issue: #570（refs #566）
-- 状態: ドラフト（R3・行長閾値から時間予算方式へ変更。ユーザー裁定 2026-09-09）
-- 作成日: 2026-09-09（R3）
+- 状態: ドラフト（R4・signal ベースから別プロセス隔離へ変更。ユーザー裁定＋巡3承認 2026-09-09）
+- 作成日: 2026-09-09（R4）
 - 前身:
-  - R1（`fix/570-redos-scan` commit `c37c7f9b`）: 正規表現の線形時間化を推奨したが
-    codex 設計レビュー巡1 で **設計修正要・[Must] 5件**（推奨案が反例で線形にならない）
-  - R2（同 branch commit `08f2546e`）: 「1論理行の長さ」で打ち切る方式へ縮小したが、
-    team-lead の実測により**行長の閾値はそもそも「ファイル/実行全体の停止時間」の
-    上限にならない**ことが判明（下記「R2 からの変更点」節）
-  - **本 R3 は R1 の設計レビュー1巡を継続して引き継ぐ**（`review.md`: 変更系列はリセット
-    できない。R1→R2→R3 は同一変更系列であり、R1 の巡数を通算する）
+  - R1（`fix/570-redos-scan` commit `c37c7f9b`）: 正規表現の線形時間化を推奨。
+    codex 設計レビュー巡1 **設計修正要・[Must] 5件**（推奨案が反例で線形にならない）
+  - R2（commit `08f2546e`）: 「1論理行の長さ」で打ち切る方式へ縮小。team-lead の実測で
+    行長閾値が合計停止時間の上限にならないと判明し破棄
+  - R3（commit `5a0694d7`）: `signal.setitimer(ITIMER_REAL)` によるハードタイムアウト方式へ変更。
+    **codex 設計レビュー巡2 で設計修正要・[Must] 11件**（うち7件が signal 使用に由来。詳細は
+    「巡2の指摘と対応」節）
+  - **本 R4 は R1 の設計レビュー1巡を継続して引き継ぐ（通算で codex レビュー2巡・[Must] 16件）**
+    （`review.md`: 変更系列はリセットできない）。ユーザー裁定により、本 R4 の方針
+    （別プロセス隔離）は**巡3として承認済み**（承認行は issue #570 本文）
 
-## R2 からの変更点（行長閾値の破棄）
+## R3 からの変更点（signal 方式の破棄）
 
-team-lead の実測（2026-09-09、私も再現・確認済み。取得日 2026-09-09T09:33:26Z）:
+codex 設計レビュー巡2（`~/.codex-watch/design-570-r2-20260909-185052-24567.log`）で
+**設計修正要・[Must] 11件**。うち7件が `signal.setitimer(ITIMER_REAL)` を使うこと自体に
+由来する:
 
-```python
-import sys,time
-sys.path.insert(0,'scripts/lib')
-from skill_vuln_scan import _scan_line
-evil = "/a"*1950+"/notashell"  # len=3910（R2 の閾値4000の直下）
-for n in (1, 3, 10):
-    t0 = time.time()
-    for _ in range(n):
-        _scan_line("x.md", 1, evil)
-    print(n, round(time.time() - t0, 2))
-# （自環境の実測）1行 4.52s / 3行 13.73s / 10行 53.66s
-```
+1. SIGALRM・タイマーはプロセス全体の共有状態。既存の SIGALRM 利用箇所との保存・復元・
+   所有権の確認が要る
+2. 非メインスレッドでは `signal.signal` が `ValueError` を投げるが、`setitimer` は
+   成功してしまうため、検査と無関係の処理へ例外が飛ぶ経路が残る
+3. 非対応 OS でも fail-open にできない。**`auto_memory_broker.py:689` は `inspect_content` の
+   任意例外を `try/except Exception: guard = None` で捕まえ書込を継続する
+   ため、攻撃入力ほど無検査で保存される**（fail-open の実例）
+4. timeout 例外の捕捉境界を公開関数内に固定する必要がある（外へ漏らすと3の広い捕捉に
+   握り潰される）
+9. timeout 後に2回目が正常完了するテストでは解除漏れを検出できない（タイマーは発火後0に
+   戻るため）
+10. signal 関連テストは pytest 自体を落とし得るため、子プロセスへ隔離が要る
 
-**攻撃者は閾値直下の行を並べるだけで合計時間をいくらでも伸ばせる。1行あたりの上限（R2 の行長
-閾値）は、ファイル全体・実行全体の停止時間の上限にならない。** R2 は破棄する。
+**ユーザー裁定**: 検査を別プロセスで実行し、呼び出し側が `subprocess` の時間切れで押さえる
+方式へ変更する。これにより 1・2・4・9・10 は**構造的に消える**（共有状態を触らない・
+スレッド制約なし・例外がプロセス境界を越えない・タイマー状態が呼び出しごとに独立する）。
 
-## さらに判明した限界（行単位の時間チェックでは不十分）
+## 巡2の指摘と対応（11件）
 
-「1行あたりの時間ではなく合計時間を予算にする」方式を最初に検討する際、
-**「各行の処理を始める前に経過時間を確認し、超えていれば打ち切る」**という素朴な実装を
-試作したところ、新たな限界を実測で発見した:
-
-```python
-def scan_lines_with_time_budget(lines, budget_seconds):
-    t_start = time.monotonic()
-    for i, line in enumerate(lines, 1):
-        if time.monotonic() - t_start > budget_seconds:
-            return i  # truncated
-        _scan_line('x.md', i, line)
-```
-取得日 2026-09-09T09:35:12Z:
-
-| 予算 | 1行が16秒かかる入力（5000 segment）を3行 | 実測結果 |
+| # | 指摘 | 本 R4 での扱い |
 |---|---|---|
-| 5秒 | huge_evil × 3 | **17.14秒**（予算の3.4倍） |
-| 10秒 | huge_evil × 3 | **19.04秒**（予算の1.9倍） |
-
-**予算チェックが「次の行を始める前」にしか行われないため、1行自体の処理に極端に時間がかかる
-場合、その1行の完了を待ってしまい、予算は上限として機能しない。** これは R2 で扱った
-「行長閾値では上限にならない」問題が、形を変えて残ったもの。
-
-**解決策として signal ベースのハードタイムアウトを実測で検証した**（下記「変更案」節）。
-`signal.setitimer(signal.ITIMER_REAL, ...)` は `re.search()`/`re.match()` の実行中でも
-正確に割り込めることを実測で確認した:
-
-```python
-import re, time, signal
-class Timeout(Exception): pass
-signal.signal(signal.SIGALRM, lambda *_: (_ for _ in ()).throw(Timeout()))
-rx = re.compile(r'(?:[A-Za-z0-9._+-]+/)*notfound')
-evil = 'a/' * 100000 + 'XXXX'
-signal.setitimer(signal.ITIMER_REAL, 2.0)
-t0 = time.time()
-try:
-    rx.search(evil)
-except Timeout:
-    print('TIMEOUT fired, dt=', time.time() - t0)
-# TIMEOUT fired, dt= 2.0012240409851074
-```
-取得日 2026-09-09T09:35:46Z。**予算 2.0秒に対し実測 2.0012秒で割り込みが発火**し、
-行単位チェック方式に見られた「1行分の超過」が起きないことを確認した。
+| 1 | SIGALRM は共有状態 | **構造的に解消**（別プロセスは signal を使わない） |
+| 2 | 非メインスレッドで `setitimer` だけ成功 | **構造的に解消** |
+| 3 | fail-open で攻撃入力ほど無検査保存 | **設計で対応**（下記「fail-closed への転換」節。実装対象に `auto_memory_broker.py` を含める） |
+| 4 | timeout 捕捉境界の固定 | **構造的に緩和**（`subprocess.TimeoutExpired` は呼び出し元の1箇所でしか発生しない） |
+| 5 | `scan_text` 戻り値契約 | **設計で対応**（下記「戻り値の契約」節、擬似コードあり） |
+| 6 | 部分結果を空のまま保存させない | **設計で対応**（下記「fail-closed への転換」節） |
+| 7 | 予算300秒は受け入れ不可（呼び出し元の締切から逆算） | **設計で対応**（下記「呼び出し経路と締切の実測」節） |
+| 8 | 陰性試験②が既定値の変異を殺せない | **設計で対応**（下記「検証方法」節、契約テストと動作テストを分離） |
+| 9 | timeout 後の2回目確認では解除漏れを検出できない | **構造的に解消**（別プロセスは状態を残さない） |
+| 10 | signal テストは子プロセス隔離が要る | **構造的に緩和**（検査ロジック自体が既に別プロセスで動くため、pytest 側のクラッシュリスクが下がる） |
+| 11 | golden は変更後の実装から生成しない | **設計で対応**（下記「検証方法」節） |
 
 ## 完成条件（round 0）
 
-① **守る対象**: `skill_vuln_scan` / `memory_guard.scan_text` の**1回の検査呼び出し**
-（`scan_skills` の1実行、または `scan_text` の1呼び出し）が、悪意ある入力（1行が極端に長い・
-悪意ある行を大量に並べる、のいずれか、または両方の組み合わせ）によって、**あらかじめ決めた
-合計時間を超えて停止し続けないこと**。
+① **守る対象**: `skill_vuln_scan` / `memory_guard.scan_text` の**1回の検査呼び出し**が、
+悪意ある入力（1行が極端に長い・悪意ある行を大量に並べる、の両方）によって、あらかじめ決めた
+合計時間を超えて停止し続けないこと。**加えて、検査が時間切れで打ち切られた場合に、
+その事実を握りつぶして「安全」を装わないこと**（R3 にはなかった要件。巡2指摘6を受けて追加）。
 
 ② **信頼境界**: 「取り込みスキルの作者が悪意ある static な文字列を書く」ケースを脅威に数える
-（#566 の設計 §0② を継承）。1行の内容だけでなく、**1ファイル内の行数・複数ファイルの合計**も
-攻撃者が制御できる（R2 で見落としていた点）。
+（#566 の設計 §0② を継承）。1行の内容・1ファイル内の行数・複数ファイルの合計を攻撃者が
+制御できる（R3 から継続）。
 
 ③ **対象外**:
-- **正規表現の線形時間化そのもの**（R1 の設計1巡を継承して別 issue へ切り出す。
-  下書き: scratchpad `issue_570_linearize.md`、今回追記）
-- **行長による打ち切り（今回は採らない）**。理由: 上記「R2 からの変更点」節の実測どおり、
-  行長の閾値は合計時間の上限にならない
-- ファイル単位の追加予算（下記「変更案」節で不採用の理由を述べる）
+- **正規表現の線形時間化そのもの**（R1 の設計1巡を継続して別 issue へ切り出す。
+  下書き: scratchpad `issue_570_linearize.md`）
+- **行長による打ち切り（採らない）**。理由: R2 の実測どおり合計時間の上限にならない
+- **signal による打ち切り（採らない）**。理由: 巡2の指摘1・2・3・4・9・10（上表）
 - `_PATTERNS` の検出ロジック自体の拡張・FP 較正の見直し
 
 ④ **blocking の定義**: 以下のいずれかが1件でもあれば着手不可・マージ不可
-- 性能予算テスト（注入した小さい予算値での timeout 発火確認）が赤
+- 性能予算テスト（既定値の契約テスト・注入値の動作テストの両方）が赤
 - 陽性対照（正常データでの誤打ち切り）が発生する
-- 打ち切り発生時に `scan_errors`/`evaluated`/`inspect_content["truncated"]` のいずれの
-  既存契約からも見えない経路が残っている
-- mutation test（陰性試験、下記4型）のいずれかが緑のまま残る
+- 打ち切り発生時に **書込が継続してしまう経路**が1つでも残っている（巡2指摘6・3の核心）
+- `scan_text`/`reject_hits`/`guard_hits`/`inspect_content` のいずれかで戻り値契約が
+  不整合（新旧シグネチャの混在）
+- mutation test（陰性試験、下記5型）のいずれかが緑のまま残る
 
-⑤ **検証方法**: 「検証方法」節（性能予算・不変再確認・陰性試験4型＋証跡3点・陽性対照）
+⑤ **検証方法**: 「検証方法」節
 
 ⑥ **この成果物が目的文の物差しで削る量**:
 目的の物差しは「悪意ある入力を含むスキルを検査したときの、1回の検査呼び出し全体の
 最大停止時間」。
 - **現状 — 単発攻撃**（R1 から引き継ぎ再実測。取得日 2026-09-09T08:58:58Z、HEAD `74d9f850`）:
   5000 segment（10027文字）の不一致絶対パス1行で `_scan_line()` が **16.31秒**
-- **現状 — 累積攻撃**（team-lead 実測を自環境で再現。取得日 2026-09-09T09:33:26Z）:
-  閾値直下相当（3910文字）の行を10行並べると **53.66秒**。**行数に比例して合計時間は
-  無制限に伸びる**（上限が無いことそのものが「現状」）
-- **打ち切り後の実測**（signal ベースのハードタイムアウトを試作。コードは変更せず外部関数として
-  実験、計測後にプロセス終了で自動的に破棄）:
-  - 240秒相当の攻撃（16秒かかる行 × 15行相当を5ファイルに分散）に対し、実行全体予算5秒設定で
-    **実測5.00秒で打ち切り**（取得日 2026-09-09T09:36:31Z）
+- **現状 — 累積攻撃**（R3 から引き継ぎ）: 閾値直下相当の行を10行並べると **53.66秒**
+  （行数に比例して**無制限**に伸びる）
+- **現状 — さらに極端な累積攻撃**（本 R4 で追加実測。取得日 2026-09-09T11:38:28Z）:
+  16秒/行 × 20行（320秒相当）を、別プロセス隔離なしで直接実行すれば単純合算で
+  約320秒かかる想定（実行はしていない。単発16秒の実測値からの外挿）
+- **打ち切り後の実測**（別プロセス隔離を試作。コードは変更せず scratchpad 内に
+  ワーカースクリプトを置いて実験。リポジトリへは commit しない）:
+  - 320秒相当の攻撃（16秒/行 × 20行を1ファイルに集約）に対し、
+    `subprocess.run(..., timeout=5)` で **実測 5.00秒でぴったり打ち切り**
+    （取得日 2026-09-09T11:38:28Z）
   - **削る量**: 「合計時間の上限が無い」状態から「予算値ちょうどで頭打ちになる」状態への変化。
-    予算値を実運用の値（下記「予算の値」節、暫定300秒）に設定した場合、**保証できる上限は
-    300秒**（現状は無制限）。単発の16秒攻撃に対しては削る量は実質0秒（予算内に収まるため）だが、
-    **これは意図どおり**（単発の16秒は「秒単位で止まる」問題としては軽微で、真に守るべきは
-    無制限に伸びる累積攻撃への上限であるため）
+    予算値を実運用の値（下記「予算の値」節、暫定10秒）に設定した場合、**保証できる上限は
+    10秒**（現状は無制限）
 
-## 前提の evidence
+## 呼び出し経路と締切の実測（巡2指摘7への対応）
 
-| 前提 | 値 | 取得コマンド | 取得日 |
-|---|---|---|---|
-| `scan_skills(~/.claude)` の正常な所要時間（1回目） | 70.78秒（1356ファイル） | `scan_skills(os.path.expanduser('~/.claude'))` の実行時間計測 | 2026-09-09T08:55:50Z |
-| `scan_skills(~/.claude)` の正常な所要時間（2回目・再実測） | 63.68秒（1356ファイル、打ち切りなしを確認） | 同上（signal 予算90秒下で実行、`truncated=False` を確認） | 2026-09-09T09:37:45Z |
-| 実データ1ファイルあたりの最大所要時間 | 1.446秒（`gstack/CHANGELOG.md`, 1,020,733文字） | ファイル別内訳の再現コマンドは R1/R2 と同じ（下記に再掲） | 2026-09-09T08:57:04Z |
-| `signal.setitimer(ITIMER_REAL, ...)` は `re.search`/`_scan_line` の実行中に正確に割り込める | 予算2.0秒で実測2.0012秒 | 「さらに判明した限界」節のコード | 2026-09-09T09:35:46Z |
-| 行単位チェック方式は1行が極端に長い場合に予算超過する | 予算5秒で実測17.14秒（3.4倍） | 「さらに判明した限界」節のコード | 2026-09-09T09:35:12Z |
-| `_scan_line` は3箇所から呼ばれる唯一の入口 | `skill_vuln_scan.py:679,702` / `memory_guard.py:77` | R1/R2 と同じ、変更なし | 2026-09-09 |
-| `SkillVulnReport` に `scan_errors`/`evaluated` が既存 | `skill_vuln_scan.py:246-271` | R1/R2 と同じ | 2026-09-09 |
-| `memory_guard.scan_text`/`inspect_content` に打ち切り可視化の器が無い | `memory_guard.py:178-197,237-260` | R1/R2 と同じ | 2026-09-09 |
+**call graph を実物で確認した結果、team-lead が引用した「hook の3〜5秒契約」は
+`inspect_content`/`scan_skills` のいずれの呼び出し経路にも直接は適用されないことが判明した。**
+以下に実際の呼び出し経路を表にする。
 
-正常な所要時間の再実測コマンド（陽性対照を兼ねる。90秒予算で timeout しないことを確認）:
+| 検査対象 | 呼び出し元 | 経路 | 外側の締切（実コード確認） | 判定 |
+|---|---|---|---|---|
+| `scan_skills`（`build_skill_vuln_section`経由） | `audit/sections_skill_vuln.py:33` | fleet の `evolve-fleet` CLI から `run_audit_subprocess` 経由 | **CLI 既定30秒**（`scripts/lib/fleet/__init__.py:31` `_DEFAULT_TIMEOUT_SEC = 30.0`）。**関数自体のデフォルトは10秒**（`scripts/lib/fleet/audit_runner.py:156`、CLI 経由では上書きされる） | audit には他の多数のセクションが同居するため、scan_skills 単体に使える時間は30秒よりかなり少ない。**安全側に関数デフォルトの10秒を採用** |
+| `scan_skills`（対話的 `/evolve-anything:audit` 実行） | 同上、subprocess を介さない直接呼び出し | 明示的な締切なし（対話ターン内で完結） | ― | 同じ予算（10秒）を適用しても実害なし（後述の実測どおり通常は1秒未満で完了） |
+| `scan_memory_dir`（`audit/sections_memory.py`経由） | `audit/sections_memory.py` | `scan_skills` と同じ fleet audit subprocess の制約下 | 同上（10秒） | 同上 |
+| `inspect_content`（`auto_memory_broker.ingest_memory_results`経由） | `scripts/lib/auto_memory_broker.py:690` | **evolve --drain スキル実行中、対話ターン内で assistant がインライン実行**（`skills/evolve/references/auto-memory-drain.md:40`）。**hook からは呼ばれない** | 明示的な締切なし。**team-lead が引用した「hook の3〜5秒」は `auto_memory_runner.py`（enqueue のみ・`inspect_content` を呼ばない）の話であり、`hooks/session_summary.py:258` のコメント「Stop hook の5秒タイムアウトと切り離す」のとおり `auto_memory_runner.py` は既に非同期 subprocess.Popen で hook から完全に切り離されている** | 明示的な外部締切が無いため、ユーザー体験の許容範囲（対話ターン内で数秒程度）を基準に暫定10秒とする |
+
+**重要な訂正（R1〜R3 の前提を修正）**: R1〜R3 で不変条件確認に使った母集団
+`~/.claude`（全 PJ 横断、1356ファイル）は、**実際の運用（`build_skill_vuln_section(project_dir)`
+経由）では使われない**。実運用の対象は「そのPJ自身の `skills/` ディレクトリ」のみである。
+当 PJ（evolve-anything）自身の `skills/` を対象にした実測:
 ```python
-import sys, time, signal, os
+import sys, time
 sys.path.insert(0, 'scripts/lib')
 import skill_vuln_scan as s
-from pathlib import Path
+t0 = time.time()
+report = s.scan_skills('.')
+print(report.scanned_files, len(report.findings), len(report.flow_findings), time.time() - t0)
+# => 59 0 0 0.446（秒）
+```
+取得日 2026-09-09T11:36:25Z。**通常運用では 0.446秒**であり、fleet audit の締切（30秒/10秒）
+に対して十分な余裕がある。`~/.claude` 全体（63〜70秒）は「実データでの不変条件確認用の
+特殊な参考測定」であり、blocking gate にも予算設計にも使わない（R3 の「不変の再確認」節の
+方針をそのまま維持）。
 
-class Budget(Exception): pass
-signal.signal(signal.SIGALRM, lambda *_: (_ for _ in ()).throw(Budget()))
-home = Path(os.path.expanduser('~/.claude'))
-files = s._iter_target_files(home / 'skills')
-signal.setitimer(signal.ITIMER_REAL, 90.0)
-scanned, truncated = 0, False
-try:
-    for p in files:
-        text = p.read_text(encoding='utf-8-sig', errors='replace')
-        for i, line in enumerate(text.splitlines(), 1):
-            s._scan_line(str(p), i, line)
-        scanned += 1
-except Budget:
-    truncated = True
-finally:
-    signal.setitimer(signal.ITIMER_REAL, 0)
-print(scanned, len(files), truncated)
-# => 1356 1356 False（63.68秒で完走、打ち切りなし）
+## fail-closed への転換（巡2指摘3・6への対応）
+
+**現状のコード**（`auto_memory_broker.py:688-708`）:
+```python
+if _HAS_MEMORY_GUARD:
+    try:
+        guard = _inspect_memory_content(llm_output)
+    except Exception:
+        guard = None                      # ← 例外時は「検査しなかった」を無視して書込続行
+    if guard and guard.get("hits"):
+        ...
+        if guard.get("block"):
+            continue                       # reject
+        # warn: 書込は継続
+```
+`inspect_content` が例外を投げる（＝ R3 で使った signal 方式なら非対応 OS・非メインスレッド等）と
+`guard=None` になり、`if guard and guard.get("hits")` が False のまま**素通りして書込が継続する**。
+**攻撃者が「検査を殺せる入力」を書けば、無検査で保存される**（fail-open の核心的な欠陥）。
+
+**本 R4 の対応**: `inspect_content` 自体が例外を投げない設計にし（別プロセスの起動失敗・
+timeout・異常終了はすべて `inspect_content` 内部で捕捉して `truncated: True` として返す）、
+`auto_memory_broker.py` 側は**「検査不能=block」を明示的に扱う**よう変更する
+（実装対象に含める。巡2指摘2）:
+
+```python
+# auto_memory_broker.py ingest_memory_results 内（変更後の擬似コード）
+if _HAS_MEMORY_GUARD:
+    guard = _inspect_memory_content(llm_output)  # 例外を投げない契約に変更
+    if guard.get("truncated") or guard.get("block"):
+        contaminated += 1
+        consumed_keys.add(key)
+        reason = "予算超過（検査不能）" if guard.get("truncated") else \
+            [h["pattern_id"] for h in guard.get("hits", [])]
+        print(
+            f"[evolve-anything:memory-guard] 検査不能/汚染検出のため書込 skip: {reason}",
+            file=sys.stderr,
+        )
+        continue
+    if guard.get("hits"):
+        # warn: 書込は継続するが可視化する（既存のまま）
+        ...
+```
+**「検査できない」を「安全」の根拠にしない**（守る対象①の追加要件）。これにより巡2指摘6
+「遅い無害風の入力を先頭に置き、未走査部分に秘密の持ち出しを書けば部分結果が空のまま保存される」
+という攻撃シナリオを塞ぐ。
+
+## 戻り値の契約（巡2指摘5への対応）
+
+**実コード確認**: `scan_text` の直接の外部呼び出し元はゼロ（`memory_guard.py` 内の
+`reject_hits`/`guard_hits` の2箇所のみが使用。他ファイルからの直接呼び出しは無い）。
+```
+scripts/lib/memory_guard.py:209:    return [h for h in scan_text(text) if h.category in _REJECT_CATEGORIES]
+scripts/lib/memory_guard.py:220:    return [h for h in scan_text(text) if h.category in _GUARD_TRACKED_CATEGORIES]
+scripts/lib/memory_guard.py:257:    hits = guard_hits(text)          # inspect_content 内
+scripts/lib/memory_guard.py:286:        for h in guard_hits(text):   # scan_memory_dir 内
+```
+取得日 2026-09-09。`reject_hits` はプロダクションコードから未使用（外部呼び出しゼロ）。
+
+**採用: `scan_text` 自体のシグネチャを `Tuple[List[ContaminationHit], bool]` へ変更する**
+（案X。影響範囲がテストコードのみに限られるため、内部専用の別関数を新設する案Yより
+シンプルで「入口を1箇所にする」という R2 からの一貫した方針にも合う）。
+
+擬似コード:
+```python
+def scan_text(text: str) -> Tuple[List[ContaminationHit], bool]:
+    """text を別プロセスで走査し (hits, truncated) を返す。
+    truncated=True のとき hits は不完全（空を含む）とみなす。"""
+    if not text or not isinstance(text, str):
+        return [], False
+    try:
+        proc = subprocess.run(
+            [sys.executable, _WORKER_PATH, "scan_text"],
+            input=text, capture_output=True, text=True,
+            timeout=_SCAN_TEXT_BUDGET_SEC,
+        )
+    except subprocess.TimeoutExpired:
+        return [], True
+    if proc.returncode != 0:
+        return [], True  # fail-closed: 異常終了も検査不能として扱う
+    data = json.loads(proc.stdout)
+    return [ContaminationHit(**h) for h in data["hits"]], False
+
+
+def reject_hits(text: str) -> Tuple[List[ContaminationHit], bool]:
+    hits, truncated = scan_text(text)
+    return [h for h in hits if h.category in _REJECT_CATEGORIES], truncated
+
+
+def guard_hits(text: str) -> Tuple[List[ContaminationHit], bool]:
+    hits, truncated = scan_text(text)
+    return [h for h in hits if h.category in _GUARD_TRACKED_CATEGORIES], truncated
+
+
+def inspect_content(text: str, *, guard_mode: Optional[str] = None) -> dict:
+    mode = resolve_guard_mode(guard_mode)
+    hits, truncated = guard_hits(text)
+    reject_relevant = [h for h in hits if h.category in _REJECT_CATEGORIES]
+    # 検査不能=block（truncated のとき reject_relevant の中身に関わらず block）
+    block = mode == "reject" and (bool(reject_relevant) or truncated)
+    return {"hits": hits, "block": block, "mode": mode, "truncated": truncated}
+
+
+def scan_memory_dir(memory_dir: Path) -> MemoryContaminationReport:
+    ...
+    scan_errors: List[str] = []          # 新規フィールド（SkillVulnReport と対称）
+    for path in sorted(memory_dir.rglob("*")):
+        ...
+        hits, truncated = guard_hits(text)
+        if truncated:
+            scan_errors.append(f"{fname}: 予算超過（{_SCAN_TEXT_BUDGET_SEC}秒）につき検査不能")
+        for h in hits:
+            ...
+    return MemoryContaminationReport(
+        applicable=True, scanned_files=scanned, hits=hits, scan_errors=scan_errors,
+    )
 ```
 
-## 判定に使う識別（no-denylist-checks.md）
+`MemoryContaminationReport` への `scan_errors: List[str] = field(default_factory=list)`
+フィールド追加は、`SkillVulnReport` と対称的な既存 dataclass への拡張であり、R2/R3 と同じ
+根拠（永続化ストア・観測セクションの新設ではない）で #379 新設凍結には非該当と判定する。
 
-打ち切り判定は**経過時間（wall clock、`ITIMER_REAL`）という単一の観測可能な量**で行う。
-名前・文字列・構文形・sink の種類のいずれでもないため `no-denylist-checks.md` の
-「破れる4種の識別」に該当せず、blocking として扱ってよい。**行長閾値（R2）と異なり、
-攻撃者が「合計時間」を予算以下に収める入力を作った場合、それは攻撃力そのものが弱まっている
-ことと同義**（合計処理時間を予算未満に抑えられる入力は、定義上、可用性を脅かす攻撃として
-成立しない）。
+`scan_skills` 側も同様に、`_scan_line` を直接呼ぶのではなく、別プロセスワーカーへ
+検査対象（root path）を渡し、結果を JSON で受け取って `SkillVulnReport` を再構成する
+（下記「実装対象ファイル」節に新規ワーカーファイルを含める）。
 
-## 変更案
+## 正常時の追加コスト実測（巡2指摘4への対応）
 
-### 採用: signal ベースのハードタイムアウトを、検査呼び出し全体に1つだけ設ける
-
-- **単位**: `scan_skills` は**1実行全体**、`memory_guard.scan_text` は**1呼び出し全体**に対して
-  予算を1つ設ける。「1回の検査呼び出しに対して予算を1つ設ける」という**同一の考え方**の
-  適用であり、team-lead 指示④「仕組みは1つだけにする」に沿う（ファイル単位の追加予算は
-  設けない。理由は次項）
-- **実装方式**: `signal.signal(signal.SIGALRM, ...)` でカスタム例外ハンドラを登録し、
-  検査呼び出しの先頭で `signal.setitimer(signal.ITIMER_REAL, budget_seconds)` を設定する。
-  例外は呼び出し元でキャッチし、そこまでの結果を保持したまま「予算超過につき以降未走査」を
-  `scan_errors`/`inspect_content["truncated"]` へ記録する。**タイマーは `finally` で必ず解除する**
-  （後続の別呼び出しに影響を残さないため）
-
-### ファイル単位の追加予算は採らない（不採用の理由）
-
-試作実測（ファイルごとにタイマーを再設定する方式、取得日 2026-09-09T09:38:25Z）:
+プロセス起動 + モジュール import のオーバーヘッド:
+```python
+import subprocess, sys, time
+t0 = time.time()
+subprocess.run([sys.executable, '-c',
+    'import sys; sys.path.insert(0, "scripts/lib"); import skill_vuln_scan'],
+    capture_output=True, text=True, timeout=30)
+print(time.time() - t0)
+# => 0.0439秒
 ```
-huge_evil(16秒/行) × 3行 のファイルを3つ、ファイル予算10秒で走査
-per_file: [(10.0, True), (10.0, True), (10.01, True)]
-total 30.01
-```
-ファイル単位の予算は各ファイルの停止時間には上限をかけられるが、**ファイル数が増えれば
-実行全体の合計時間は無制限に伸びる**（守る対象①を満たさない）。**実行全体予算だけで
-守る対象①を完全に満たせる**ため、ファイル単位予算を追加する便益（1ファイルが実行全体予算を
-独占することへの公平性配慮）は、追加の複雑さ（ネストしたタイマー管理・シグナルの再入問題）に
-見合わないと判断する。
+取得日 2026-09-09T11:37:38Z。
 
-### 打ち切りを表に出す設計（R2 から維持）
+| 検査対象 | 単位 | 直接呼び出し実測 | 別プロセス実測 | オーバーヘッド | 判定 |
+|---|---|---|---|---|---|
+| `scan_skills`（当PJ自身） | 1PJ全体を1回のプロセス | 0.446秒 | 0.484秒 | 約0.04秒 | 無視できる |
+| `scan_skills`（`~/.claude`全体、参考） | 同上 | 63.68〜70.78秒 | 68.548秒 | ほぼ無し（誤差範囲） | 無視できる |
+| `scan_memory_dir`（当PJ、213ファイル） | memory_dir全体を1回のプロセス | 0.7646秒 | 未実測（直接呼び出し値から類推し、プロセス1回分＋0.04秒程度と見込む） | 約0.04秒（見込み） | 無視できる |
+| `scan_text`（1テキストずつ） | **1回の呼び出しごとに1プロセス** | ― | 20回で1.01秒（**1回あたり平均0.0505秒**） | 1回あたり約0.05秒 | **呼び出し頻度が高いと積み上がる**（下記） |
 
-- `scan_skills`: 打ち切り発生時、`SkillVulnReport.scan_errors`（既存フィールド）へ
-  `f"予算超過（{budget}秒）につき {rel} 以降 {n}件を未走査"` のような1行を追記する。
-  これにより既存の `evaluated` プロパティ（`applicable and scanned_files>0 and not scan_errors`）
-  が自動的に `False` になる。**新しいフィールドは増やさない**（R2 から継続）
-- `memory_guard.scan_text`/`inspect_content`: 戻り値に **`"truncated": bool`**
-  （または理由文字列）を1キー追加する。R2 で検討したとおり、これは新しい永続化ストア・
-  観測セクションの新設ではなく既存の関数戻り値へのフィールド追加であり、#379 の新設凍結には
-  非該当と判定する（根拠は R2 のまま維持: プロセス内の一時的な dict キーであり、どこにも
-  永続化されない）
+取得日は各実測コード直後に記載（`scan_memory_dir`のみ未実測、実装フェーズで確認）。
+
+**重要な設計判断**: `scan_memory_dir` は「ファイルごとに1プロセス」ではなく
+**「memory_dir 全体の走査を1回のプロセスにまとめる」**。213ファイルに対しファイル単位で
+別プロセス化すると 213 × 0.05秒 ≈ 10.65秒 のオーバーヘッドが追加され無視できない規模になる
+（実測1回あたり0.0505秒 × 213 の概算）。一方 `scan_skills` も同じ理由で「1PJ全体を1回の
+プロセス」にまとめる。
+
+`inspect_content`（1件の LLM 生成物ごと）は、**呼び出し単位が既に「1テキスト」**であり
+これ以上まとめられない。1回あたり約0.05秒のオーバーヘッドは、`auto_memory_runner.py:49`
+の `MAX_CORRECTIONS = 5`（1回の Stop hook で enqueue される上限）から、1回の drain 実行で
+処理する件数はおおむね数件〜十数件程度と見込まれ（**正確な上限は未確認・未実測**、下記
+「未実測」節）、その範囲であれば数百ミリ秒以下のオーバーヘッドに収まり許容範囲と判断する。
 
 ## 予算の値（実測から決定）
 
-| 対象 | 正常な実測所要時間 | 採用する予算 | マージン | 根拠 |
-|---|---|---|---|---|
-| `scan_skills`（実行全体） | 63.68〜70.78秒（`~/.claude`、1356ファイル） | **暫定300秒** | 約4.2〜4.7倍 | 正常データの増加（PJ・スキル数の今後の成長）とマシン速度差（CI環境が手元より遅い可能性）の両方を吸収する余裕を持たせた。根拠となる倍率の一般則は無く、実測値に対する暫定マージンとして採用する |
-| `memory_guard.scan_text`（1呼び出し） | 1.446秒（実データ1ファイル最大） | **暫定10秒** | 約7倍 | 1回の記憶書込みは通常1ファイルよりずっと小さいため、実データの1ファイル最大値を安全側の代理指標として使う |
+| 対象 | 締切の根拠 | 採用する予算 | 判定 |
+|---|---|---|---|
+| `scan_skills` | fleet audit 関数デフォルト10秒（`audit_runner.py:156`）を安全側の上限として採用 | **10秒** | 当PJ実測0.446秒に対し約22倍のマージン |
+| `scan_memory_dir` | 同上 | **10秒** | 当PJ実測0.7646秒に対し約13倍のマージン |
+| `scan_text`（`inspect_content`経由） | 明示的な外部締切なし。ユーザー体験の許容範囲として暫定 | **10秒** | 通常のLLM生成物は数百文字〜数千文字程度で、直接呼び出しなら瞬時に完了する想定 |
 
-**マシン依存性の明記**: 予算は wall clock（実時間）に基づくため、**同じ入力でも実行環境の
-速度によって「検査される範囲」が変わりうる**。遅い環境では正常なデータでも打ち切りが
-発生する可能性があり、速い環境では悪意ある入力でもより多くの行が検査されてから打ち切られる。
-**この非決定性は許容する**（打ち切りは必ず `scan_errors`/`truncated` に表示され黙って消えない
-ため、結果が変動しても「検査できなかった」という事実は必ず利用者に伝わる。これが受け入れの
-根拠）。
+**R3 で採用していた300秒は、fleet audit の締切（30秒/10秒）を明確に超えており受け入れ不可**
+（巡2指摘7）。**R4 では3つの呼び出し経路すべてに共通の暫定値10秒を採用する**。根拠が
+経路ごとに異なる（fleet 締切からの逆算 vs ユーザー体験の見積もり）ことは正直に書く。
 
 ## 検証方法
 
-### 性能予算テスト（決定論的にする方法）
+### 性能予算テスト（契約テストと動作テストを分離、巡2指摘8への対応）
 
-**wall clock そのものをモックすることはできない**（`signal.ITIMER_REAL` は OS レベルの実時間
-機構）。代わりに、**予算値を関数の引数として注入可能にし、テストでは極端に小さい予算
-（例: 0.05秒）と、確実にそれを超える処理（5000 segment の悪意入力、または明示的な
-`time.sleep`）を組み合わせることで、実行環境の速度に関わらず決定論的に打ち切りを発火させる**。
-これは「時計を差し替える」というteam-lead指示の目的（環境速度非依存のテスト）を、
-シグナルベースの実装で実現可能な形に翻訳したものである。
+1. **既定値の契約テスト**: 予算定数（`_SCAN_SKILLS_BUDGET_SEC`/`_SCAN_TEXT_BUDGET_SEC` 等）
+   の値そのものを直接アサートする（例: `assert _SCAN_TEXT_BUDGET_SEC == 10`）。
+   これは「予算定数を大きく緩める変異」（陰性試験②）を確実に検出する
+2. **注入値の動作テスト**: `budget_seconds` を関数の引数として注入可能にし、極端に小さい
+   予算（例: 0.05秒）と確実にそれを超える悪意入力を組み合わせて、`subprocess.TimeoutExpired`
+   経路が実際に発火し `truncated=True`/`scan_errors` が記録されることをアサートする。
+   これは wall clock をモックせずに決定論的なテストを実現する（R3 から維持する方針）
 
-- 予算0.05秒・悪意入力（数秒かかることが確実な入力）で `scan_skills`/`scan_text` を実行し、
-  `scan_errors`/`truncated` に打ち切りの記録が現れることをアサートする
-- 予算90秒・正常 fixture（下記 golden fixture）で実行し、打ち切りが**発生しない**ことを
-  アサートする（陽性対照）
+### 不変の再確認・golden fixture（巡2指摘11への対応）
 
-### 不変の再確認（R2 の [Must]4 対応を維持）
+**golden は変更後の実装から生成しない。** 手順:
+1. `docs/decisions/drafts/570-vuln-scan-redos.md` が指す **base SHA（本設計を書いた時点の
+   HEAD、変更前）** で、固定 fixture（新規作成、`scripts/lib/tests/fixtures/`）に対する
+   `scan_skills`/`scan_memory_dir` の結果を実行して得る
+2. その結果を **golden ファイル（JSON 等）としてテストコードと同じ commit で追加する**
+   （実装 PR の中で「先に golden を固定してから実装を変更する」順序を守る）
+3. 変更後の実装が同じ fixture に対して golden と完全一致することをテストで確認する
+4. **実データ（`~/.claude`）での確認は blocking gate にしない**（R2/R3 から継続。参考測定として
+   設計書に記載するに留める）
 
-R2 と同じ方針を維持する: `~/.claude` への依存を blocking gate にせず、**固定 fixture での
-golden test**を追加する。`scan_skills(fixture_root)` の結果（`applicable`/`scanned_files`/
-`findings` 全フィールド/`flow_findings` 全フィールド/`scan_errors`/`evaluated`）が変更前後で
-完全一致することを確認する。実データでの確認（本設計で実測した 1356/6/157 等）は「この設計を
-書いた時点の参考値」として記載するに留め、blocking gate には使わない。
-
-### 陰性試験（`verify-checks-by-breaking.md` + R2 の [Must]5 対応を維持）
+### 陰性試験（`verify-checks-by-breaking.md` + 巡2指摘8・9・10 対応）
 
 各変異について **(a) baseline との差分 (b) 変異行が実行で読まれたことの機械的な証跡
-（`coverage.py` 等） (c) 対象テストだけが期待どおり赤化** の3点を要求する。最低4型＋陽性対照:
+（`coverage.py` 等） (c) 対象テストだけが期待どおり赤化** の3点を要求する。最低5型＋陽性対照:
 
-1. **型①（signal ハンドラの登録自体を削除する変異）** → (a) diff（数行） (b) coverage で
-   ハンドラ登録行がベースライン版のテスト実行時にヒットしていたことを確認 (c) 性能予算テストの
-   みが赤化し、機能テスト（finding 検出系）は影響を受けないこと
-2. **型②（予算値を極端に大きくする変異、例: 300秒→1兆秒）** → (a) diff（1行） (b) coverage で
-   `setitimer` 呼び出し自体は実行されるが実質的に無効化されることを確認 (c) 性能予算テストが
-   赤化すること
-3. **型③（`finally` でのタイマー解除を削除する変異）** → (a) diff（1行） (b) 後続呼び出しに
-   前回のタイマーが残留し、意図しないタイミングで打ち切りが発生することをテストで検出できるか
-   確認 (c) 「連続呼び出しで2回目が正常完了する」ことを直接アサートするテストが赤化すること
-4. **型④（打ち切り理由を握りつぶす変異、`scan_errors`/`truncated` への追記を削除）** →
-   (a) diff (b) 打ち切り分岐（例外キャッチ節）が実行されたことをカバレッジで確認 (c) 「打ち切り時に
-   scan_errors/truncated が非空になる」ことを直接アサートするテストのみ赤化し、性能予算テスト
-   自体は緑のまま（＝性能と可視化は別のテストで守られていることを示す）
+1. **型①（別プロセス起動自体を削除し直接呼び出しへ戻す変異）** → (a) diff (b) coverage で
+   直接呼び出し経路がヒットしたことを確認 (c) 性能予算テスト（注入値の動作テスト）のみ赤化
+2. **型②（予算定数を極端に大きくする変異、例: 10秒→1兆秒）** → (a) diff（1行）
+   (b) coverage で定数参照行が実行されたことを確認 (c) **既定値の契約テスト**が赤化すること
+   （巡2指摘8: 注入値テストではこの変異を検出できないため、契約テストが必須）
+3. **型③（`inspect_content` の `truncated` を握りつぶし `block=False` に固定する変異）** →
+   (a) diff (b) coverage で該当分岐が実行されたことを確認 (c) 「打ち切り時に
+   `guard.get('block')` が True になる」ことを直接アサートするテストのみ赤化
+4. **型④（`auto_memory_broker.py` 側で `guard.get('truncated')` の判定を削除する変異）** →
+   (a) diff (b) coverage で判定行削除箇所の周辺が実行されたことを確認 (c) 「検査不能時に
+   `consumed_keys`/`continue` が発生せず書込が継続してしまう」ことを検出する専用テストのみ赤化
+   （巡2指摘6・3 の核心を直接検証する型）
+5. **型⑤（`reject_hits`/`guard_hits`/`scan_text` の戻り値タプルを片方だけ壊す変異、例:
+   `truncated` を常に `False` 固定にする）** → (a) diff (b) coverage (c) 型③・④のテストが
+   連鎖して赤化することを確認する（戻り値契約の一貫性テスト）
 
-**陽性対照**: 意味を変えない書き換え（変数名変更・コメント追加・予算値を実装どおりの値に戻す）で、
-性能予算テスト・不変再確認テスト・機能テストのすべてが緑のままであることを確認する。
-加えて、上記「予算の値」節の90秒予算での正常データ完走（`truncated=False`）を陽性対照の
-実測として明記済み。
+**子プロセス隔離の必要性は大きく下がる**（巡2指摘10）: 検査ロジック自体が既に別プロセスの
+ワーカーで実行されるため、pytest 実行プロセス（メインプロセス）がクラッシュするリスクは
+構造的に低い。念のため、ワーカースクリプトが予期しない例外で異常終了するケースを想定した
+テスト（型①〜⑤とは別に、ワーカー自体のクラッシュを模擬する変異）を追加することは実装
+フェーズで検討する（「未実測」節に記載）。
+
+**陽性対照**: 意味を変えない書き換え（変数名変更・コメント追加・予算値を実装どおりの値に戻す）
+で、性能予算テスト・不変再確認テスト・機能テストのすべてが緑のままであることを確認する。
+加えて、「呼び出し経路と締切の実測」節・「正常時の追加コスト実測」節の実測（当PJ実測
+0.446秒/0.484秒、誤検出なし）を陽性対照の実測として明記済み。
 
 ## 実装対象ファイル
 
 この集合を越えない:
-- `scripts/lib/skill_vuln_shell.py` または `skill_vuln_scan.py`（予算値の単一ソース定数）
-- `scripts/lib/skill_vuln_scan.py`（`scan_skills` への signal ベースタイマーの導入・
-  `scan_errors` への追記）
-- `scripts/lib/memory_guard.py`（`scan_text`/`inspect_content` への signal ベースタイマー導入・
-  戻り値への `"truncated"` 追加）
+- 新規: `scripts/lib/skill_vuln_worker.py`（別プロセスのエントリポイント。
+  `scan_skills`/`scan_text`/`scan_memory_dir` の3モードを argv/stdin で切り替え、
+  結果を JSON で stdout へ出力する）
+- `scripts/lib/skill_vuln_scan.py`（`scan_skills` を別プロセス経由に変更する薄いラッパー追加、
+  予算定数の定義）
+- `scripts/lib/memory_guard.py`（`scan_text`/`reject_hits`/`guard_hits`/`inspect_content`/
+  `scan_memory_dir` の戻り値変更・`MemoryContaminationReport.scan_errors` 追加）
+- `scripts/lib/auto_memory_broker.py`（`ingest_memory_results` 内の fail-open → fail-closed
+  転換。巡2指摘2・3・6の核心）
 - `scripts/lib/tests/test_skill_vuln_shell.py` / `test_skill_vuln_scan.py` /
-  `test_memory_guard.py`（性能予算・不変再確認・mutation test 追加）
-- 新規: `scripts/lib/tests/fixtures/`（固定 golden fixture）
+  `test_memory_guard.py` / `test_auto_memory_broker.py`（性能予算・不変再確認・mutation test
+  追加。`test_auto_memory_broker.py` は fail-closed 転換の回帰テストのため新規に追加対象へ
+  含める）
+- 新規: `scripts/lib/tests/fixtures/`（固定 golden fixture、base SHA 時点で生成し commit）
 - 新規テストファイルを追加する場合: `scripts/lib/tests/test_skill_vuln_perf.py`
 
 **対象外（変更しない）**:
 - `scripts/lib/skill_vuln_flow.py`（`SHELL_EXEC_SUBJECT` 非依存と確認済み）
-- `scripts/lib/audit/sections_skill_vuln.py`（呼び出し側。実装フェーズで再確認）
+- `scripts/lib/audit/sections_skill_vuln.py` / `sections_memory.py`（呼び出し側。
+  `SkillVulnReport`/`MemoryContaminationReport` の既存フィールド経由で打ち切りが
+  自動的に反映されるため、変更不要と見込む。実装フェーズで再確認する）
 - `_PATTERNS` の内容・FP 較正ロジック
 
 ## 未実測
 
-- **signal ベースの実装がマルチスレッド/pytest-xdist 並列実行環境で安全に動作するか**は
-  未実測（`signal.signal`/`setitimer` はメインスレッドでのみ有効という Python の制約がある）。
-  本 PJ のテスト運用は `-n 0`（直列）を要求しており、通常の pytest 実行では単一スレッド前提だが、
-  `audit`/hook からの呼び出しがスレッドプール等を使っていないかは実装フェーズで確認が必要
-- Windows 環境での動作（`SIGALRM` は Unix 限定）。本 PJ は darwin 前提であり、CI が Linux なら
-  問題ないが、明示的な対応方針は未確定
-- `scan_skills` が `memory_guard` を呼ぶ、またはその逆のようなネストした呼び出しが実在するかは
-  確認していない（実在すれば signal タイマーの入れ子・上書きに注意が必要）
-- 300秒/10秒という予算の暫定値が実運用（audit 実行・hook 実行のタイムアウト設定等、上位の
-  呼び出し元が持つ別のタイムアウト）と整合するかは未確認。実装フェーズで上位呼び出し元の
-  タイムアウト値を確認し、矛盾があれば調整する
+- `scan_memory_dir` を「memory_dir全体を1回のプロセスにまとめた」場合の実測オーバーヘッド
+  （直接呼び出し0.7646秒からの類推のみ。実装フェーズで確認）
+- `inspect_content`（drain Phase C）の1回あたりの実際の呼び出し件数（`MAX_CORRECTIONS=5`
+  という enqueue 側の上限は確認したが、drain 実行1回で処理される件数の実測はしていない）
+- ワーカープロセス自体が予期しない例外でクラッシュした場合の挙動（`returncode != 0` を
+  `truncated=True` 相当として扱う設計にしたが、実際のクラッシュパターンごとの網羅的な
+  テストは実装フェーズで検討する）
+- `scan_skills`/`scan_memory_dir` が対話的に（fleet subprocess を介さず）呼ばれる場合の
+  実際のユーザー体験（10秒の打ち切りが対話的操作として妥当かは未検証）
+- 別プロセス化によって `_iter_target_files` 等のファイルシステムアクセスがワーカー側で
+  再度行われることになるが、これによる I/O 面での追加コストは「正常時の追加コスト実測」の
+  実測値に含まれている（`scan_skills`/`scan_memory_dir` の別プロセス実測は実際にファイル
+  システムを読んでいる）ため未実測ではないが、**ネットワークファイルシステム等、I/O 特性が
+  大きく異なる環境での挙動**は未実測
 
 ## 判定に使う識別・裁定者（`no-denylist-checks.md` 手続き）
 
-打ち切り判定は「判定に使う識別」節のとおり経過時間という単一の観測可能な量で行うため
-blocking として扱う。本設計書自体の裁定は `review.md` の系統独立レビューに委ねる。
-R1 からの累計巡数（設計レビュー巡1・[Must] 5件）を継承しており、本 R3 も同一変更系列として
-巡数を通算する。
+打ち切り判定は経過時間（`subprocess.run` の `timeout` パラメータ）という単一の観測可能な量で
+行うため blocking として扱う。本設計書自体の裁定は `review.md` の系統独立レビューに委ねる。
+R1 からの累計巡数（codex 設計レビュー巡1・巡2、[Must] 通算16件）を継承しており、本 R4 は
+ユーザー裁定により**巡3として承認済み**（issue #570 本文に承認行）。
