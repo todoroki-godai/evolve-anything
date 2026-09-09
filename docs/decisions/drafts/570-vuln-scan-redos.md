@@ -1,310 +1,371 @@
-# 570: skill_vuln_scan の ReDoS（O(n²)化）を根治する
+# 570: skill_vuln_scan の ReDoS（O(n²)化）を打ち切りで止血する（縮小版）
 
 - issue: #570（refs #566）
-- 状態: ドラフト（未レビュー）
-- 作成日: 2026-09-09
+- 状態: ドラフト（round2・線形化から打ち切りへ縮小。ユーザー裁定 2026-09-09）
+- 作成日: 2026-09-09（R2）
+- 前身: R1（`docs/decisions/drafts/570-vuln-scan-redos.md` 初版、commit `c37c7f9b`、
+  branch `fix/570-redos-scan`）は codex 設計レビュー巡1 で **設計修正要・[Must] 5件**。
+  中核の [Must] は「推奨案（トークン境界へのアンカー付き `match()`）は線形にならない」。
+  **本設計は前身の設計レビュー1巡を継承する**（`review.md`: 変更系列はリセットできない）。
+
+## R1 からの変更点（縮小の経緯）
+
+R1 は `SHELL_EXEC_SUBJECT` を線形時間で評価する方式を追求したが、codex のレビューで
+以下の反例が出た（自分でも再現・確認済み。取得日 2026-09-09T09:18:51Z）:
+
+```python
+import sys,time,re
+sys.path.insert(0,'scripts/lib')
+import skill_vuln_shell as sh
+rx = re.compile(sh.SHELL_EXEC_SUBJECT, re.IGNORECASE)
+for n in (400, 800, 1600, 3200):
+    s = ("env " * n) + "noshell"
+    t0 = time.time(); pos = 0
+    while True:
+        rx.match(s, pos)
+        nxt = s.find(" ", pos)
+        if nxt < 0:
+            break
+        pos = nxt + 1
+    print(n, round(time.time() - t0, 4))
+# 400 0.1185 / 800 0.3656 / 1600 1.3137 / 3200 7.7152
+```
+
+`_WRAPPER_STEP`（`env`/`sudo`/`nice`/`busybox`/`xargs`/`timeout` の連鎖、
+`skill_vuln_shell.py:47-50`）を反復させると、候補開始位置ごとに `match()` しても
+各候補が残りの入力を毎回読み直すため重複走査が消えない。**入力4倍で時間65倍**
+（400→3200）であり線形ではない。R1 で不採用にした3案（所有格量指定子エミュレーション・
+atomic group・単語境界アンカー）に続く**4件目の反例**であり、「量指定子や呼び出し方法の
+部分修正で線形化する」というアプローチ自体が同一の欠陥族を繰り返し生んでいる
+（`no-denylist-checks.md` 系の教訓と同型: 個別の反例を1つずつ塞ぐのは軍拡競争になる）。
+
+**ユーザー裁定（2026-09-09）**: 線形化は追わない。「1論理行が長すぎる場合は検査を打ち切り、
+検査できなかったことを表示する（黙って飛ばさない）」へ縮小する。正規表現の線形時間化そのものは
+別 issue へ切り出す（下書き: scratchpad `issue_570_linearize.md`）。
 
 ## 完成条件（round 0）
 
-① **守る対象**: `skill_vuln_scan` / `memory_guard.scan_text` の実行時間が、検査対象1行の長さに対して
-線形（O(n)）であること。現状は特定の入力形で O(n²) になり、悪意ある1行でスキャナを長時間停止できる。
+① **守る対象**: `skill_vuln_scan` / `memory_guard.scan_text` が、悪意ある1行によって
+数秒〜十数秒にわたり可用性を奪われないこと。
 
-② **信頼境界**: 脅威に数えるのは「取り込みスキルの作者が悪意ある static な文字列を書く」こと
-（#566 の設計 §0② を継承）。動的展開・実行権限は要らない。攻撃者は対象拡張子のファイルに長い1行を
-書くだけで到達できる。
+② **信頼境界**: 「取り込みスキルの作者が悪意ある static な文字列を書く」ケースを脅威に数える
+（#566 の設計 §0② を継承）。動的展開・実行権限は要らない。
 
 ③ **対象外**:
-- 緩和策（1論理行の長さ／segment数での打ち切り・検査不能の surface）。issue が明示するとおり
-  「#566 側で入れるかは別途判断」であり、本 issue のスコープではない
+- **正規表現の線形時間化そのもの**（R1 の設計1巡を継承して別 issue へ切り出す。
+  下書き: scratchpad `issue_570_linearize.md`。起票はユーザーが判断する）
+- 打ち切りを迂回する入力の網羅的な対策。**打ち切りは論理行の「長さ」だけで判定し、
+  名前・文字列・構文形では判定しない**ため、`no-denylist-checks.md` が禁じる
+  「破れる4種の識別」に該当しない（「判定に使う識別」節で詳述）
 - `_PATTERNS` の検出ロジック自体の拡張・FP 較正の見直し
-- `skill_vuln_flow.py`（flow 検出）の書き換え。後述のとおり本変更の対象範囲外と判定した
 
 ④ **blocking の定義**: 以下のいずれかが1件でもあれば着手不可・マージ不可
-- 性能予算テスト（下記）が赤
-- 既存の finding 6件・flow_findings 157件（母集団定義は「現状（実測）」節）が1件でも変わる
-- mutation test（性能対策を外す変異）で回帰検査が緑のまま
+- 性能予算テストが赤
+- 打ち切り閾値の実データ影響（下記「閾値の実測」節）が0件と申告した集合に実際は1件以上ある
+- 打ち切りが発生したときに `evaluated`/`scan_errors` 相当の既存契約が「危険なし」の根拠として
+  誤読される経路が残っている
+- mutation test（陰性試験、下記4型）のいずれかが緑のまま残る
 
-⑤ **検証方法**: 「検証方法」節を参照（性能予算・不変再確認・陰性試験・陽性対照の4点）
+⑤ **検証方法**: 「検証方法」節（性能予算・不変再確認・陰性試験4型＋証跡3点・陽性対照）
 
 ⑥ **この成果物が目的文の物差しで削る量**:
-目的の物差しは「長大な1行を含むスキルを検査したときの所要秒数」。
-- **現状**（実測、値は下記「現状（実測）」節）: 5000 segment の不一致絶対パス1行で `_scan_line()` が
-  16.21秒（2026-09-09T08:58:58Z 実測）
-- **削る量**: **約 16.2 秒/回**（5000 segment の悪意ある1行を1回検査するたび）。
-  算式: 現状 16.21 秒 − 推奨案の実測 0.0026 秒（n=100000 の最小パターン・「変更案」節に再現コマンドと
-  取得日を記載）。**いずれも実測値であって推定ではない**（現状値は本番経路 `_scan_line()` の計測、
-  推奨案の値は同じ入力クラスに対する試作パターンの計測）。
-  合格基準は別立てで「5000 segment で 0.1 秒未満」とし（issue blocking 条件3「5000 segment で
-  秒単位なら blocking」を継承）、性能予算テストの契約として「検証方法」節に置く。
-  **母集団**: 現在この入力を投げられる経路は `scan_skills` と `memory_guard.scan_text` の2つ。
-  実発生件数は 0 件（悪意あるスキルの取り込み実績なし・2026-09-09 実測）だが、
-  `think-before-coding.md` の「0件でも落とさない3類型」の③**初回の発生も許容できない安全境界**
-  （検査対象自身が検査器の可用性を奪える）に該当するため落とさない。
+目的の物差しは「悪意ある1行を含むスキルを検査したときの所要秒数」。
+- **現状**（R1 から引き継ぎ、再実測。取得日 2026-09-09T08:58:58Z、HEAD `74d9f850`）:
+  5000 segment（10027文字）の不一致絶対パス1行で `_scan_line()` が **16.31秒**
+- **打ち切り後の実測**（試作コードによる計測。コードは変更せず外部ラッパーで `_scan_line` を
+  ラップして計測。閾値候補は「閾値の実測」節を参照）:
+  - 閾値 4000文字案: 5000 segment（10027文字）入力は即座に打ち切られ **0.00秒**。
+    ただし**閾値ちょうど直下**（3907文字、閾値未満で打ち切られない最大級の入力）は
+    **5.53秒**残存する（取得日 2026-09-09T09:24:29Z）
+  - **削る量**: 「5000 segment 攻撃」に対しては 16.31秒 → 0.00秒（**16.31秒**削減）。
+    ただし「閾値直下の攻撃」に対しては 16.31秒 → 5.53秒（**10.78秒**削減、根治ではない）。
+    **単一の代表値に丸めない**（攻撃者は閾値を知っていれば直下を選べるため、
+    保証できる上限は 5.53秒 であり、0.00秒ではない）
 
 ## 前提の evidence
 
 | 前提 | 値 | 取得コマンド | 取得日 |
 |---|---|---|---|
-| `_COMMAND_PATH` のネスト量指定子がO(n²)要因 | `_COMMAND_PATH = r"(?:\.{1,2}/\|/(?:[A-Za-z0-9._+-]+/)*)?"` | `sed -n '16p' scripts/lib/skill_vuln_shell.py` | 2026-09-09 |
-| `_scan_line` が5パターンを順に `.search()` | `for pattern_id, category, severity, regex in _PATTERNS: if regex.search(norm):` | `sed -n '598,599p' scripts/lib/skill_vuln_scan.py` | 2026-09-09 |
-| `memory_guard.scan_text` は `skill_vuln_scan._scan_line` を再利用（別実装ではない） | `from skill_vuln_scan import _scan_line as _vuln_scan_line` | `sed -n '77p' scripts/lib/memory_guard.py` | 2026-09-09 |
-| `skill_vuln_flow.py` は `SHELL_EXEC_SUBJECT` を使わず `effective_shell_text`（コメント除去用）のみ使用 | `from skill_vuln_shell import effective_shell_text` | `grep -n "SHELL_EXEC_SUBJECT\|skill_vuln_shell" scripts/lib/skill_vuln_flow.py` | 2026-09-09 |
-| `_PATTERNS` は4 family（`_SECRET_SOURCE`/`_NET_SINK` の別枠1と合わせ issue の「5 family」と一致） | `remote_exec, destructive, overbroad_tools, prompt_injection`（+ `_scan_line` 内の `secret_exfil` 別枠） | 下記スクリプト参照 | 2026-09-09 |
+| `_scan_line` は3箇所から呼ばれる唯一の入口（物理行スキャン・論理行結合スキャン・memory_guard 経由） | `skill_vuln_scan.py:679` `skill_vuln_scan.py:702` `memory_guard.py:77`（`from skill_vuln_scan import _scan_line as _vuln_scan_line`） | `grep -n "_scan_line(" scripts/lib/skill_vuln_scan.py scripts/lib/memory_guard.py` | 2026-09-09 |
+| `SkillVulnReport` に `scan_errors`（`List[str]`）と `evaluated`（`applicable and scanned_files>0 and not scan_errors`）が既存 | `skill_vuln_scan.py:246-271` | `sed -n '246,271p' scripts/lib/skill_vuln_scan.py` | 2026-09-09 |
+| `memory_guard.scan_text`/`inspect_content` には scan_errors 相当の器が無い（`List[ContaminationHit]` と `{"hits","block","mode"}` のみ） | `memory_guard.py:178-197,237-260` | `sed -n '178,260p' scripts/lib/memory_guard.py` | 2026-09-09 |
+| `skill_vuln_flow.py` は `SHELL_EXEC_SUBJECT` 非依存（`effective_shell_text` のみ使用） | `from skill_vuln_shell import effective_shell_text` | `grep -n "SHELL_EXEC_SUBJECT\|skill_vuln_shell" scripts/lib/skill_vuln_flow.py` | 2026-09-09 |
+| 実データ `~/.claude/skills` の finding 6件・flow_findings 157件・scanned_files 1356件 | `scan_skills(os.path.expanduser('~/.claude'))` の結果 | 下記スクリプト参照 | 2026-09-09T08:55:50Z |
+| 実データ物理行の最長は 3393文字 | `gstack/ship/sections/apple-release.md:50` | 下記スクリプト参照 | 2026-09-09T09:20:40Z |
+| 実データ論理行（`_join_logical_lines` 適用後）の最長は 1851文字 | `hallmark/references/verbs/redesign.md:61` | 下記スクリプト参照 | 2026-09-09T09:21:03Z |
 
-`_PATTERNS` family 確認コマンド:
-```python
-import sys; sys.path.insert(0, 'scripts/lib')
-import skill_vuln_scan as s
-sorted(set(c for _, c, _, _ in s._PATTERNS))
-# => ['destructive', 'overbroad_tools', 'prompt_injection', 'remote_exec']  (4)
-# + _scan_line 内の secret_exfil 別枠1 = issue の「5 family」
-```
-
-## 判定に使う識別（no-denylist-checks.md）
-
-この変更は検査器そのものを触るが、追加する検査（性能予算テスト・mutation test）は
-**名前・文字列・構文形・sink の種類による denylist ではない**。判定に使う識別は
-「実測した wall-clock 時間、または入力長に対する時間の増加率」という**観測可能な実行時挙動**であり、
-`no-denylist-checks.md` が禁じる「破れる4種の識別」のいずれにも該当しない。したがって性能予算テストは
-blocking のままでよい。
-
-## 現状（実測）
-
-### 対象コードの特定
-
-`scripts/lib/skill_vuln_shell.py:16`:
-```python
-_COMMAND_PATH = r"(?:\.{1,2}/|/(?:[A-Za-z0-9._+-]+/)*)?"
-```
-`(?:[A-Za-z0-9._+-]+/)*` は「1文字クラスの1回以上の繰り返し」を `/` 区切りで0回以上繰り返す
-ネスト量指定子。この文字列は `_SHELL_COMMAND`（`skill_vuln_shell.py:37-40`）・`SHELL_EXEC_SUBJECT`
-（`skill_vuln_shell.py:71-75`）に埋め込まれ、`build_remote_exec_patterns()` が生成する5パターン
-（`skill_vuln_shell.py:88-112`）すべてに含まれる。`_scan_line`（`skill_vuln_scan.py:598-599`）が
-この5パターンを含む `_PATTERNS`（13エントリ、うち remote_exec 5件）へ順に `.search()` を呼ぶ。
-
-`_WRAPPER_STEP`（`skill_vuln_shell.py:47-50`）・`_SUDO_STEP`（`67-70`）等の外側繰り返しも
-`(?:...)*` 型で同型のリスクを持つ可能性があるが、本設計の実測範囲では `_COMMAND_PATH` 単体が
-主要因であることを確認済み（下記の変異1〜3実験）。外側構造の寄与は「未実測」節に記載。
-
-### 本番経路での実測（production 経路・blocking条件1）
-
-再現コマンド（`_scan_line` 単体、絶対パス不一致）:
-```python
-import sys, time
-sys.path.insert(0, 'scripts/lib')
-import skill_vuln_scan as s
-for n in (40, 200, 2000, 5000):
-    evil = 'curl https://x | ' + '/a' * n + '/notashell'
-    t0 = time.time(); s._scan_line('evil.md', 1, evil); print(n, time.time() - t0)
-```
-取得日 2026-09-09T08:58:58Z（HEAD `74d9f850`）:
-
-| n | `_scan_line()` |
-|---|---|
-| 200 | 0.0264s |
-| 2000 | 2.5759s |
-| 5000 | 16.3122s |
-
-### 同一入力クラスの before/after 比較（blocking条件2: 異なる入力クラスを混ぜない）
-
-4クラス（絶対/相対 × 一致/不一致）で計測。取得日 2026-09-09T08:58:58Z（HEAD `74d9f850`）:
-
-| クラス | n=200 | n=2000 | n=5000 | findings |
-|---|---|---|---|---|
-| 絶対パス・不一致 | 0.0264s | 2.5759s | 16.3122s | 0 |
-| 絶対パス・一致（`/bash` で終端） | 0.0265s | 2.6471s | 16.7921s | 1 |
-| 相対パス・不一致 | 0.0265s | 2.5881s | 16.2081s | 0 |
-| 相対パス・一致（`bash` で終端） | 0.0265s | 2.6126s | 16.1803s | 1 |
-
-**4クラスとも同オーダー**（一致・不一致、絶対・相対いずれも O(n²)）。マッチ成立の有無は
-バックトラック量に影響しない — `.search()` の複数開始位置が支配的要因であることを示す。
-
-### `memory_guard.scan_text` での実測
-
-```python
-import sys, time
-sys.path.insert(0, 'scripts/lib')
-import memory_guard as mg
-evil = 'curl https://x | ' + '/a' * 5000 + '/notashell'
-t0 = time.time(); mg.scan_text(evil); print(time.time() - t0)
-```
-取得日 2026-09-09T08:59:22Z: **16.55秒**（`_scan_line` を再利用しているため同型・同オーダー。想定通り）。
-
-### 既存の finding 6件・flow_findings 157件の母集団定義（blocking条件5）
-
-issue に記載の値は `root=~/.claude` を対象にした `scan_skills()` の結果と一致することを特定した
-（issue 本文には母集団の定義が明記されていなかったため、今回突き止めた）。
-
-再現コマンド:
+不変条件の再現コマンド:
 ```python
 import sys, os
 sys.path.insert(0, 'scripts/lib')
 import skill_vuln_scan as s
 report = s.scan_skills(os.path.expanduser('~/.claude'))
 print(report.scanned_files, len(report.findings), len(report.flow_findings))
+# => 1356 6 157
 ```
-取得日 2026-09-09T08:55:50Z: `scanned_files=1356, findings=6, flow_findings=157`。
 
-**母集団**: `~/.claude/skills/` 配下（`.gitignore` の対象外・当PJの管理外ディレクトリ）にある
-全 `SKILL.md` 等の対象拡張子ファイル、1356件。findings/flow_findings は1行ごと・1系列ごとの
-検出結果のリストで、1件=1 `Finding`/`FlowFinding` レコード。
-
-**このディレクトリは実データであり、本設計・実装で書き込みは行わない**（読み取り専用の回帰確認にのみ使う）。
-
-所要時間（本番相当 root での全体実行時間・blocking条件1参考値）:
-取得日 2026-09-09T08:55:50Z: 70.78秒。ただし内訳を計測すると outlier は最大1.45秒
-（`~/.claude/skills/gstack/CHANGELOG.md`, 1,020,733 文字）で、70秒の大半はファイル数
-（1356件）に対する定数コストの総和であり、本 issue が扱う「1行の ReDoS」の寄与は現状データでは
-小さい（実データにまだ極端に長い1行が存在しないため）。**リスクは潜在的**（issue の脅威モデルどおり、
-悪意ある作者が意図的に書けば即座に顕在化する）。
-
-再現コマンド（ファイル別内訳）:
+物理行最長の再現コマンド:
 ```python
-import sys, time, os
+import sys, os
 sys.path.insert(0, 'scripts/lib')
 import skill_vuln_scan as s
 from pathlib import Path
 root = Path(os.path.expanduser('~/.claude'))
 files = s._iter_target_files(root / 'skills')
-timings = []
+max_len, loc = 0, None
 for p in files:
-    t0 = time.time()
     text = p.read_text(encoding='utf-8-sig', errors='replace')
     for i, line in enumerate(text.splitlines(), 1):
-        s._scan_line(str(p), i, line)
-    timings.append((time.time() - t0, str(p), len(text)))
-timings.sort(reverse=True)
-print(timings[:10])
+        if len(line) > max_len:
+            max_len, loc = len(line), f'{p}:{i}'
+print(max_len, loc)
 ```
-取得日 2026-09-09T08:57:04Z。
 
-## 変更案
+論理行最長の再現コマンド:
+```python
+import sys, os
+sys.path.insert(0, 'scripts/lib')
+import skill_vuln_scan as s
+from pathlib import Path
+root = Path(os.path.expanduser('~/.claude'))
+files = s._iter_target_files(root / 'skills')
+max_len, loc = 0, None
+for p in files:
+    text = p.read_text(encoding='utf-8-sig', errors='replace')
+    lines = text.splitlines()
+    shell_scope = (
+        set(range(1, len(lines) + 1)) if p.suffix.lower() in ('.sh', '.bash')
+        else s._compute_shell_scope_lines_impl(lines, s._match_fence_opener, s._match_fence_closer)
+    )
+    _, heredoc = s._compute_heredoc_zones(lines, shell_scope)
+    for start, joined in s._join_logical_lines(lines, shell_scope - heredoc):
+        if len(joined) > max_len:
+            max_len, loc = len(joined), f'{p}:{start}'
+print(max_len, loc)
+```
 
-issue blocking条件4「regex の枝を足すだけでなく、backtracking に依存しない実装へ直す」に従う。
-**枝を足して特定の入力を回避する案（緩和策としての長さ打ち切り含む）は本 issue のスコープでは採らない**
-（`no-denylist-checks.md`: 次の1つで破れる。緩和策自体は③対象外で述べたとおり#566側の判断）。
+## 判定に使う識別（no-denylist-checks.md）
 
-候補を実装する前に、3つの部分修正案を最小実験で検証した（すべて `_COMMAND_PATH` 相当の
-最小パターン `(?:[A-Za-z0-9._+-]+/)*notfound` で `n=100000` の不一致入力に対する `.search()`/`.match()` 時間を計測）。
+打ち切り判定は**候補の文字列長（`len(text)` または `len(norm)`）という単一の観測可能な整数**で行う。
+名前・文字列・構文形・sink の種類のいずれでもないため、`no-denylist-checks.md` が挙げる
+「破れる4種の識別」に該当しない。**打ち切りを回避する入力は原理的に存在しない**
+（閾値以下に収める＝攻撃力を弱めることと同義であり、issue の脅威（可用性の一時停止）を
+閾値以下の入力に制限できる。閾値直下でも数秒残ることは④blocking の定義・⑥削る量で
+正直に扱う）。したがって本検査は blocking として扱ってよい。
 
-### 検証済みで不採用の案
+## 閾値の実測（母集団定義つき）
 
-| 案 | 内容 | n=100000 実測 | 判定 |
-|---|---|---|---|
-| A: 所有格量指定子エミュレーション | `(?:(?=([A-Za-z0-9._+-]+/))\1)*` （先読み+バックリファレンス） | 未計測（n=20000で9.96s、n=2000比で悪化傾向を確認し打ち切り） | **不採用** |
-| B: atomic group | `(?>[A-Za-z0-9._+-]+/)*`（Python 3.11+ で `re` が対応） | 79.84s | **不採用** |
-| C: 単語境界アンカー走査 | `re.finditer(r'\b', line)` で境界候補を求め各候補で `match()` | 140.87s | **不採用** |
+**母集団**: `~/.claude/skills/` 配下（実データ、当PJ管理外）の対象拡張子ファイル1356件、
+物理行 860,750行・論理行（結合対象のみ）3,863行。取得日は上記「前提の evidence」表のとおり。
 
-いずれも「量指定子内部のバックトラックを減らす」対策であり、**`.search()` が全開始位置を
-試みる構造そのものは変わらない**ため、O(n²) は解消しなかった（実測でむしろ悪化するケースもあった —
-オーバーヘッドが増えただけで漸近的な計算量は変化しないため）。特に候補Cは、`/` が正規表現の
-`\b`（単語境界）に該当しないため境界候補の絞り込みとして機能せず、事実上ほぼ全位置を試すのと
-変わらなかった。
+### 悪意入力での所要時間（閾値候補ごと）
 
-### 検証済みで採用する方式（線形時間を実証）
+再現コマンド:
+```python
+import sys, time
+sys.path.insert(0, 'scripts/lib')
+import skill_vuln_scan as s
+for L in (1200, 1900, 2500, 3393, 3900, 3999):
+    n = (L - 19) // 2
+    evil = 'curl https://x | ' + '/a' * n + '/notashell'
+    t0 = time.time(); s._scan_line('evil.md', 1, evil); print(len(evil), time.time() - t0)
+```
+取得日 2026-09-09T09:21:51Z〜09:24:29Z:
 
-`.match()`（開始位置を固定したアンカー付きマッチ）は同じ最小パターンで:
-
-| n | `.match()`（開始位置0固定） |
+| 入力長 | `_scan_line()` |
 |---|---|
-| 2000 | 0.00005s |
-| 5000 | 0.00009s |
-| 20000 | 0.00053s |
-| 100000 | 0.00258s |
+| 1227 | 0.2958s |
+| 1927 | 0.7298s |
+| 2527 | 2.1017s |
+| 3401（実データ物理行最長相当） | 3.9127s |
+| 3907（4000文字閾値の直下） | 5.5258s |
 
-**開始位置を固定すれば線形**であることを実証した（取得日 2026-09-09T09:03:49Z）。
+### 実データへの影響（閾値候補ごとに切られる行数）
 
-### 推奨: 開始位置候補をトークン境界に絞り、各候補へアンカー付き `match()` を適用する
+再現コマンド（閾値1200文字の場合）:
+```python
+import sys, os
+sys.path.insert(0, 'scripts/lib')
+import skill_vuln_scan as s
+from pathlib import Path
+root = Path(os.path.expanduser('~/.claude'))
+files = s._iter_target_files(root / 'skills')
+over = []
+for p in files:
+    text = p.read_text(encoding='utf-8-sig', errors='replace')
+    for i, line in enumerate(text.splitlines(), 1):
+        if len(line) > 1200:
+            over.append((len(line), str(p), i))
+print(len(over))
+```
+取得日 2026-09-09T09:22:51Z:
 
-`SHELL_EXEC_SUBJECT` の評価を `.search()` から、**シェルの区切り文字**
-（空白・`|`・`;`・`&&`・`||`・行頭）で行を分割して得た**トークン開始位置候補**（数は行の
-トークン数に比例しO(n)、各位置での `match()` はそのトークン長に比例しO(k)、合計でO(n)）へ
-限定した `match()` に置き換える。
+| 閾値候補 | 実データで切られる物理行数（母集団 860,750行中） | 悪意入力・閾値直下での残存時間 |
+|---|---|---|
+| 1200文字 | **26件**（0.003%） | 約0.3秒未満（実測は閾値1227で0.2958s） |
+| 4000文字 | **0件** | **5.53秒**（実測、閾値直下3907文字） |
 
-- **推奨理由**: `_COMMAND_PATH`（`skill_vuln_shell.py:16`）だけでなく `_WRAPPER_STEP`/`_SUDO_STEP`
-  等の外側繰り返し構造も温存したまま、**呼び出し方法だけを変更**すればよい可能性が高い
-  （`SHELL_EXEC_SUBJECT` 自体の正規表現ソースは変えず、`.search(norm)` を
-  `候補開始位置ごとの match(norm, pos)` に置き換える）。既存の finding 6件・flow_findings 157件を
-  壊すリスクが、issue が示す「anchored token parsing への全面書き直し」より小さい
-- **選ばなかった場合に起きること**（＝候補D「正規表現を使わない手書きトークンパーサへの全面移行」を
-  選んだ場合）: issue が最も直接的に指す方向だが、5つの remote_exec パターン（`curl_pipe_sh` /
-  `base64_pipe_sh` / `download_and_run` / `shell_c_command_substitution` / `process_substitution`）
-  はいずれもパイプ・`&&`・`$()`・`<()` を含む複雑な文脈依存構造を持ち、正規表現を全廃すると
-  実装量・レビュー巡数が大きく増え、finding 6件・flow_findings 157件の不変性を保証する回帰リスクが
-  上がる。開始位置絞り込み方式で目標（5000 segment で 0.1秒未満）を満たせるなら、全面移行は
-  過剰設計（`think-before-coding.md`: 削減候補は新規要件候補・解決機構、最小の1つだけ）
-- **未実測**: 実際の `SHELL_EXEC_SUBJECT`（`_WRAPPER_STEP`/`_SUDO_STEP`等を含む完全体）に
-  トークン境界絞り込みを適用したときの正確な区切り文字集合・実装コード・finding再現性は
-  実装フェーズで確定する（本設計は最小パターンでの原理実証まで）
+### トレードオフの明示と暫定判断
+
+**「正常なスキルの最長論理行を切らない」という制約と、「悪意入力での残存時間を短くする」という
+制約は両立しない**（実測で確認）。閾値を実データ最長（物理行3393文字）以上に設定すると
+実データは1件も切らないが、悪意入力は閾値直下で5.5秒前後残る。閾値を1200文字程度まで
+下げれば残存時間は1秒未満に収まるが、実データの outlier 26件（既知の正当なファイル:
+`gstack/ship/sections/apple-release.md` 等の長い1行）を「検査不能」として扱うことになる。
+
+**暫定判断（進行に影響なし・確認事項として残す）**: team-lead 指示「正常なスキルの最長論理行を
+測り、それを切らない値にする」を優先し、**閾値 4000文字**（実データ最長3393文字に対し
+約18%のマージン）を採用する。**残存する最大5.53秒の遅延は「守る対象①」を完全には満たさない**
+ことを明記する。これは③対象外に記載した「線形化そのもの」を追わない裁定の直接の帰結であり、
+根治は別 issue（scratchpad `issue_570_linearize.md`）に委ねる。issue #570 のタイトルにも
+「打ち切りで止血する（縮小版）」と明記し、完全解決でないことを成果物名からも読み取れるようにする。
+
+**閾値の単一ソース**: `skill_vuln_shell.py` に `LOGICAL_LINE_LENGTH_BUDGET = 4000` のような
+モジュール定数を1つ置き、`_scan_line` 冒頭（正規化処理より前）でこの定数のみを参照する。
+他のファイルは import してこの値を参照するだけで、独自の閾値を持たない。
+
+## 変更案（縮小版）
+
+### 検査経路の入口を1箇所にする（team-lead 指示③の実コード確認）
+
+`_scan_line`（`skill_vuln_scan.py:582`）は、実コードで確認したとおり**既に単一の入口**である:
+- `scan_skills` の物理行スキャン（`skill_vuln_scan.py:679`）
+- `scan_skills` の論理行結合スキャン（`skill_vuln_scan.py:702`）
+- `memory_guard.scan_text`（`memory_guard.py:77` の `_vuln_scan_line` 経由）
+
+の3箇所すべてが `_scan_line` を呼ぶ。**打ち切り判定を `_scan_line` の冒頭
+（`_normalize_for_matching`/`_strip_leading_decoration` を呼ぶ前）に1箇所書けば、
+3箇所すべてに自動的に適用される**。「`_scan_line` と `memory_guard.scan_text` の両方に
+別々の打ち切りを書かない」という team-lead 指示③は、`memory_guard.scan_text` が独自の
+判定を持たず `_vuln_scan_line`（`_scan_line` の別名）を再利用しているため、
+実装上は自然に満たされる。
+
+### 打ち切りを表に出す設計（既存の器に乗せる）
+
+`scan_skills` 経路（監査表示）と `memory_guard` 経路（記憶書込みゲート）で、
+可視化の受け皿が非対称であることを実コードで確認した（「前提の evidence」表）。
+**新しいストア・新しい章は作らない**（#379 新設凍結）。既存の器へ以下のように乗せる:
+
+1. `_scan_line` の戻り値を `List[Finding]` から `(List[Finding], Optional[str])`
+   （第2要素=打ち切り理由。打ち切りが起きなければ `None`）へ変更する
+2. `scan_skills` 側の2呼び出し箇所は、打ち切り理由が非 `None` のとき
+   `SkillVulnReport.scan_errors`（既存フィールド、`str` のリスト）へ
+   `f"{rel}:{lineno}: 検査打ち切り(論理行長 {L} > 上限 {budget})"` を追記する。
+   これにより `evaluated` プロパティ（`applicable and scanned_files>0 and not scan_errors`、
+   既存ロジック）が自動的に `False` になり、「findings/flow_findings を危険なしの根拠に
+   しない」契約がそのまま働く。**新しいフィールドは増やさない**
+3. `memory_guard.scan_text` は戻り値を `List[ContaminationHit]` から
+   `(List[ContaminationHit], List[str])`（第2要素=打ち切り理由のリスト）へ変更する。
+   `inspect_content`（`memory_guard.py:237-260`）の戻り値 dict に既存の
+   `"hits"`/`"block"`/`"mode"` へ **`"truncated": List[str]`** を1キー追加する。
+   これは新しい永続化ストア・新しい観測セクションの新設ではなく、**既存の関数戻り値への
+   フィールド追加**であり #379 の新設凍結（新 store / observability section /
+   advisory proposal adapter / weak_signal channel）には該当しないと判定する
+   （根拠: 追加されるのはプロセス内の一時的な dict キーであり、どこにも永続化されない。
+   永続化・提示経路が増えるわけではなく、既存の "hits" と同じ寿命・同じ可視化責務を
+   呼び出し元(`auto_memory_broker`)に委ねる形は "hits" 自体の設計と対称）
+4. `scan_memory_dir`（audit 用、`MemoryContaminationReport`）にも同様に、
+   打ち切りが起きたことを示す情報を既存の `hits` とは別に持たせる必要があるかは
+   実装フェーズで判断する（「未実測」節に記載）
+
+### 対象外にした代替案（不採用の理由）
+
+- **打ち切り時に findings 配列へ「検査不能」を示す特別な Finding を混ぜる案**:
+  `category`/`severity` の既存語彙（HIGH/MEDIUM/LOW、4 family + secret_exfil）に
+  「検査不能」を表す新しい値が必要になり、finding の意味論（危険検出）と
+  打ち切り通知（メタ情報）が同じ配列に混在してソート・件数カウントに影響する。
+  既存の `scan_errors`/`evaluated` という「危険検出とは別枠の器」が既にあるため、
+  そちらを使う方が変更が小さく安全
 
 ## 検証方法
 
-### 性能予算テスト（issue blocking条件3）
+### 性能予算テスト
 
-`scripts/lib/tests/test_skill_vuln_shell.py`（または新規 `test_skill_vuln_perf.py`）に追加:
-- 入力長 n=200/2000/5000/20000 の不一致絶対パス・相対パスそれぞれで `_scan_line()` の実行時間を計測
-- **予算**: 5000 segment で 0.1秒未満（現行 16.31秒からの実装目標。根拠は「変更案」節の match() 実測）
-- 入力長を2倍にしたときの実行時間増加率が2倍程度（線形）に収まることをアサート
-  （O(n²)への回帰なら4倍以上になるため検出できる）
+`scripts/lib/tests/test_skill_vuln_shell.py` または新規 `test_skill_vuln_perf.py` に追加:
+- 閾値ちょうど（4000文字）を境に、閾値未満の入力は通常どおり `_scan_line` が評価され、
+  閾値超過の入力は即座に（0.1秒未満で）打ち切られることをアサートする
+- 閾値超過の入力に対し `_scan_line` の実行時間が **0.1秒未満**であることを直接アサートする
+  （現状は閾値直下で5.53秒残るため、この予算は「閾値を超えたら即座に打ち切る」ことだけを
+  保証する。閾値未満の入力の予算は本設計のスコープ外＝根治は別 issue）
 
-### 不変の再確認（issue blocking条件5）
+### 不変の再確認（[Must]4 対応: 実 home 依存を止め、固定 fixture へ移す）
 
-修正前後で `scan_skills(os.path.expanduser('~/.claude'))` を実行し、
-`scanned_files=1356, findings=6, flow_findings=157` に加え、**全フィールド**
-（`rel_path`/`line`/`category`/`severity`/`pattern_id`/`snippet` 及び `FlowFinding` の全フィールド）が
-一致することを比較する。実データを対象にするため、テストは `@pytest.mark.real_home` 相当の
-opt-out マーカーを付け、通常の CI 実行では実行しない（`spec/testing.md` の既存慣習に従う）。
-**このテストは実データを読むだけで書き込まない**。
+**R1 の「`~/.claude` を対象にした golden 値」は実 home の増減で変わるため blocking gate に
+使わない**（codex 指摘 [Must]4 を反映）。代わりに:
 
-### 陰性試験（`verify-checks-by-breaking.md`）
+1. **固定 fixture を追加する**: `scripts/lib/tests/fixtures/` 配下に、閾値超過しない通常の
+   スキル群（複数ファイル・複数 finding パターンを含む小規模セット）を新規に用意し、
+   `scan_skills(fixture_root)` の結果（`applicable`/`scanned_files`/`findings` 全フィールド/
+   `flow_findings` 全フィールド/`scan_errors`/`evaluated`）を golden として固定し、
+   変更前後で完全一致することを確認する（新規 fixture の内容は実装フェーズで具体化する）
+2. **実データでの確認は補助的な健全性チェックに格下げする**: `~/.claude` に対する
+   `scan_skills` 実行は、CI の blocking gate ではなく、ローカルでの手動確認手順として
+   設計書に記載するに留める（このタスクで実測した 1356/6/157 は「この設計を書いた時点の
+   参考値」であり、次回実行時に変わりうることを明記する）
 
-性能対策を外す変異で性能予算テストが赤くなることを確認する。最低4型＋陽性対照:
+### 陰性試験（`verify-checks-by-breaking.md` + team-lead [Must]5 対応）
 
-1. **型①（機能的に等価だが検査対象の判定コードを削る）**: トークン境界絞り込みロジックを削除し
-   `.search()` へ戻す変異 → 性能予算テストが赤くなること
-2. **型②（境界条件をずらす）**: トークン分割の区切り文字集合から `|` を落とす変異
-   （`curl x|bash` のような空白なしパイプを見逃す）→ 性能予算テストではなく機能テスト
-   （`test_remote_exec_curl_pipe_sh_detected` 等）が赤くなることを確認し、性能側と機能側の
-   テストが異なる欠陥を分担して検出することを示す
-3. **型③（量だけ変えて質は変えない）**: 予算値を意図的に緩める変異（0.1秒→100秒）→
-   予算テスト自体は緑のままだが、レビューで「予算が事実上無効化されている」ことを検出できるか
-   確認する（テストでは検出できない型であることを明示し、レビュー側の責務として記録する）
-4. **型④（別経路から同じ脆弱性を再導入）**: `memory_guard.scan_text` 側に独自の `.search()` 直呼びを
-   追加する変異 → `_scan_line` 再利用の契約テスト（`memory_guard.py:77` の import が
-   `skill_vuln_scan._scan_line` を指すことを確認する既存/新規テスト）が赤くなることを確認する
+各変異について **(a) baseline との差分/hash (b) 変異行が実行されたことの機械的な証跡
+(c) 対象テストだけが期待どおり赤化** の3点を別々の成果物として要求する（「赤くなった」の
+申告だけでは受理しない）。最低4型＋陽性対照:
 
-**陽性対照**: 意味を変えない書き換え（変数名変更・コメント追加・トークン分割の区切り文字集合を
-仕様どおりに実装したコード）で性能予算テスト・機能テストともに緑のままであることを確認する。
+1. **型①（判定ロジックの削除）**: `_scan_line` 冒頭の閾値判定 if 文を削除する変異
+   → (a) 削除前後の diff（1行）を PR に貼る (b) `coverage.py` で該当 if 文の行が
+   ベースライン版のテスト実行時にヒットしていたこと（`coverage run` の該当行カバレッジ）を
+   確認する (c) 性能予算テストのみ赤化し、機能テスト（finding 検出系）は影響を受けないこと
+2. **型②（閾値を大きくずらす）**: 閾値定数を `4000` から `1_000_000` に変える変異
+   → (a) diff（1行） (b) coverage で if 文自体は実行されるが分岐が false 側に倒れることを
+   確認 (c) 性能予算テストが赤化すること
+3. **型③（対象外の経路にだけ判定を残す）**: `scan_skills` 側の呼び出しにだけ閾値判定を残し、
+   `memory_guard.scan_text` 側の経路（`_vuln_scan_line` 呼び出し）を素の `_scan_line`
+   ではなく判定なしの複製関数に差し替える変異 → (a) diff (b) memory_guard 経路のテストで
+   複製関数が呼ばれたことをモックの呼び出し記録で確認 (c) memory_guard 側の性能テストのみ
+   赤化し、scan_skills 側は緑のままであること（＝「入口が1箇所」の契約テストとして機能する）
+4. **型④（打ち切り理由を握りつぶす）**: `scan_errors`/`"truncated"` への追記部分を削除し、
+   `_scan_line` は打ち切るが呼び出し元へ理由を伝えない変異 → (a) diff (b) 打ち切り分岐が
+   実行されたことをカバレッジで確認 (c) 「打ち切り時に scan_errors/truncated が非空になる」
+   ことを直接アサートするテストのみ赤化し、性能予算テスト自体は緑のまま
+   （＝性能と可視化は別のテストで守られていることを示す）
+
+**陽性対照**: 意味を変えない書き換え（変数名変更・コメント追加・閾値定数を実装どおりの値に
+戻す）で、性能予算テスト・不変再確認テスト・機能テストのすべてが緑のままであることを確認する。
 
 ## 実装対象ファイル
 
 この集合を越えない:
-- `scripts/lib/skill_vuln_shell.py`（`SHELL_EXEC_SUBJECT` の評価方式変更の中心）
-- `scripts/lib/skill_vuln_scan.py`（`_scan_line` からの呼び出し方法変更、必要な場合のみ）
-- `scripts/lib/tests/test_skill_vuln_shell.py` / `scripts/lib/tests/test_skill_vuln_scan.py`
-  （性能予算テスト・不変再確認テスト・mutation test 追加）
+- `scripts/lib/skill_vuln_shell.py`（閾値定数の単一ソース）
+- `scripts/lib/skill_vuln_scan.py`（`_scan_line` の戻り値変更・`scan_skills` 2箇所の
+  呼び出し更新・`scan_errors` への追記）
+- `scripts/lib/memory_guard.py`（`scan_text`/`inspect_content` の戻り値変更）
+- `scripts/lib/tests/test_skill_vuln_shell.py` / `test_skill_vuln_scan.py` /
+  `test_memory_guard.py`（存在すれば。性能予算・不変再確認・mutation test 追加）
+- 新規: `scripts/lib/tests/fixtures/`（固定 golden fixture、ファイル名は実装フェーズで決定）
 - 新規テストファイルを追加する場合: `scripts/lib/tests/test_skill_vuln_perf.py`
 
 **対象外（変更しない）**:
-- `scripts/lib/memory_guard.py`（`_scan_line` 再利用のみ。根本修正で自動的に恩恵を受ける）
 - `scripts/lib/skill_vuln_flow.py`（`SHELL_EXEC_SUBJECT` 非依存と確認済み）
-- `scripts/lib/audit/sections_skill_vuln.py`（呼び出し側、インターフェース変更なし）
+- `scripts/lib/audit/sections_skill_vuln.py`（呼び出し側。`scan_errors`/`evaluated` 経由で
+  既存の表示ロジックがそのまま打ち切りを反映するため、変更不要と見込む。実装フェーズで
+  `SkillVulnReport` の呼び出し側すべてを再確認する）
+- `_PATTERNS` の内容・FP 較正ロジック（issue の対象外どおり）
 
 ## 未実測
 
-- `_WRAPPER_STEP`/`_SUDO_STEP`/`_NICE_STEP`/`_BUSYBOX_STEP`/`_XARGS_STEP`/`_TIMEOUT_STEP` 等、
-  `_COMMAND_PATH` 以外の外側 `(?:...)*` 構造が単独でどれだけ O(n²) に寄与するかは切り分けていない
-  （`_COMMAND_PATH` 単体の最小実験のみ実施）。実装フェーズで `_COMMAND_PATH` 修正後に
-  性能予算テストを回し、残存する寄与があれば追加で切り分ける
-- 実際の `SHELL_EXEC_SUBJECT` 完全体（ラッパー・sudo等を含む）へトークン境界絞り込みを適用したときの
-  正確な実装コード・区切り文字集合・finding再現性
-- この設計変更後、`~/.claude` 全体スキャン（70.78秒）のうち ReDoS 由来でない残り時間
-  （ファイル数1356件に対する定数コストの総和）を短縮する余地があるかは対象外・未検討
-  （本 issue は ReDoS の根治のみを扱う）
+- `scan_memory_dir`（audit 用、`MemoryContaminationReport`）に打ち切り情報を持たせる
+  具体的な実装（フィールド追加か、既存 `hits` への統合か）は未確定。実装フェーズで判断する
+- 閾値 4000文字が「実データ最長を切らない」を将来にわたって保証するか（`~/.claude/skills`
+  は増減するため、次に長い正当な行が現れる可能性）は未実測。閾値を固定値でなく
+  相対的な余裕（例: 観測された最長の1.5倍を定期的に再計測して更新する運用）にするかは
+  対象外とし、今回は固定値 4000 を暫定値として採用する
+- `_WRAPPER_STEP`/`_SUDO_STEP` 等、`SHELL_EXEC_SUBJECT` 内の他の繰り返し構造が
+  閾値直下でどこまで悪化しうるかの網羅的な実測はしていない（`_scan_line` 全体としての
+  時間のみ実測。個別の内部構造ごとの寄与分解は行っていない）
+- 性能予算テストで採用する 0.1秒という数値の妥当性（CI 実行環境の速度差によるノイズ耐性）は
+  実装フェーズでの複数回実行によるばらつき確認が必要
 
 ## 判定に使う識別・裁定者（`no-denylist-checks.md` 手続き）
 
-本設計が追加する検査（性能予算テスト・不変再確認・mutation test）は blocking として扱う。
-判定に使った識別（wall-clock 時間・件数一致）は上記「判定に使う識別」節のとおり。
-本設計書自体の裁定は、`review.md` の系統独立レビュー（別系統1本）に委ねる（本設計の著者は
-Claude 系のため、レビューは Codex 系統で行うことを推奨）。
+打ち切り判定は「判定に使う識別」節のとおり文字列長という単一の観測可能な整数で行うため
+blocking として扱う。本設計書自体の裁定は `review.md` の系統独立レビュー（別系統1本、
+Codex 系統を推奨）に委ねる。R1 の巡数（設計レビュー1巡・[Must] 5件）を継承しているため、
+本 R2 が2巡目の発注に当たる（`review.md`: 通常は2巡で修正を止める）。
