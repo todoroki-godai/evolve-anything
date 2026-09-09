@@ -637,6 +637,7 @@ def ingest_memory_results(
 
     Returns:
         {"stored": int, "blocked": int, "skipped": int, "contaminated": int,
+         "guard_unavailable": int,
          "contamination_hits": [{"pattern_id", "category", "line"}],
          "transition_checked": int, "transition_rejected": int, "entries": [str paths]}
     """
@@ -657,6 +658,7 @@ def ingest_memory_results(
     blocked = 0
     skipped = 0
     contaminated = 0
+    guard_unavailable = 0
     contamination_hits: List[dict] = []
     transition_checked = 0
     transition_rejected = 0
@@ -687,6 +689,7 @@ def ingest_memory_results(
         # 前に走らせ、汚染がスコアリング/ログにも到達しないようにする。fail-closed（#570）。
         if not _HAS_MEMORY_GUARD:
             contaminated += 1
+            guard_unavailable += 1
             consumed_keys.add(key)
             print(
                 "[evolve-anything:memory-guard] memory_guard 未解決のため書込 skip"
@@ -699,6 +702,7 @@ def ingest_memory_results(
             guard = _inspect_memory_content(llm_output)
         except Exception as exc:
             contaminated += 1
+            guard_unavailable += 1
             consumed_keys.add(key)
             print(
                 f"[evolve-anything:memory-guard] 検査失敗（{exc.__class__.__name__}）のため"
@@ -713,6 +717,7 @@ def ingest_memory_results(
             or type(guard.get("block")) is not bool
         ):
             contaminated += 1
+            guard_unavailable += 1
             consumed_keys.add(key)
             print(
                 "[evolve-anything:memory-guard] inspect_content の戻り値契約が不正のため"
@@ -743,6 +748,7 @@ def ingest_memory_results(
                 file=sys.stderr,
             )
 
+        # #570 の対象外で、検査不能時も意図的に fail-open とする。
         # 記憶遷移検証（#93・TRUSTMEM Memory Transition Verifier の決定論移植）:
         # 同名（frontmatter name 一致）の既存エントリがあれば coverage/preservation/
         # fidelity を検証し、汚染候補（大量欠落 / 値矛盾 / 極性反転）を reject する。
@@ -810,6 +816,7 @@ def ingest_memory_results(
         "blocked": blocked,
         "skipped": skipped,
         "contaminated": contaminated,
+        "guard_unavailable": guard_unavailable,
         "contamination_hits": contamination_hits,
         "transition_checked": transition_checked,
         "transition_rejected": transition_rejected,

@@ -805,7 +805,7 @@ def test_ingest_empty_records_noop(tmp_data_dir, tmp_memory_dir):
     )
     assert result == {
         "stored": 0, "blocked": 0, "skipped": 0,
-        "contaminated": 0, "contamination_hits": [],
+        "contaminated": 0, "guard_unavailable": 0, "contamination_hits": [],
         "transition_checked": 0, "transition_rejected": 0,
         "entries": [],
     }
