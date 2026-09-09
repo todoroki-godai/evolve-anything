@@ -6,6 +6,7 @@ import re
 import unicodedata
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
 from reflect_apply_match import classify_reflect_target_kind
@@ -31,7 +32,12 @@ def _read_reflect_target_kind(event: dict) -> Optional[str]:
     recorded_kind = event.get("reflect_target_kind")
     if recorded_kind != "other":
         return recorded_kind
-    classified_kind = classify_reflect_target_kind(event.get("reflect_target_path"))
+    target_path = event.get("reflect_target_path")
+    global_root = Path.home() / ".claude"
+    normalized_prefix = f"{global_root}:"
+    if target_path.startswith(normalized_prefix):
+        target_path = str(global_root / target_path.removeprefix(normalized_prefix))
+    classified_kind = classify_reflect_target_kind(target_path)
     if classified_kind in {"global_refs", "project_memory"}:
         return classified_kind
     return recorded_kind

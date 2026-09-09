@@ -229,7 +229,7 @@ def test_recorded_other_kind_is_reclassified_when_read(
     monkeypatch.setattr(rl_common, "DATA_DIR", data_dir)
     events = _events()
     events[0]["reflect_target_kind"] = "other"
-    events[0]["reflect_target_path"] = str(Path.home() / ".claude" / relative_path)
+    events[0]["reflect_target_path"] = f"{Path.home() / '.claude'}:{relative_path}"
     _write(data_dir / "corrections.jsonl", [_base()])
     _write(data_dir / "reflect_apply_events.jsonl", events)
 
@@ -246,8 +246,8 @@ def test_recorded_non_other_kind_is_not_reclassified_when_read(monkeypatch, tmp_
     monkeypatch.setattr(rl_common, "DATA_DIR", data_dir)
     events = _events()
     events[0]["reflect_target_kind"] = "project_rule"
-    events[0]["reflect_target_path"] = str(
-        Path.home() / ".claude" / "refs" / "verification.md"
+    events[0]["reflect_target_path"] = (
+        f"{Path.home() / '.claude'}:refs/verification.md"
     )
     _write(data_dir / "corrections.jsonl", [_base()])
     _write(data_dir / "reflect_apply_events.jsonl", events)
