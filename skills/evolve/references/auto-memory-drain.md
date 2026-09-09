@@ -42,9 +42,10 @@ summary = auto_memory_broker.ingest_memory_results(
     memory_dir, memory_md_path, rl_common.DATA_DIR,
 )
 print(f"auto-memory: stored={summary['stored']} blocked={summary['blocked']} "
-      f"skipped={summary['skipped']} contaminated={summary['contaminated']}")
+      f"skipped={summary['skipped']} contaminated={summary['contaminated']} "
+      f"guard_unavailable={summary['guard_unavailable']}")
 ```
 
 - ingest が生成後ゲート（belief_entropy）を内蔵: ソースを落とした要約は書込なしで `belief_blocks.jsonl` に記録（blocked にカウント）
 - 空応答（skipped）はキューに残り次回 drain で再試行される。stored/blocked は消化される
-- 結果（stored/blocked/skipped/contaminated）を Report に報告する
+- 結果（stored/blocked/skipped/contaminated/guard_unavailable）を Report に報告する
