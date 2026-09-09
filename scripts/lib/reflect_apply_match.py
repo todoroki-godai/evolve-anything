@@ -26,16 +26,6 @@ _BULLET_PREFIX = "- "
 # 番号付き（"1. "）/ チェックボックス（"- [ ] " / "- [x] "）/ 引用（"> "）/ 表（"| ...|"）。
 _UNKNOWN_PREFIX_RE = re.compile(r"^(\d+\.\s|-\s\[[ xX]\]\s|>\s|\|)")
 
-_KNOWN_TARGET_KINDS = frozenset({
-    "global_rule",
-    "project_rule",
-    "global_claude_md",
-    "project_claude_md",
-    "skill",
-    "other",
-})
-
-
 def classify_file(lines: List[str]) -> str:
     """`- ` 始まりの行（インデント許容）が1行でもあれば "bullet"、無ければ "plain"。"""
     for line in lines:
@@ -88,7 +78,7 @@ def check_line_applied(target_path: Path, draft_line: str) -> Dict[str, Optional
 def classify_reflect_target_kind(target_path: str) -> str:
     """反映先ファイルの種別を分類する（#587 blocking (b)）。"""
     from evolve_decision_ids import global_skills_root, repo_identity
-    from evolve_revert._target import global_rules_root
+    from evolve_revert._target import global_refs_root, global_rules_root
 
     path = Path(target_path).expanduser()
     try:
@@ -99,6 +89,20 @@ def classify_reflect_target_kind(target_path: str) -> str:
     try:
         resolved.relative_to(global_rules_root().resolve())
         return "global_rule"
+    except ValueError:
+        pass
+
+    try:
+        resolved.relative_to(global_refs_root().resolve())
+        return "global_refs"
+    except ValueError:
+        pass
+
+    projects_root = (Path.home() / ".claude" / "projects").resolve()
+    try:
+        project_relative = resolved.relative_to(projects_root)
+        if len(project_relative.parts) >= 3 and project_relative.parts[1] == "memory":
+            return "project_memory"
     except ValueError:
         pass
 

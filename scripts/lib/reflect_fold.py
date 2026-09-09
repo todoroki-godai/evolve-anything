@@ -11,12 +11,14 @@ from typing import Optional
 from rl_common.correction_id import find_duplicate_ids, validate_correction_id
 
 
-_KNOWN_TARGET_KINDS = frozenset({
+KNOWN_TARGET_KINDS = frozenset({
     "global_rule",
     "project_rule",
     "global_claude_md",
     "project_claude_md",
     "skill",
+    "global_refs",
+    "project_memory",
     "other",
 })
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -79,7 +81,7 @@ def _attempt_is_valid(event: dict) -> bool:
         return False
     if not validate_correction_id(event.get("target_correction_id")):
         return False
-    if event.get("reflect_target_kind") not in _KNOWN_TARGET_KINDS:
+    if event.get("reflect_target_kind") not in KNOWN_TARGET_KINDS:
         return False
     path = event.get("reflect_target_path")
     if not isinstance(path, str) or not path:

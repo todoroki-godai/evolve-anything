@@ -130,6 +130,47 @@ def test_classify_reflect_target_kind_global_skill(monkeypatch, tmp_path):
     assert ram.classify_reflect_target_kind(str(skills / "review" / "SKILL.md")) == "skill"
 
 
+@pytest.mark.parametrize(
+    ("relative_path", "expected"),
+    [
+        (".claude/refs/verification.md", "global_refs"),
+        (".claude/projects/-tmp-repo/memory/MEMORY.md", "project_memory"),
+    ],
+)
+def test_classify_reflect_target_kind_pillar2_roots(
+    monkeypatch, tmp_path, relative_path, expected
+):
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    target = tmp_path / relative_path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("reflection\n", encoding="utf-8")
+
+    assert ram.classify_reflect_target_kind(str(target)) == expected
+
+
+@pytest.mark.parametrize(
+    "relative_path",
+    [
+        ".claude/refs-old/verification.md",
+        ".claude/projects/-tmp-repo/CLAUDE.md",
+        ".claude/projects/-tmp-repo/archive/memory/MEMORY.md",
+    ],
+)
+def test_classify_reflect_target_kind_rejects_similar_non_roots(
+    monkeypatch, tmp_path, relative_path
+):
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    target = tmp_path / relative_path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("reflection\n", encoding="utf-8")
+    monkeypatch.setattr(
+        "evolve_decision_ids.repo_identity",
+        lambda path: {"repo_id": None, "relative_path": path},
+    )
+
+    assert ram.classify_reflect_target_kind(str(target)) == "other"
+
+
 def test_normalize_reflect_target_path_uses_repo_identity(monkeypatch, tmp_path):
     target = tmp_path / "repo" / "rules.md"
     monkeypatch.setattr(

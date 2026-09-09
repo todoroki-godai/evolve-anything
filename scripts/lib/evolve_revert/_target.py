@@ -49,6 +49,11 @@ def global_rules_root() -> Path:
     return Path.home() / ".claude" / "rules"
 
 
+def global_refs_root() -> Path:
+    """global refs の正準 root（``~/.claude/refs``）。#632。"""
+    return Path.home() / ".claude" / "refs"
+
+
 def resolve_target(entry: Dict[str, Any]) -> TargetResolution:
     """entry の scope/repo_id/relative_path から apply 対象パスを解決し安全検査する。
 
