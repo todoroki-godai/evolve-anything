@@ -6,6 +6,7 @@ from unittest import mock
 import pytest
 
 import pillar2_metrics as metrics
+import rl_common
 from reflect_fold import _hash_correction_message
 
 
@@ -211,6 +212,51 @@ def test_other_target_kind_is_excluded(tmp_path):
     result = _count(tmp_path, [_base()], events)
     assert result["count"] == 0
     assert result["other_kind_count"] == 1
+
+
+@pytest.mark.parametrize(
+    ("relative_path", "expected_kind"),
+    [
+        ("refs/verification.md", "global_refs"),
+        ("projects/-tmp-project/memory/MEMORY.md", "project_memory"),
+    ],
+)
+def test_recorded_other_kind_is_reclassified_when_read(
+    monkeypatch, tmp_path, relative_path, expected_kind
+):
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    monkeypatch.setattr(rl_common, "DATA_DIR", data_dir)
+    events = _events()
+    events[0]["reflect_target_kind"] = "other"
+    events[0]["reflect_target_path"] = str(Path.home() / ".claude" / relative_path)
+    _write(data_dir / "corrections.jsonl", [_base()])
+    _write(data_dir / "reflect_apply_events.jsonl", events)
+
+    result = metrics.count_applied_reflections(tmp_path, now=NOW)
+
+    assert result["count"] == 1
+    assert result["other_kind_count"] == 0
+    assert result["applied_list"][0]["target_kind"] == expected_kind
+
+
+def test_recorded_non_other_kind_is_not_reclassified_when_read(monkeypatch, tmp_path):
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    monkeypatch.setattr(rl_common, "DATA_DIR", data_dir)
+    events = _events()
+    events[0]["reflect_target_kind"] = "project_rule"
+    events[0]["reflect_target_path"] = str(
+        Path.home() / ".claude" / "refs" / "verification.md"
+    )
+    _write(data_dir / "corrections.jsonl", [_base()])
+    _write(data_dir / "reflect_apply_events.jsonl", events)
+
+    result = metrics.count_applied_reflections(tmp_path, now=NOW)
+
+    assert result["count"] == 1
+    assert result["other_kind_count"] == 0
+    assert result["applied_list"][0]["target_kind"] == "project_rule"
 
 
 def test_legacy_applied_forces_not_measured(tmp_path):
