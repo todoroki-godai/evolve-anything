@@ -26,7 +26,10 @@
 　- 陽性対照＝既存 kind（`global_rule` / `project_rule` / `global_claude_md` / **`project_claude_md`** / `skill`）と `other` の判定が変わらない。
 　- 陰性試験（分類）＝`~/.claude/refs` の境界なし prefix（`~/.claude/refs-old/x.md`）・`projects/<encoded>/` 直下（memory の外）・任意階層の `memory` という名のディレクトリ、の3件が `other` のままであること。
 　- **陰性試験（実体パス基準・巡2 [Must]3 対応。CLI 経路を通す）**＝(1) root 外の symlink → refs 内の実ファイルが `global_refs` かつ `count == 1` (2) refs 内の symlink → root 外の実ファイルが `other` かつ `count == 0` (3) `refs-old` と `projects/<encoded>/` 直下が、イベント kind `other`・`other_kind_count == 1`・`count == 0`・`measured == True`。**`resolve()` を外す変異でこれらが赤くなることを実際に確認する**（`verify-checks-by-breaking.md`: 変異が当該検査の実行で読まれたことまで機械で確かめる）。
-⑥ **目的文の物差しで削る量**: 柱2の計上件数 **+8件**（memory 2 件 / refs 6 件）。根拠: issue #632 本文の実測表（2026-09-05 に promoted 15件を `--apply` した内訳）。取得日: 2026-09-05。
+⑥ **目的文の物差しで削る量**: 柱2の計上件数 **+5件**（refs 3 件 / memory 2 件）。
+　根拠: `count_applied_reflections(Path(repo))` の `other_kind_count == 5`（実測 2026-09-09・main `74d9f850` と実装版 `cb28e2bb` の両方で `count=12` / `other_kind_count=5`）。
+　再現手段: `python3 -c "import sys; sys.path.insert(0,'<repo>/scripts/lib'); from pathlib import Path; from pillar2_metrics import count_applied_reflections; print(count_applied_reflections(Path('<repo>')))"`。
+　**issue #632 本文の「refs 6 / memory 2 = 8件」は 2026-09-05 時点の値で、現在の実データとは一致しない**（`factual-claims.md` に従い数え直した）。
 
 ## 実装対象ファイル（巡2 [Must]4 対応・この集合を越えない）
 
@@ -80,10 +83,28 @@
    代わりに本変更では、**実際の `--apply` 経路を通す E2E 試験**（⑤）で
    「分類器が返した値が fold を通って count に至る」ことを毎回確認する。
 
-`pillar2_metrics` 側は変更しない。`reflect_fold` が新 kind を受理しさえすれば、
+`pillar2_metrics` 側は変更しない（読み直しは `reflect_fold` 側で行う）。`reflect_fold` が新 kind を受理しさえすれば、
 `pillar2_metrics.py:221-239` は `other` だけを除外して残りを無条件に eligible へ入れるため、
 新 kind は自動的に数えられる（**巡1 [Must]1/4 の指摘どおり、fold の更新が前提条件**）。
 グループキー `(target_kind, target_path, draft_line)` も変更しない。
+
+4. **読み出し時に分類し直す（実装レビュー巡1 [Must]・必須）**。
+   種別は `skills/reflect/scripts/reflect.py:1399` の apply 時にイベントへ**書き込まれて凍結**され、
+   `scripts/lib/reflect_fold.py:252,273` は `attempt_event.get("reflect_target_kind")` を**そのまま使う**。
+   したがって**分類器を直しても既に記録済みのイベントは `other` のまま**で、⑥の +5件は達成できない
+   （実測: main `74d9f850` と分類器修正版 `cb28e2bb` の両方で `count=12` / `other_kind_count=5`＝差ゼロ）。
+
+   `reflect_fold` の読み出し時に、**kind が `other` のイベントについてのみ**、
+   記録されている `reflect_target_path` を `classify_reflect_target_kind` へ通し直し、
+   新 kind に該当すればその値を使う。既存の非 `other` kind は触らない。
+
+   - **記録は書き換えない**（append-only を守る。過去イベントの rewrite / backfill は行わない）
+   - 派生値を読み出し時に導出するのは本 PJ の既存方針（`weak_signals` の TTL も read 時 age 導出）
+   - **ユーザー裁定 2026-09-09: 読み出し時に分類し直す**
+
+   追加試験: 既に `other` として記録済みのイベント（refs 配下・memory 配下の各1件）が、
+   fold を通したあと新 kind として `count` に載ることを確認する。
+   変異（この読み直しを外す）で赤くなることも確認する。
 
 ## 判定に使う識別（`no-denylist-checks.md` の要求）
 
