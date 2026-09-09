@@ -1,6 +1,6 @@
 # #632 memory / refs への反映を柱2に数える
 
-状態: 設計（巡1 [Must]4件を反映した第2版）
+状態: 設計（巡2 [Must] 反映済みの第3版・実装着手可）
 対象 issue: todoroki-godai/evolve-anything#632（裁定済み・2026-09-05 ユーザー「数える」）
 
 ## 巡の履歴
@@ -8,6 +8,7 @@
 | 巡 | レビュアー | 判定 | 結果 |
 |---|---|---|---|
 | 1 | codex（`design-632-20260909-162445-25498`・読んだ SHA `74d9f850`） | 設計修正要 | [Must]4種。うち2種（fold の許可集合・検証方法）を反映、2種（macOS 大小文字別名・hard link）は実測0件のため対象外へ明記 |
+| 2 | codex（`design-632-r2-20260909-163420-73916`・読んだ SHA `c139e2d4`） | 設計修正要 | [Must]4件。実測0件で落とした2件は妥当と追認（レビュアーが実データを数え直し一致）。契約テストが閉じない件は **enum 化を切り出して別 issue**（巡数継承）、残り3件（CLI 経路の E2E・symlink 陰性試験・実装対象集合）は反映。**ユーザー裁定 2026-09-09: 縮小して切り出す** |
 
 ## 完成条件（round 0）
 
@@ -21,14 +22,24 @@
 ④ **blocking の定義**: 判定の対象は **`Path.resolve()` 後の実体パス**とする（引数の字句パスではない。したがって root 外から root 内を指す symlink を渡した場合は正しく計上される、が正）。その上で (a) `~/.claude/refs/` 配下・`~/.claude/projects/<encoded>/memory/` 配下への apply が柱2に計上されない（`other` に落ちる場合と、**fold で invalid になる場合の両方を含む**） (b) 本変更により、実体が対象 root の外にあるパスが新たに柱2へ計上される。
 ⑤ **検証方法**: 単体テスト＋**配線試験**。
 　- 陽性（分類）＝refs 配下・memory 配下の各1件が新 kind を返す。
-　- **陽性（配線・[Must]4 対応）＝新 kind ごとに、(1) attempt を `reflect_fold` に通して `invalid_events == 0` かつ `has_pillar2_fields == True`、(2) `count_applied_reflections()` が `count == 1` かつ `measured == True` を返すこと。分類だけ緑でも fold が拒否すれば柱2は0件のままなので、この2段を確認しない限り④(a)を捕まえられない。**
+　- **陽性（配線・巡1 [Must]4 / 巡2 [Must]2 対応）＝新 kind ごとに、実際の `reflect --apply` 経路（`skills/reflect/scripts/reflect.py:1399` の writer）を通して、記録イベントの kind・`invalid_events == 0`・`has_pillar2_fields == True`・`count == 1`・`measured == True` を1つの試験で確認する。手製の attempt を fold へ直接渡す形にしない**（writer を `reflect_target_kind="other"` に固定する変異が、分類単体・手製 fold・count のすべてを緑のまま通してしまうため）。
 　- 陽性対照＝既存 kind（`global_rule` / `project_rule` / `global_claude_md` / **`project_claude_md`** / `skill`）と `other` の判定が変わらない。
-　- 陰性試験＝`~/.claude/refs` の境界なし prefix（`~/.claude/refs-old/x.md`）・`projects/<encoded>/` 直下（memory の外）・任意階層の `memory` という名のディレクトリ、の3件が `other` のままであること。
+　- 陰性試験（分類）＝`~/.claude/refs` の境界なし prefix（`~/.claude/refs-old/x.md`）・`projects/<encoded>/` 直下（memory の外）・任意階層の `memory` という名のディレクトリ、の3件が `other` のままであること。
+　- **陰性試験（実体パス基準・巡2 [Must]3 対応。CLI 経路を通す）**＝(1) root 外の symlink → refs 内の実ファイルが `global_refs` かつ `count == 1` (2) refs 内の symlink → root 外の実ファイルが `other` かつ `count == 0` (3) `refs-old` と `projects/<encoded>/` 直下が、イベント kind `other`・`other_kind_count == 1`・`count == 0`・`measured == True`。**`resolve()` を外す変異でこれらが赤くなることを実際に確認する**（`verify-checks-by-breaking.md`: 変異が当該検査の実行で読まれたことまで機械で確かめる）。
 ⑥ **目的文の物差しで削る量**: 柱2の計上件数 **+8件**（memory 2 件 / refs 6 件）。根拠: issue #632 本文の実測表（2026-09-05 に promoted 15件を `--apply` した内訳）。取得日: 2026-09-05。
+
+## 実装対象ファイル（巡2 [Must]4 対応・この集合を越えない）
+
+- `scripts/lib/reflect_apply_match.py`（分類器・重複集合の削除）
+- `scripts/lib/reflect_fold.py`（許可集合の公開名化・新 kind 登録）
+- `scripts/lib/evolve_revert/_target.py`（refs root の正典関数を1つ追加。`global_rules_root` と同居させ単一ソースにする）
+- テスト（`scripts/lib/tests/` 配下）
+
+`scripts/lib/pillar2_metrics.py` は変更しない。
 
 ## 現状（実測）
 
-- `scripts/lib/reflect_apply_match.py:87-125` `classify_reflect_target_kind` は
+- `scripts/lib/reflect_apply_match.py:88-127` `classify_reflect_target_kind` は
   `global_rule` / `global_claude_md` / `skill` / `project_rule` / `project_claude_md` を返し、
   それ以外は `other`。
 - `scripts/lib/pillar2_metrics.py:233` が `reflect_target_kind == "other"` を
@@ -52,17 +63,22 @@
    root からの相対パスが `<単一セグメント>/memory/...` の形であることを確認する
    （`<encoded>` を列挙しない・`memory` という名の他階層を拾わない）。
 
-3. **`_KNOWN_TARGET_KINDS` を単一ソース化し、新 kind を登録する（巡1 [Must]1・必須）**。
+3. **`_KNOWN_TARGET_KINDS` を物理的に1箇所へまとめ、新 kind を登録する（巡1 [Must]1・必須）**。
    現状この集合は **2箇所に重複**して存在する:
-   - `scripts/lib/reflect_fold.py:13-21`（`_attempt_is_valid` が実際に使う正典）
+   - `scripts/lib/reflect_fold.py:14-21`（`_attempt_is_valid` が実際に使う正典）
    - `scripts/lib/reflect_apply_match.py:29-36`（現状どこからも使われていない）
 
    後者を削除し、前者を公開名（`KNOWN_TARGET_KINDS`）にして `reflect_apply_match` から参照する。
-   分類器が返しうる kind と fold が受理する kind が別々に定義されている限り、
-   **kind を1つ足すたびに同じ事故が起きる**（今回まさに設計が踏んだ）。
-   `verify-checks-by-breaking.md` の「欠陥を決定論チェックへ翻訳する一手」として、
-   **`classify_reflect_target_kind` が返しうる全 kind が `KNOWN_TARGET_KINDS` に含まれることを検査する契約テスト**を置く
-   （分類器の分岐から得た戻り値の集合と許可集合を突合する。文字列の列挙をテストに書き写さない）。
+   これで**集合の定義箇所は1つ**になり、「片方だけ更新して食い違う」経路は消える。
+
+   **本変更で置く再発防止の一手は「集合の物理単一化」まで**とする。
+   巡2 の [Must] が指摘したとおり、**分類器が生文字列を返す限り、
+   集合に無い値を返す変更（helper 経由・変数経由）は静的検査では捕まらない**。
+   これを閉じるには kind を enum にして分類器の戻り値型ごと固定する必要があるが、
+   それは「memory / refs を数える」という本 issue の目的とは別目的（構造の根治）なので
+   **切り出して別 issue とし、本設計の巡数を継承させる**（③対象外・`review.md` の切り出し規定）。
+   代わりに本変更では、**実際の `--apply` 経路を通す E2E 試験**（⑤）で
+   「分類器が返した値が fold を通って count に至る」ことを毎回確認する。
 
 `pillar2_metrics` 側は変更しない。`reflect_fold` が新 kind を受理しさえすれば、
 `pillar2_metrics.py:221-239` は `other` だけを除外して残りを無条件に eligible へ入れるため、
