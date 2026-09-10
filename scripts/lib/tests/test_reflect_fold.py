@@ -234,6 +234,34 @@ def test_later_applied_resolves_ambiguous_revert():
     assert health.stale_reverts == 0
 
 
+def test_applied_tied_with_ambiguous_revert_does_not_resolve_it():
+    tied_attempt = _attempt(
+        correction_id="d" * 32,
+        attempted_at="2026-08-31T10:00:30+00:00",
+    )
+    tied_applied = _applied(
+        correction_id="e" * 32,
+        confirms_attempt_id="d" * 32,
+        reflect_applied_at="2026-08-31T10:01:00+00:00",
+    )
+
+    folded, health = fold_corrections(
+        [_base()],
+        [
+            _attempt(),
+            _applied(),
+            _reverted(reverted_at="2026-08-31T10:01:00+00:00"),
+            tied_attempt,
+            tied_applied,
+        ],
+        now=NOW,
+    )
+
+    assert folded[0].has_pillar2_fields is False
+    assert folded[0].ambiguous_revert is True
+    assert health.ambiguous_reverts == 1
+
+
 def test_revert_tied_with_different_applied_is_not_ambiguous():
     newer_attempt = _attempt(
         correction_id="d" * 32,
