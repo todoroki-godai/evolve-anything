@@ -14,8 +14,9 @@ codex 巡1「設計修正要」により撤回し、「daily runner がその IS
 
 ① **守る対象**: 柱2「実際に反映された改善（直近30日）」の件数・柱3「指摘率」の最新の確定週の
 値・柱4「戻せる採用」の件数の要約（1〜3行）が、その ISO 週で daily runner が初めて成功した日
-以降、ユーザーが何も操作しなくても SessionStart 通知に自然と現れること（同じ日にセッションを
-何回開いても出続け、翌日の daily runner 実行で当該週の値に更新される）。
+（＝`weekly_board.computed_on`）に、ユーザーが何も操作しなくても SessionStart 通知に自然と現れること
+（同じ日にセッションを何回開いても出続け、**翌日以降は出ない**。ユーザー決定 2026-09-11「週の最初の日に出す・
+翌日からは消える」）。
 
 ② **信頼境界**: 自分たちの実装ミス・性能劣化・既存契約（dry-run 純度・#379 新設凍結・
 write barrier）の見落としのみを脅威とする。悪意ある第三者・攻撃者は数えない
@@ -33,7 +34,11 @@ push 型の非同期通知／表示先を SessionStart 以外に広げること�
      `scripts/lib/correction_rate.py:78`）と異なる（または `weekly_board` 自体が無い／壊れている）
      ときだけ3値を再計算し、`weekly_board.week_id` を今回の ISO 週で書き込む
    - **同週の2日目以降の実行ではキーが変わらない**: 直前内容の `weekly_board.week_id` が今回の
-     ISO 週と一致するなら、3値を再計算せず直前の `weekly_board` をそのまま維持する
+     ISO 週と一致するなら、3値を再計算せず直前の `weekly_board`（`week_id`・`computed_on` を含む）を
+     そのまま維持する
+   - **表示は計算した日だけ**: SessionStart は `weekly_board.computed_on`（daily runner が計算した日の
+     ローカル日付 `YYYY-MM-DD`）が今日のローカル日付と一致するときだけ表示する。一致しなければ何も出さない
+     （持ち越した値を週のあいだ出し続けない）
    - **同日2回目の実行でキーが残る**: 手動含め同日に daily runner が複数回走っても、2回目以降は
      直前と同じ週なので上の「2日目以降」と同じ分岐に入り、値が消えたり0にリセットされたりしない
    - **3値が単一ソース関数のフィールドと一致する**: 柱2は `pillar2_metrics.count_applied_reflections`
@@ -69,7 +74,9 @@ push 型の非同期通知／表示先を SessionStart 以外に広げること�
      2. 「週の最初の実行判定を常に真にする」変異（`week_id` 比較を無条件 `True` に差し替え）を
         当て、同週の2日目実行でも recompute されてしまう（＝上の「陽性対照」が赤くなる）ことを
         検出できるか確認する。
-   - 実装フェーズで上記2種の変異を実際に当てて緑のまま残らないことを確認するまで、この検査は
+     3. 「表示判定の `computed_on == 今日` を外す」変異を当て、`computed_on` が昨日の payload で
+        SessionStart が要約を出してしまうことを検出できるか確認する（陽性対照: `computed_on` が今日なら出る）。
+   - 実装フェーズで上記3種の変異を実際に当てて緑のまま残らないことを確認するまで、この検査は
      「効いている」と扱わない（`verify-checks-by-breaking.md`）。
 
 ⑥ **目的の物差しで削る量**: **0**。本設計は「1周の壁時計を短くする」類の時間短縮ではなく、
@@ -92,9 +99,9 @@ push 型の非同期通知／表示先を SessionStart 以外に広げること�
 **採用方式**: `bin/evolve-daily-run` が毎朝の実行で、上書き前の `evolve-queue.json` を読み、
 その中の `weekly_board.week_id` が今回の ISO 週と異なる（または無い／壊れている）場合だけ
 柱2/3/4を計算し `payload["weekly_board"]` として書き込む。同じなら直前の `weekly_board` を
-そのまま carry-forward する。SessionStart（`scripts/lib/session_notify/collectors.py`）は
+そのまま carry-forward する（`computed_on` も書き換えない）。SessionStart（`scripts/lib/session_notify/collectors.py`）は
 既存の `_resolve_queue_data()`（`scripts/lib/session_notify/collectors.py:384-414`）が読み込んだ
-`queue_data` から `weekly_board` フィールドを取り出して表示するだけで、一切の計算・書込みを
+`queue_data` から `weekly_board` フィールドを取り出し、`computed_on` が今日のときだけ表示するだけで、一切の計算・書込みを
 行わない（`commit=None`）。precedent は `bin/evolve-daily-run:188-198` の
 `payload["llm_judge"]`/`payload["proposals"]` 追加と同型。
 
