@@ -156,6 +156,15 @@ def _count_scoped_invalid_base_ids(fold_health, project_root: Path) -> dict[str,
     return counts
 
 
+def pillar2_count_key(folded_correction) -> tuple:
+    """柱2の1件を定義する、反映先と正規化済み行の共有キー。"""
+    return (
+        folded_correction.reflect_target_kind,
+        folded_correction.reflect_target_path,
+        folded_correction.reflect_draft_line.strip(),
+    )
+
+
 def count_applied_reflections(
     project_root: Path,
     *,
@@ -242,11 +251,7 @@ def count_applied_reflections(
 
     groups: dict[tuple, list] = {}
     for folded_correction in eligible:
-        key = (
-            folded_correction.reflect_target_kind,
-            folded_correction.reflect_target_path,
-            folded_correction.reflect_draft_line.strip(),
-        )
+        key = pillar2_count_key(folded_correction)
         groups.setdefault(key, []).append(folded_correction)
 
     applied_list = [

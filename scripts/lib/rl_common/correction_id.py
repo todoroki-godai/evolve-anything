@@ -155,6 +155,7 @@ def append_unique_record(
     record: dict,
     *,
     block_existing: Optional[Callable[[list[dict]], bool]] = None,
+    dry_run: bool = False,
 ) -> AppendResult:
     """登録ストアへ correction_id 重複拒否と任意の lock 内 CAS つきで追記する。"""
     if not persistence._HAVE_FCNTL:
@@ -181,9 +182,16 @@ def append_unique_record(
             block_existing is not None and block_existing(existing)
         )
 
-    result = persistence.append_jsonl(filepath, record, duplicate_check=should_block)
+    result = persistence.append_jsonl(
+        filepath,
+        record,
+        duplicate_check=should_block,
+        dry_run=dry_run,
+    )
     if result.status == "written":
         return AppendResult(status="appended")
+    if result.status == "dry_run":
+        return AppendResult(status="dry_run")
     if result.status == "duplicate":
         return AppendResult(status="duplicate_id")
     return AppendResult(status="retry_required", reason=result.reason)

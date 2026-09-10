@@ -98,6 +98,7 @@ def test_list_applied_is_read_only_and_includes_revoke_identifiers(tmp_path, cap
                 "applied_id": APPLIED_1,
                 "target_path": "repo:.claude/rules/a.md",
                 "reflect_applied_at": "2026-09-01T10:01:00+00:00",
+                "other_active_applied_count": 0,
             }
         ],
     }
@@ -160,11 +161,94 @@ def test_revoke_appends_event_and_removes_applied_from_list(tmp_path, capsys):
     rows = [json.loads(line) for line in events.read_text().splitlines()]
     assert output["status"] == "revoked"
     assert output["reverts_applied_id"] == APPLIED_1
+    assert "count_note" not in output
     assert rows[-1]["event_type"] == "correction_reverted"
     assert rows[-1]["revert_reason"] == "The reflected change was reverted"
 
     _run_cli("--list-applied", "--corrections-file", str(corrections))
     assert json.loads(capsys.readouterr().out)["applied"] == []
+
+
+def test_revoke_dry_run_rechecks_eligibility_without_appending(tmp_path, capsys):
+    corrections, events = _seed(tmp_path)
+    before_line_count = len(events.read_text(encoding="utf-8").splitlines())
+
+    _run_cli(
+        "--revoke",
+        APPLIED_1,
+        "--reason",
+        "The reflected change was reverted",
+        "--dry-run",
+        "--corrections-file",
+        str(corrections),
+    )
+
+    output = json.loads(capsys.readouterr().out)
+    after_line_count = len(events.read_text(encoding="utf-8").splitlines())
+    assert output["status"] == "dry_run"
+    assert output["reverts_applied_id"] == APPLIED_1
+    assert after_line_count == before_line_count
+
+
+def test_dry_run_rejects_applied_that_is_not_current(tmp_path):
+    corrections, events = _seed(tmp_path)
+    _write(
+        events,
+        [
+            _attempt(),
+            _applied(),
+            _attempt(ATTEMPT_2, at="2026-09-01T11:00:00+00:00"),
+            _applied(
+                APPLIED_2,
+                attempt_id=ATTEMPT_2,
+                at="2026-09-01T11:01:00+00:00",
+            ),
+        ],
+    )
+    before = events.read_bytes()
+
+    result = reflect.revoke_applied(
+        corrections, APPLIED_1, "stale dry run", dry_run=True
+    )
+
+    assert result["status"] == "retry-required"
+    assert events.read_bytes() == before
+
+
+def test_list_and_revoke_surface_other_active_applied_count(tmp_path, capsys):
+    corrections = tmp_path / "corrections.jsonl"
+    events = rl_common.DATA_DIR / "reflect_apply_events.jsonl"
+    second_base = {
+        **_base(),
+        "correction_id": "1" * 32,
+    }
+    second_attempt = {
+        **_attempt("2" * 32),
+        "target_correction_id": second_base["correction_id"],
+        "correction_message_sha256": _hash_correction_message(second_base),
+    }
+    second_applied = {
+        **_applied("3" * 32, attempt_id="2" * 32),
+        "target_correction_id": second_base["correction_id"],
+    }
+    _write(corrections, [_base(), second_base])
+    _write(events, [_attempt(), _applied(), second_attempt, second_applied])
+
+    _run_cli("--list-applied", "--corrections-file", str(corrections))
+    listed = json.loads(capsys.readouterr().out)["applied"]
+    assert [item["other_active_applied_count"] for item in listed] == [1, 1]
+
+    _run_cli(
+        "--revoke",
+        APPLIED_1,
+        "--reason",
+        "one of two was reverted",
+        "--corrections-file",
+        str(corrections),
+    )
+    result = json.loads(capsys.readouterr().out)
+    assert result["other_active_applied_count"] == 1
+    assert result["count_note"] == "同じ行を他 1 件が保持しているため件数は変わりません"
 
 
 def test_revoke_race_with_newer_apply_writes_nothing(tmp_path, monkeypatch):
@@ -217,7 +301,16 @@ def test_revoke_race_with_newer_apply_writes_nothing(tmp_path, monkeypatch):
 
 def test_revoke_rechecks_inside_append_before_deciding(tmp_path, monkeypatch):
     corrections, _ = _seed(tmp_path)
-    existing = [_attempt(), _applied()]
+    existing = [
+        _attempt(),
+        _applied(),
+        _attempt(ATTEMPT_2, at="2026-09-01T11:00:00+00:00"),
+        _applied(
+            APPLIED_2,
+            attempt_id=ATTEMPT_2,
+            at="2026-09-01T11:01:00+00:00",
+        ),
+    ]
     calls = []
     original_fold = reflect.fold_corrections
 
@@ -225,7 +318,7 @@ def test_revoke_rechecks_inside_append_before_deciding(tmp_path, monkeypatch):
         calls.append("recheck-fold")
         return original_fold(*args, **kwargs)
 
-    def fake_append(path, record, *, duplicate_check):
+    def fake_append(path, record, *, duplicate_check, dry_run=False):
         calls.append("append-enter")
         blocked = duplicate_check(existing)
         calls.append("append-blocked" if blocked else "append-write")
@@ -234,10 +327,40 @@ def test_revoke_rechecks_inside_append_before_deciding(tmp_path, monkeypatch):
     monkeypatch.setattr(reflect, "fold_corrections", traced_fold)
     monkeypatch.setattr(reflect.persistence, "append_jsonl", fake_append)
 
-    result = reflect.revoke_applied(corrections, "1" * 32, "stale selection")
+    result = reflect.revoke_applied(corrections, APPLIED_1, "stale selection")
 
     assert result["status"] == "retry-required"
     assert calls == ["append-enter", "recheck-fold", "append-blocked"]
+
+
+@pytest.mark.parametrize("existing_action", ["--apply", "--skip"])
+@pytest.mark.parametrize(
+    "weak_action",
+    ["--promote-weak", "--reject-weak", "--already-reflected-weak"],
+)
+def test_existing_action_and_weak_decision_remain_parse_compatible(
+    tmp_path, capsys, existing_action, weak_action
+):
+    corrections, _ = _seed(tmp_path)
+    args = [
+        existing_action,
+        "not-a-source-id",
+        weak_action,
+        "",
+        "--dry-run",
+        "--corrections-file",
+        str(corrections),
+        "--weak-signals-file",
+        str(tmp_path / "weak_signals.jsonl"),
+        "--idioms-file",
+        str(tmp_path / "idioms.jsonl"),
+    ]
+    try:
+        _run_cli(*args)
+    except SystemExit as exc:
+        assert exc.code != 2
+
+    assert "not allowed with argument" not in capsys.readouterr().err
 
 
 @pytest.mark.parametrize(

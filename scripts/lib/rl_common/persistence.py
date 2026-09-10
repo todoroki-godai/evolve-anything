@@ -215,6 +215,7 @@ def append_jsonl(
     record: dict,
     *,
     duplicate_check: Optional[Callable[[list[dict]], bool]] = None,
+    dry_run: bool = False,
 ) -> WriteResult:
     """JSONLへ排他的に追記する。重複判定callbackはロック保持中に評価する。"""
     is_new = False
@@ -227,6 +228,8 @@ def append_jsonl(
                     existing = _read_records_locked(filepath)
                     if duplicate_check(existing):
                         return WriteResult(status="duplicate")
+                if dry_run:
+                    return WriteResult(status="dry_run")
                 is_new = f.tell() == 0  # flock 取得後に判定し TOCTOU を回避
                 f.write(json.dumps(record, ensure_ascii=False) + "\n")
                 # buffered data を可視化してからロックを解放する。同一IDの次writerが

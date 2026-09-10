@@ -27,6 +27,7 @@ from reflect_apply_match import (
     normalize_reflect_target_path,
 )
 from reflect_fold import _hash_correction_message, _parse_iso8601_utc, fold_corrections
+from pillar2_metrics import pillar2_count_key
 from reflect_utils import (
     read_all_memory_entries,
     read_auto_memory,
@@ -142,14 +143,20 @@ def load_corrections(filepath: Path = CORRECTIONS_FILE) -> list[dict]:
 def _active_applied(corrections_file: Path, event_records: list[dict]) -> list[dict]:
     """柱2 reducer が有効と判定した applied を取り消し操作向けに返す。"""
     folded, _ = fold_corrections(load_corrections(corrections_file), event_records)
+    active = [
+        item
+        for item in folded
+        if item.has_pillar2_fields and item.reflect_applied_id is not None
+    ]
+    group_counts = Counter(pillar2_count_key(item) for item in active)
     return [
         {
             "applied_id": item.reflect_applied_id,
             "target_path": item.reflect_target_path,
             "reflect_applied_at": item.reflect_applied_at,
+            "other_active_applied_count": group_counts[pillar2_count_key(item)] - 1,
         }
-        for item in folded
-        if item.has_pillar2_fields and item.reflect_applied_id is not None
+        for item in active
     ]
 
 
@@ -164,7 +171,13 @@ def list_applied(corrections_file: Path) -> dict:
     }
 
 
-def revoke_applied(corrections_file: Path, applied_id: str, reason: str) -> dict:
+def revoke_applied(
+    corrections_file: Path,
+    applied_id: str,
+    reason: str,
+    *,
+    dry_run: bool = False,
+) -> dict:
     """イベントストアの flock 内で CAS を再確認して取り消しを追記する。"""
     from rl_common.store_write import guard_problem
 
@@ -184,7 +197,11 @@ def revoke_applied(corrections_file: Path, applied_id: str, reason: str) -> dict
         "reverts_applied_id": applied_id,
         "revert_reason": reason,
     }
-    decision = {"eligible": False, "reason": "applied は現在の有効な最新ではありません"}
+    decision = {
+        "eligible": False,
+        "reason": "applied は現在の有効な最新ではありません",
+        "other_active_applied_count": 0,
+    }
 
     def should_block(existing: list[dict]) -> bool:
         if any(
@@ -208,19 +225,30 @@ def revoke_applied(corrections_file: Path, applied_id: str, reason: str) -> dict
             return True
         event["reverted_at"] = reverted_at.isoformat()
         decision["eligible"] = True
+        decision["other_active_applied_count"] = selected[
+            "other_active_applied_count"
+        ]
         return False
 
     result = append_unique_record(
         "reflect_apply_events.jsonl",
         event,
         block_existing=should_block,
+        dry_run=dry_run,
     )
-    if result.status == "appended" and decision["eligible"]:
-        return {
-            "status": "revoked",
+    if result.status in ("appended", "dry_run") and decision["eligible"]:
+        response = {
+            "status": "revoked" if result.status == "appended" else "dry_run",
             "reverts_applied_id": applied_id,
             "revert_event_id": event["correction_id"],
         }
+        other_count = decision["other_active_applied_count"]
+        if other_count > 0:
+            response["other_active_applied_count"] = other_count
+            response["count_note"] = (
+                f"同じ行を他 {other_count} 件が保持しているため件数は変わりません"
+            )
+        return response
     return {
         "status": "retry-required",
         "reverts_applied_id": applied_id,
@@ -1168,7 +1196,7 @@ def main():
     # 「既に反映済みは promote を呼ばない」という設計の中核を破っていた（corrections.jsonl に
     # reflect_status=promoted のレコードが作られ、#514 在庫レーンへ再提示バグが引っ越す）。
     # argparse の mutually exclusive group で同時指定自体を拒否する（分岐順に依存しない）。
-    _weak_decision_group = _pillar2_action_group
+    _weak_decision_group = parser.add_mutually_exclusive_group()
     _weak_decision_group.add_argument("--promote-weak", type=str, default=None,
                         help="指定 signal_key（カンマ区切り）の weak_signal を corrections へ昇格")
     _weak_decision_group.add_argument("--reject-weak", type=str, default=None,
@@ -1220,6 +1248,22 @@ def main():
                              "固定帰属を避けて origin PJ の絶対パスを渡す用途（#412 [Must]4）")
     args = parser.parse_args()
 
+    weak_actions = [
+        ("--promote-weak", args.promote_weak),
+        ("--reject-weak", args.reject_weak),
+        ("--already-reflected-weak", args.already_reflected_weak),
+    ]
+    pillar2_read_or_revoke = (
+        "--revoke" if args.revoke is not None else "--list-applied"
+        if args.list_applied
+        else None
+    )
+    for weak_flag, value in weak_actions:
+        if pillar2_read_or_revoke is not None and value is not None:
+            parser.error(
+                f"argument {weak_flag}: not allowed with argument {pillar2_read_or_revoke}"
+            )
+
     corrections_file = Path(args.corrections_file) if args.corrections_file else CORRECTIONS_FILE
     current_project = args.project_dir or os.environ.get("CLAUDE_PROJECT_DIR")
     project_root = Path(current_project) if current_project else Path.cwd()
@@ -1231,9 +1275,11 @@ def main():
         return
 
     if args.revoke is not None:
-        result = revoke_applied(corrections_file, args.revoke, args.reason)
+        result = revoke_applied(
+            corrections_file, args.revoke, args.reason, dry_run=args.dry_run
+        )
         print(json.dumps(result, ensure_ascii=False, indent=2))
-        if result.get("status") != "revoked":
+        if result.get("status") not in ("revoked", "dry_run"):
             sys.exit(1)
         return
 
