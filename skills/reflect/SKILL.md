@@ -30,7 +30,11 @@ corrections.jsonl に蓄積されたユーザー修正を分析し、
 /evolve-anything:reflect --show-weak-signals    # weak_signals レーンを view-only 表示（診断。昇格は evolve へ・#117）
 /evolve-anything:reflect --promote-weak <keys>  # full-backlog の手動昇格プリミティブ（対話確認は evolve の今日の修正確認 phase）
 /evolve-anything:reflect --apply <source_correction_id> --target-path <path> --draft-line-file <file>  # 反映先ファイルへの実在確認後に applied にする（#475 §6.1・agent が Step 5/6 内部で使う。ユーザーが直接叩く用途ではない）
+/evolve-anything:reflect --list-applied          # 現在有効な柱2 applied と取り消し用 ID を表示（read-only）
+/evolve-anything:reflect --revoke <applied_id> --reason "取り消した理由"  # applied 1回分を取り消し記録する（--dry-run 対応）
 ```
+
+反映を `git revert` 等で取り消した場合も `--revoke` で記録する。記録しない限り柱2はその反映を数え続ける。
 
 ## 実行手順
 

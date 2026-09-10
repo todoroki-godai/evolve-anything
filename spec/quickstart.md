@@ -13,6 +13,7 @@ bin/evolve-fleet ingest             # 全 PJ の human 発話を utterances.db �
 
 # 修正フィードバックの反映
 /evolve-anything:reflect
+bin/evolve-reflect --list-applied               # 有効な反映 ID を確認。取り消し記録は --revoke <applied_id> --reason "理由"
 
 # 特定スキルの自己進化パターン組み込み
 /evolve-anything:evolve-skill my-skill
