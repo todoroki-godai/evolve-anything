@@ -114,6 +114,47 @@ def test_reverted_reflection_is_removed_without_degrading_health(tmp_path):
     assert result["measured"] is True
 
 
+def test_new_applied_after_reverting_latest_is_counted_without_degradation(tmp_path):
+    events = _events()
+    events.extend(
+        [
+            {
+                **events[0],
+                "correction_id": "d" * 32,
+                "attempted_at": "2026-08-31T11:00:00+00:00",
+            },
+            {
+                **events[1],
+                "correction_id": "e" * 32,
+                "confirms_attempt_id": "d" * 32,
+                "reflect_applied_at": "2026-08-31T11:01:00+00:00",
+            },
+            _revert(
+                reverts_applied_id="e" * 32,
+                reverted_at="2026-08-31T11:02:00+00:00",
+            ),
+            {
+                **events[0],
+                "correction_id": "1" * 32,
+                "attempted_at": "2026-08-31T12:00:00+00:00",
+            },
+            {
+                **events[1],
+                "correction_id": "2" * 32,
+                "confirms_attempt_id": "1" * 32,
+                "reflect_applied_at": "2026-08-31T12:01:00+00:00",
+            },
+        ]
+    )
+
+    result = _count(tmp_path, [_base()], events)
+
+    assert result["count"] == 1
+    assert result["applied_list"][0]["applied_id"] == "2" * 32
+    assert result["health"]["degraded"] is False
+    assert result["measured"] is True
+
+
 @pytest.mark.parametrize(
     ("event", "health_key"),
     [
