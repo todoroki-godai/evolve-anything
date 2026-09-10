@@ -178,9 +178,6 @@ def revoke_applied(corrections_file: Path, applied_id: str, reason: str) -> dict
     problem = guard_problem("reflect_apply_events.jsonl")
     if problem is not None:
         return {"status": "store-rejected", "reason": problem}
-
-    rl_common.ensure_data_dir()
-    events_file = Path(rl_common.DATA_DIR) / "reflect_apply_events.jsonl"
     event = {
         "correction_id": new_correction_id(),
         "schema_version": 1,
@@ -214,12 +211,12 @@ def revoke_applied(corrections_file: Path, applied_id: str, reason: str) -> dict
         decision["eligible"] = True
         return False
 
-    result = persistence.append_jsonl(
-        events_file,
+    result = append_unique_record(
+        "reflect_apply_events.jsonl",
         event,
-        duplicate_check=should_block,
+        block_existing=should_block,
     )
-    if result.status == "written" and decision["eligible"]:
+    if result.status == "appended" and decision["eligible"]:
         return {
             "status": "revoked",
             "reverts_applied_id": applied_id,
@@ -228,7 +225,9 @@ def revoke_applied(corrections_file: Path, applied_id: str, reason: str) -> dict
     return {
         "status": "retry-required",
         "reverts_applied_id": applied_id,
-        "reason": decision["reason"] if result.status == "duplicate" else result.reason,
+        "reason": (
+            decision["reason"] if result.status == "duplicate_id" else result.reason
+        ),
     }
 
 

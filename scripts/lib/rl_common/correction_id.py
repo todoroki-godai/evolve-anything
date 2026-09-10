@@ -9,7 +9,7 @@ import uuid
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from . import persistence
 
@@ -150,8 +150,13 @@ def append_correction_record(filepath: Path, record: dict) -> AppendResult:
     return AppendResult(status="retry_required", reason=result.reason)
 
 
-def append_unique_record(store_name: str, record: dict) -> AppendResult:
-    """登録ストアへ correction_id 重複拒否つきで追記する専用境界。"""
+def append_unique_record(
+    store_name: str,
+    record: dict,
+    *,
+    block_existing: Optional[Callable[[list[dict]], bool]] = None,
+) -> AppendResult:
+    """登録ストアへ correction_id 重複拒否と任意の lock 内 CAS つきで追記する。"""
     if not persistence._HAVE_FCNTL:
         return AppendResult(
             status="unsupported_platform",
@@ -170,11 +175,12 @@ def append_unique_record(store_name: str, record: dict) -> AppendResult:
 
     rl_common.ensure_data_dir()
     filepath = rl_common.DATA_DIR / store_name
-    result = persistence.append_jsonl(
-        filepath,
-        record,
-        duplicate_check=lambda existing: has_duplicate_id(existing, correction_id),
-    )
+    def should_block(existing: list[dict]) -> bool:
+        return has_duplicate_id(existing, correction_id) or bool(
+            block_existing is not None and block_existing(existing)
+        )
+
+    result = persistence.append_jsonl(filepath, record, duplicate_check=should_block)
     if result.status == "written":
         return AppendResult(status="appended")
     if result.status == "duplicate":
