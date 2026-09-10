@@ -40,7 +40,7 @@ store_registry, store_write
 
 weak_signals, correction_semantic, bootstrap_backlog, daily_review, review_channels,
 idiom_autopromote, measurement_bug, growth_report, results_board, pillar2_metrics, outcome_promotion_readiness,
-reflect_apply_events（producer: reflect `--apply` / `--skip`、専用追記境界）,
+reflect_apply_events（producer: reflect `--apply` / `--skip` / `--revoke`、専用追記境界。取り消しは申告ベースの CAS 遷移として fold）,
 cross_pj_priority, plugin_self, testpaths_coverage, dogfood gate, sibling_copy_guard,
 evolve-release-sync, pj_slug, weak_signals drain永続化, idiom_filter, representative,
 multiview_eval, relevance_gate, remediation参照リンク相対化, report-feedback, paired_trajectory
