@@ -218,6 +218,8 @@ def count_applied_reflections(
             continue
         if folded_correction.base.get("reflect_status") != "applied":
             continue
+        if folded_correction.reverted or folded_correction.ambiguous_revert:
+            continue
         if not folded_correction.has_pillar2_fields:
             if (
                 (
@@ -251,9 +253,14 @@ def count_applied_reflections(
         {
             "target_kind": key[0],
             "target_path": key[1],
+            "applied_id": min(
+                grouped_corrections,
+                key=lambda item: _parse_iso8601_utc(item.reflect_applied_at),
+            ).reflect_applied_id,
             "reflect_applied_at": min(
-                item.reflect_applied_at for item in grouped_corrections
-            ),
+                grouped_corrections,
+                key=lambda item: _parse_iso8601_utc(item.reflect_applied_at),
+            ).reflect_applied_at,
             "reconciled": any(item.reconciled for item in grouped_corrections),
         }
         for key, grouped_corrections in groups.items()
@@ -273,6 +280,8 @@ def count_applied_reflections(
         or fold_health.orphan_confirmations > 0
         or fold_health.duplicate_confirmations > 0
         or fold_health.hash_mismatch_count > 0
+        or fold_health.stale_reverts > 0
+        or fold_health.ambiguous_reverts > 0
         or legacy_unverified_count > 0
         or invalid_base_id_applied_row_count > 0
     )
@@ -304,6 +313,8 @@ def count_applied_reflections(
             "orphan_confirmations": fold_health.orphan_confirmations,
             "duplicate_confirmations": fold_health.duplicate_confirmations,
             "hash_mismatch_count": fold_health.hash_mismatch_count,
+            "stale_reverts": fold_health.stale_reverts,
+            "ambiguous_reverts": fold_health.ambiguous_reverts,
             "invalid_base_id_applied_row_count": invalid_base_id_applied_row_count,
             "invalid_base_id_non_applied_row_count": invalid_base_id_non_applied_row_count,
             **invalid_base_id_counts,

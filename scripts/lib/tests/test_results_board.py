@@ -989,6 +989,25 @@ class TestRenderResultsBoard:
         assert "実際に反映された改善（直近30日）: 測定不能" in text
         assert "実際に反映された改善（直近30日）: 7 件" not in text
         assert "イベント記録を読めません" in text
+        assert "取り消しは申告があったぶんだけ反映" in text
+
+    def test_pillar2_always_discloses_revert_reporting_limit(self):
+        board = self._board(
+            pillar2={
+                "count": 1,
+                "measured": True,
+                "pre_scheme_excluded_count": 0,
+                "health": {"degraded": False},
+                "not_measured": {},
+            },
+            measurements={
+                "pillar2": {"measured": True, "reason": None, "dropped_lines": 0},
+            },
+        )
+
+        lines = results_board.render_results_board(board)
+
+        assert lines.count("取り消しは申告があったぶんだけ反映") == 1
 
     def test_every_numeric_pillar2_health_key_has_a_reader_facing_reason(
         self, tmp_path

@@ -271,6 +271,8 @@ def _pillar2_degraded_reason(pillar2: Dict[str, Any]) -> str:
         ("orphan_confirmations", "孤立確認イベント"),
         ("duplicate_confirmations", "重複確認イベント"),
         ("hash_mismatch_count", "hash 不一致"),
+        ("stale_reverts", "効力を失った取り消し"),
+        ("ambiguous_reverts", "時刻が曖昧な取り消し"),
     ):
         count = int(health.get(key) or 0)
         if count:
@@ -359,7 +361,11 @@ def render_pillar2_health(
             "（測定不能の理由からは除外）"
         )
 
-    lines = [main, pre_scheme_line]
+    lines = [
+        main,
+        pre_scheme_line,
+        "取り消しは申告があったぶんだけ反映",
+    ]
     if targets:
         lines.append(f"未測定の反映先: {' / '.join(targets)}")
     return lines

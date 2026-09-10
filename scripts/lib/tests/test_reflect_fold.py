@@ -72,6 +72,7 @@ def test_revert_closes_latest_applied_and_prevents_reconciliation():
 
     assert folded[0].has_pillar2_fields is False
     assert folded[0].reconciled is False
+    assert folded[0].reverted is True
     assert health.stale_reverts == 0
     assert health.ambiguous_reverts == 0
 
@@ -99,6 +100,7 @@ def test_reverting_latest_applied_does_not_restore_older_applied():
     )
 
     assert folded[0].has_pillar2_fields is False
+    assert folded[0].reverted is True
     assert health.stale_reverts == 0
 
 
@@ -121,6 +123,7 @@ def test_applied_after_revert_becomes_active():
     )
 
     assert folded[0].has_pillar2_fields is True
+    assert folded[0].reverted is False
     assert folded[0].reflect_applied_id == "e" * 32
     assert folded[0].reflect_target_path == "repo:.claude/rules/later.md"
     assert health.stale_reverts == 0
@@ -167,6 +170,7 @@ def test_duplicate_revert_is_stale_after_first_closes_state():
     )
 
     assert folded[0].has_pillar2_fields is False
+    assert folded[0].reverted is True
     assert health.stale_reverts == 1
 
 
@@ -194,6 +198,7 @@ def test_ambiguous_revert_excludes_target(reverted_at):
     )
 
     assert folded[0].has_pillar2_fields is False
+    assert folded[0].ambiguous_revert is True
     assert health.ambiguous_reverts == 1
     assert health.stale_reverts == 0
 

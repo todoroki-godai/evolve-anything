@@ -79,6 +79,8 @@ class FoldedCorrection:
     correction_message_sha256: Optional[str] = None
     has_pillar2_fields: bool = False
     reconciled: bool = False
+    reverted: bool = False
+    ambiguous_revert: bool = False
 
 
 @dataclass
@@ -339,6 +341,13 @@ def fold_corrections(
             reverted_targets.add(target_id)
         if current is not None:
             active_by_target[target_id] = current
+
+    for target_id in reverted_targets - active_by_target.keys() - ambiguous_targets:
+        if target_id in folded_by_id:
+            folded_by_id[target_id].reverted = True
+    for target_id in ambiguous_targets:
+        if target_id in folded_by_id:
+            folded_by_id[target_id].ambiguous_revert = True
 
     for target_id, pair in active_by_target.items():
         if target_id in ambiguous_targets:

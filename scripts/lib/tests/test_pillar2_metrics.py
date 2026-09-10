@@ -14,6 +14,7 @@ NOW = datetime(2026, 9, 1, tzinfo=timezone.utc)
 BASE_ID = "a" * 32
 ATTEMPT_ID = "b" * 32
 APPLIED_ID = "c" * 32
+REVERT_ID = "f" * 32
 BASELINE_IDS = {
     "411114e30ec74a1aacf14a1c0572daff",
     "c25c83983e1f4a0a98b11133a02cab66",
@@ -64,6 +65,19 @@ def _events(applied_at="2026-08-31T10:01:00+00:00"):
     ]
 
 
+def _revert(**overrides):
+    event = {
+        "correction_id": REVERT_ID,
+        "schema_version": 1,
+        "event_type": "correction_reverted",
+        "reverts_applied_id": APPLIED_ID,
+        "reverted_at": "2026-08-31T10:02:00+00:00",
+        "revert_reason": "The reflected change was reverted",
+    }
+    event.update(overrides)
+    return event
+
+
 def _count(tmp_path, bases, events):
     corrections = tmp_path / "corrections.jsonl"
     event_path = tmp_path / "reflect_apply_events.jsonl"
@@ -86,7 +100,41 @@ def test_count_applied_reflections_uses_reflect_applied_at(tmp_path):
     fresh = _count(tmp_path, [_base(timestamp="2026-01-01T00:00:00+00:00")], _events())
     assert old["count"] == 0
     assert fresh["count"] == 1
+    assert fresh["applied_list"][0]["applied_id"] == APPLIED_ID
     assert fresh["applied_list"][0]["reflect_applied_at"] == "2026-08-31T10:01:00+00:00"
+
+
+def test_reverted_reflection_is_removed_without_degrading_health(tmp_path):
+    result = _count(tmp_path, [_base()], _events() + [_revert()])
+
+    assert result["count"] == 0
+    assert result["applied_list"] == []
+    assert result["health"]["stale_reverts"] == 0
+    assert result["health"]["ambiguous_reverts"] == 0
+    assert result["measured"] is True
+
+
+@pytest.mark.parametrize(
+    ("event", "health_key"),
+    [
+        pytest.param(
+            _revert(reverts_applied_id="1" * 32),
+            "stale_reverts",
+            id="stale",
+        ),
+        pytest.param(
+            _revert(reverted_at="2026-08-31T10:01:00+00:00"),
+            "ambiguous_reverts",
+            id="ambiguous",
+        ),
+    ],
+)
+def test_revert_health_degrades_measurement(tmp_path, event, health_key):
+    result = _count(tmp_path, [_base()], _events() + [event])
+
+    assert result["health"][health_key] == 1
+    assert result["health"]["degraded"] is True
+    assert result["measured"] is False
 
 
 def test_invalidated_excluded_from_count(tmp_path):
