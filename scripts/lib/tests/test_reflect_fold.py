@@ -203,6 +203,66 @@ def test_ambiguous_revert_excludes_target(reverted_at):
     assert health.stale_reverts == 0
 
 
+def test_later_applied_resolves_ambiguous_revert():
+    later_attempt = _attempt(
+        correction_id="d" * 32,
+        attempted_at="2026-08-31T11:00:00+00:00",
+        reflect_target_path="repo:.claude/rules/later.md",
+    )
+    later_applied = _applied(
+        correction_id="e" * 32,
+        confirms_attempt_id="d" * 32,
+        reflect_applied_at="2026-08-31T11:01:00+00:00",
+    )
+
+    folded, health = fold_corrections(
+        [_base()],
+        [
+            _attempt(),
+            _applied(),
+            _reverted(reverted_at="2026-08-31T10:01:00+00:00"),
+            later_attempt,
+            later_applied,
+        ],
+        now=NOW,
+    )
+
+    assert folded[0].has_pillar2_fields is True
+    assert folded[0].ambiguous_revert is False
+    assert folded[0].reflect_applied_id == "e" * 32
+    assert health.ambiguous_reverts == 0
+    assert health.stale_reverts == 0
+
+
+def test_revert_tied_with_different_applied_is_not_ambiguous():
+    newer_attempt = _attempt(
+        correction_id="d" * 32,
+        attempted_at="2026-08-31T10:59:00+00:00",
+    )
+    newer_applied = _applied(
+        correction_id="e" * 32,
+        confirms_attempt_id="d" * 32,
+        reflect_applied_at="2026-08-31T11:00:00+00:00",
+    )
+
+    folded, health = fold_corrections(
+        [_base()],
+        [
+            _attempt(),
+            _applied(),
+            newer_attempt,
+            newer_applied,
+            _reverted(reverted_at="2026-08-31T11:00:00+00:00"),
+        ],
+        now=NOW,
+    )
+
+    assert folded[0].ambiguous_revert is False
+    assert folded[0].reflect_applied_id == "e" * 32
+    assert health.ambiguous_reverts == 0
+    assert health.stale_reverts == 1
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [

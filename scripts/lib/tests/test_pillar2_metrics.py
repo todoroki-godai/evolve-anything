@@ -114,6 +114,41 @@ def test_reverted_reflection_is_removed_without_degrading_health(tmp_path):
     assert result["measured"] is True
 
 
+def test_reverted_row_reduces_count_without_becoming_legacy_unverified(tmp_path):
+    second_base = _base(
+        correction_id="1" * 32,
+        extracted_learning="Keep the measured row",
+    )
+    second_attempt = {
+        **_events()[0],
+        "correction_id": "2" * 32,
+        "target_correction_id": second_base["correction_id"],
+        "reflect_draft_line": second_base["extracted_learning"],
+        "correction_message_sha256": _hash_correction_message(second_base),
+    }
+    second_applied = {
+        **_events()[1],
+        "correction_id": "3" * 32,
+        "target_correction_id": second_base["correction_id"],
+        "confirms_attempt_id": second_attempt["correction_id"],
+    }
+    active = _count(
+        tmp_path,
+        [_base(), second_base],
+        _events() + [second_attempt, second_applied],
+    )
+    revoked = _count(
+        tmp_path,
+        [_base(), second_base],
+        _events() + [second_attempt, second_applied, _revert()],
+    )
+
+    assert active["count"] == 2
+    assert revoked["count"] == 1
+    assert revoked["legacy_unverified_count"] == 0
+    assert revoked["measured"] is True
+
+
 def test_new_applied_after_reverting_latest_is_counted_without_degradation(tmp_path):
     events = _events()
     events.extend(

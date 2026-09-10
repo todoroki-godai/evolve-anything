@@ -282,19 +282,30 @@ def fold_corrections(
     ambiguous_targets: set[str] = set()
     for target_id in applied_by_target.keys() | reverts_by_target.keys():
         pairs = applied_by_target.get(target_id, [])
-        applied_timestamps = {
-            _parse_iso8601_utc(pair[0].get("reflect_applied_at")) for pair in pairs
-        }
         usable_reverts = []
+        ambiguous_reverts = []
         for event in reverts_by_target.get(target_id, []):
             reverted_at = _parse_iso8601_utc(event.get("reverted_at"))
             referenced = applied_by_own_id[event["reverts_applied_id"]][0]
             referenced_at = _parse_iso8601_utc(referenced.get("reflect_applied_at"))
-            if reverted_at < referenced_at or reverted_at in applied_timestamps:
-                health.ambiguous_reverts += 1
-                ambiguous_targets.add(target_id)
+            if reverted_at <= referenced_at:
+                ambiguous_reverts.append(event)
                 continue
             usable_reverts.append(event)
+
+        unresolved_reverts = [
+            event
+            for event in ambiguous_reverts
+            if not any(
+                pair[0].get("correction_id") != event.get("reverts_applied_id")
+                and _parse_iso8601_utc(pair[0].get("reflect_applied_at"))
+                > _parse_iso8601_utc(event.get("reverted_at"))
+                for pair in pairs
+            )
+        ]
+        if unresolved_reverts:
+            health.ambiguous_reverts += len(unresolved_reverts)
+            ambiguous_targets.add(target_id)
 
         transitions = [
             (
@@ -315,7 +326,9 @@ def fold_corrections(
             for event in usable_reverts
         )
         current: Optional[tuple[dict, dict]] = None
-        for _, _, transition_type, payload in sorted(transitions):
+        for _, _, transition_type, payload in sorted(
+            transitions, key=lambda transition: transition[:3]
+        ):
             if transition_type == "applied":
                 current = payload
                 continue
