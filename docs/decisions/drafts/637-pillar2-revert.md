@@ -182,6 +182,11 @@ target ごとに、時刻順（`(timestamp, correction_id)`・既存 `latest_pai
   - `applied` と `reverted` の時刻同着
   → その target は件数に含めず `ambiguous_reverts` を加算する。
   **ランダムな ID の大小で業務状態を決めない**
+  - **曖昧な取り消しより厳密に後の `applied` があれば、その applied を有効として曖昧状態を解除する**
+    （巡2 [Should]・コードレビュー）。append-only で曖昧な記録は消せず、`--list-applied` にも出ないため
+    `--revoke` も打てない＝**回復手段が無いまま `measured=False` が永久に続く**のを防ぐ。
+    §4.3 の「再反映は新しい applied を記録する」が、そのまま回復手段になる
+  - 同着は**参照先の applied との同着だけ**を曖昧とみなす（別の applied との同着は曖昧にしない）
 
 ### 3.3 health（既存の柱2 payload にフィールドを足す。新 section は作らない）
 
@@ -270,7 +275,7 @@ target ごとに、時刻順（`(timestamp, correction_id)`・既存 `latest_pai
 | 巡 | 種別 | 発注日時 | 対象 SHA | レビュアー | 実測入力トークン | 判定 | 族タグ |
 |---|---|---|---|---|---|---|---|
 | 1 | 設計 | 2026-09-10 07:34 | `2deb1aff` | codex `rev637r1` | 102,130 | 設計修正要 | 状態遷移の未定義（復活・CAS・同着）／操作到達性 |
-| 2 | コード | （実装後に記入） | | tacchi | | | |
+| 2 | コード | 2026-09-10 16:3x | `72814243` | tacchi `rev637code` | 未計測（agent 経由） | 設計修正要（[Must] 1 / [Should] 3 / [Nit] 3） | dry-run 純度／曖昧状態の出口なし／件数単位と取り消し単位の不一致 |
 
 巡1 の指摘の反映状況:
 
