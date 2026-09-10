@@ -1,170 +1,135 @@
-# 設計: 朝の「ルールに書く」を書く工程と `--apply` 記録まで一続きにする（#631）
+# 設計: 朝の「ルールに書く」の直後に、反映に必要な識別子と次の手順を必ず出す（#631）
 
-- 起票: #631／関連: #587 #622 #467 #632 #412
-- 状態: 設計案 v3（版ごとの訂正の履歴は issue #631 のコメントに残す）
+- 起票: #631／関連: #587 #622 #467 #632 #412 #637
+- 状態: 設計案 v4（版ごとの訂正の履歴は issue #631 のコメントに残す）
+- 範囲の裁定（ユーザー・2026-09-11）: 本設計が約束するのは「昇格の直後に、反映に必要な識別子と次の手順を
+  出す」ところまで。ルールへの反映まで届くことは保証しない（届いたかは8節の観測量で見る）
 
 ## 1. 完成条件
 
-① **守る対象**: 朝（または `/evolve` 実行時）の y/n で「ルールに書く」を選んだ指摘が、実際に
-ルールへ反映され、`reflect_apply_events.jsonl` に `correction_applied` として記録されること。
-② **信頼境界**: 運用ミスのみを対象とする（agentの多段手順の脱落・悪意ある入力は数えない）。
-③ **対象外**: `--apply` 自体の実装（`skills/reflect/scripts/reflect.py:1044-1470` で完成済み）。
-`reflect_target_kind` の集計対象拡張は #632 が別途裁定するため、本設計はそれに依存しない形にする。
-④ **blocking の定義（機械判定できる3点へ置換）**:
-  1. `--promote-weak` の**非 dry-run**実行時、昇格した**全 key**ぶんの `promoted_records`
-     （各要素が実在する `source_correction_id` を含む `--apply` 雛形コマンド）が stdout JSON に
-     含まれること。
-  2. `--dry-run` では `source_correction_id` を印字しないこと（実在しない可能性のある id を
-     見せない）。
-  3. `--reject-weak`/`--already-reflected-weak` の出力形（キー構成）が変わらないこと（副作用が
-     他の3択の経路に及ばないことの担保）。
-  **到達率（promote後どれだけ`--apply`まで進むか）はこの③の外側にある観測量**であり、
-  blocking 判定には使わない（8節）。
-⑤ **検証方法**: 7節の陽性・陽性対照・陰性試験。
-⑥ **目的文の物差しで削る量**: 実装前のため **0**。基準値は下記8節の前向き窓の定義に従う。
-本設計の効果（到達率がどこまで上がるか）は運用実績でしか測れないため見積もりを書かない。
+① **守る対象**: `--promote-weak` が非 dry-run で昇格に成功した**全 key** について、`--apply` に渡す
+`source_correction_id`（`corrections.jsonl` 上でちょうど1件に解決できるもの）と次の手順が、同じ実行の
+stdout JSON に出ること。一意に解決できない key は識別子を出さず、その理由を出すこと。
+② **信頼境界**: 運用ミスのみ（agent の多段手順の脱落・実装の取り違え）。悪意ある入力は数えない。
+③ **対象外**:
+  - ルールへの反映まで届くことの保証（上の範囲の裁定）
+  - `--apply` の本体（`skills/reflect/scripts/reflect.py:1474-1635`）の変更
+  - 既存コードの欠陥3件（実害0件・issue 候補。9節）
+  - `reflect_target_kind` の集計対象（#632）
+④ **blocking の定義（すべて機械判定）**:
+  1. 非 dry-run で、`promoted_records` の key 集合が `promoted_keys` と一致する（昇格成功と失敗が混ざっても一致。
+     失敗した key は `promoted_records` に出さない）
+  2. `promoted_records` の各要素の `source_correction_id` が非 null なら、`resolve_source_correction_id`
+     （`reflect.py:267`）で**ちょうど1件**に解決される。解決が1件でなければ `source_correction_id` は null、
+     `reason` に理由が入る
+  3. dry-run では `promoted_records` を出さない（書いていない correction の識別子を見せない）
+  4. `--reject-weak` / `--already-reflected-weak` の stdout のキー集合が変わらない
+  5. 永続化ゼロ: 非 dry-run の昇格後、`corrections.jsonl` に追記された行のキー集合が変更前と同じで、
+     `weak_signals.jsonl` と `correction_review_seen.jsonl` の行にも新しいキーが無い
+⑤ **検証方法**: 7節。
+⑥ **目的文の物差しで削る量**: **0**（実装前。到達率への効果は運用でしか測れない＝8節）。
+  0 のまま発注できるのは、系統独立レビューが必須ゲート（`independent-lineage`）のため。
 
-## 2. 問題定義（訂正後）と evidence
+## 2. 問題定義と evidence
 
-**訂正後の問題定義**: 「同一指摘への往復」ではなく「`promote` 後に `--apply` 記録へ到達しない」
-という**片道の脱落**が主因。
+**問題**: 「ルールに書く」を選んで昇格した指摘が、`--apply`（反映の記録）まで届かない。
 
 | # | 主張 | 値／取得コマンド | 取得日 |
 |---|---|---|---|
-| 1 | `corrections.jsonl`（project_path に `evolve-anything` を含む行）の `reflect_status` 内訳: `promoted 2 / applied 20 / skipped 25 / pending 14`。**v1 に書いた「promoted 45」は仕分け前スナップショット**（#631 起票時点、2026-09-05T01:33Z）で、現在値とは別物 | `python3 -c` で `corrections.jsonl` を読み `project_path` に `evolve-anything` を含む行の `reflect_status` を `Counter` 集計 | 2026-09-05（本設計作業時点） |
-| 2 | `correction_review_seen.jsonl` を `pj_slug=="evolve-anything"`・`decision=="promoted"`・直近30日で絞ると **38行・distinct key 38・重複0**（同じ key が2回以上 `promoted` と記録された行は無い） | `python3 -c`（`~/.claude/evolve-anything/correction_review_seen.jsonl` を読み `key` を `Counter`。ウィンドウは `reviewed_at` 直近30日） | 2026-09-05 |
-| 3 | `reflect.py:1218` は `--promote-weak` ハンドラ内で `record_reviewed(res["promoted_keys"], ..., decision="promoted", ...)` を**即時**呼ぶ（`--apply` を待たない）。この既読化により同一 key は二度と朝の新規4択に出ない。根拠は2つ: (a) `daily/proposal_digest.py:667-679` のコメントが既読化の意図を明言 (b) `daily/proposal_digest.py:456` `build_session_proposals` の docstring「per_pj[pj_slug] + global を結合し、group から既読 signal_key を差し引く」＝`seen_keys` 引数で既読 key を group から除外する実装がそのまま該当する | `sed -n '1174,1237p' skills/reflect/scripts/reflect.py`／`sed -n '456,470p' scripts/lib/daily/proposal_digest.py` | 2026-09-06 |
-| 4 | `daily/proposal_digest.py`（SessionStart 経路の `build_proposal_digest`・339行目／`build_session_proposals`・456行目）は `correction_backlog` を**呼んでいない**（grep で一致0件）。在庫3択が出るのは `/evolve-anything:evolve` スキル実行時のみ（`skills/evolve/SKILL.md:257`「`daily.correction_backlog` が非空のとき...在庫3択で確認する（MUST）」） | `grep -n "correction_backlog" scripts/lib/daily/proposal_digest.py`（0件）／`skills/evolve/SKILL.md:256-257` | 2026-09-05 |
-| 5 | `--promote-weak` の stdout JSON（`reflect.py:1231-1237`）は `status/promoted_keys/skipped/confirmed_idioms/corrections_human_allpj` のみを返す。次に打つべき `--apply <source_correction_id> --target-path ... --draft-line-file ...` の**雛形は印字されない**。agent が `make_source_correction_id(session_id, timestamp)`（`memory_temporal.py:339`）を自力で組む必要がある | 同上コード読了 | 2026-09-05 |
-| 6 | 文書とコードの食い違い: `correction-review.md:129`「6. 既読化: ...を `record_reviewed(...)` に渡す」は手順4（`--apply`）の**後**の手順6として書かれ、`skills/evolve/SKILL.md:256` も「①ルールに書く」→...→ `--apply` で実在確認してから」と読める語順だが、実装（上記#3）は `--promote-weak` の中で `--apply` を待たずに既読化する。**既読化のタイミングは文書の読後感と逆**（コードが正） | `sed -n '112,131p' skills/evolve/references/correction-review.md` と #3 の対比 | 2026-09-05 |
+| 1 | 2026-08-06T01:33Z〜09-05T01:33Z に `correction_review_seen.jsonl` で `decision=promoted`（pj_slug=evolve-anything）となった key は **38（重複0）**、うち `correction_applied` に到達したのは **1** | `correction_review_seen.jsonl` を `pj_slug`・`decision`・`reviewed_at` で絞り `key` を数える／`reflect_apply_events.jsonl` の `correction_applied` を `confirms_attempt_id`→`target_correction_id` で引き、`corrections.jsonl` の `weak_signal_key` と突き合わせる | 2026-09-05 |
+| 2 | 未到達37件がどの工程で止まったか | **計測中（7節の前に確定する）**。過去の会話記録から停止点を分類する | 2026-09-11 |
+| 3 | 現在 `reflect_status=promoted` のまま残っている correction（evolve-anything）は **6件**。6件とも `session_id`/`timestamp` を持ち、識別子は計算できる | `corrections.jsonl` を `project_path` と `reflect_status` で絞る（codex 巡4 の読み取り集計・頭が 2026-09-11 07:19 JST に全PJ内訳 `promoted 196 / applied 28 / skipped 36 / pending 54` を別途確認） | 2026-09-11 |
+| 4 | `--promote-weak` は昇格に成功した key だけを**即時**既読化する（`--apply` を待たない） | `skills/reflect/scripts/reflect.py:1377-1386` | 2026-09-11 |
+| 5 | `--promote-weak` の stdout は `status` と `promote_signals` の戻り値・`confirmed_idioms`・`corrections_human_allpj` だけで、`--apply` に渡す識別子を出さない。agent は `make_source_correction_id(session_id, timestamp)`（`scripts/lib/memory_temporal.py:339`）で自分で組む必要がある | `skills/reflect/scripts/reflect.py:1401-1406` | 2026-09-11 |
+| 6 | 昇格で作られる correction は `weak_signal_key` を持つ | `scripts/lib/correction_semantic/promote.py:392` | 2026-09-11 |
+| 7 | 文書と実装の食い違い2点: (a) `correction-review.md:129`（手順6）は既読化を `--apply` の後に置くが、実装は `--promote-weak` の中で即時 (b) 同じ行は「`skipped` が空でなければ既読追記しない」とバッチ全体を未既読にする書き方だが、実装は成功 key だけを既読化する（`reflect.py:1377-1386`、テスト `skills/reflect/scripts/tests/test_reflect.py:2582-2620`）。どちらもコードが正 | `sed -n '112,131p' skills/evolve/references/correction-review.md` | 2026-09-11 |
+| 8 | `--promote-weak` / `--reject-weak` / `--already-reflected-weak` の stdout のキー集合を固定するテストは無い（個別キーの存在確認だけ） | `grep -n 'promoted_weak' skills/reflect/scripts/tests/test_reflect.py`（1967/2001/2156/2676 行は個別キーの assert） | 2026-09-11 |
 
-**この5件から導かれる脱落点**: 「promote」を選んだ時点で（a）既読化は完了し二度と聞かれない、
-（b）次にすべき `--apply` コマンドの組み立て材料（`source_correction_id`）は agent 側の自力計算に
-委ねられている。（a）と（b）が重なると、agent がその場で `--apply` まで実行しない限り、
-**再提示という形での「気づき直しの機会」自体が失われる**（38件中37件で実際に起きた）。
-
-## 3. 現状の経路（訂正後）
-
-```
-SessionStart（毎回）
-  └─ daily/proposal_digest.py: build_proposal_digest / build_session_proposals
-       └─ 新規4択（反映先つき）… correction_backlog は不参照
-            └─「1 ルールに書く」選択
-                 └─ --promote-weak 実行
-                      ├─ corrections.jsonl の reflect_status を "promoted" へ（即時）
-                      └─ record_reviewed(decision="promoted") で既読化（即時・#3）
-                           → 以後 SessionStart の新規4択には二度と出ない
-                 └─（ここから先の Edit/Write→--apply は agent の自発行動に依存。
-                    stdout に次コマンドの雛形は出ない＝#5）
-                 └─ 実行されなければ reflect_status="promoted" のまま放置される
-
-/evolve-anything:evolve 実行時（ユーザーが明示的に叩いたときだけ）
-  └─ 在庫3択（correction_backlog、#514）… reflect_status=="promoted" を古い順に提示
-       └─「もう出さない」以外を選ばない限り、再度「1」を選んでも同じ脱落を繰り返しうる
-```
-
-**「promoted が終端になる」の実体**: 新規4択の再提示は既読化によって構造的に止まる
-（正しい設計・二重質問防止）一方、その先の `--apply` への導線が SessionStart 経路には無く、
-`/evolve` を明示的に叩かない限り可視化すらされない。
-
-## 4. 提案
+## 3. 提案
 
 | 案 | やること | 機構数 | 採否 |
 |---|---|---|---|
-| (C) 未反映N日の表示 | — | — | **撤回**（0節のとおり実装済み・かつ在庫3択はSessionStartに出ないため、この案単独では脱落を減らせない） |
+| (D) 昇格の直後に識別子と次の手順を出す | `reflect.py` の `--promote-weak` ハンドラ（非 dry-run）で、昇格後に `corrections.jsonl` を読み直し、`weak_signal_key` が `promoted_keys` に含まれ `reflect_status=promoted` の行から key ごとに要素を作って stdout の `promoted_records` に載せる。各要素は `{key, correction_id, source_correction_id, reason, next_step}`。`source_correction_id` は `make_source_correction_id` で作り、`resolve_source_correction_id` で1件に解決できたときだけ出す。`next_step` は `--apply <source_correction_id> --target-path <反映先> --draft-line-file <本文ファイル> [--before-content-file <反映前の全文>]` の形で、**<> は未確定の値**と明記する（そのまま実行できるコマンドとは呼ばない） | 2（stdout への追加1・案内文の書き換え1。新規ストア・新規フィールド・`promote_signals` の戻り値変更なし） | **採用** |
+| (E) SessionStart でも在庫を出す | — | — | 今回は採らない。(D) の効果を8節で見てから |
+| (D') 既読化を `--apply` 成功時へ移す | — | — | 今回は採らない。`#412 [Must]5`（`reflect.py:1377-1386` のコメント）の「昇格できた key だけを即座に既読化する」契約に触れる |
 
-文言強化（旧(A)、既に実装済みの3点セット手順文言）は単独では効かないことが2節の
-実測（38件中37件が到達しない）で示された。**雛形（下記(D)）とセットで初めて意味を持つ** ——
-手間の源（`source_correction_id` を agent が自力で組む必要がある）を消してはじめて、文言の
-「同セッション内で」という制約が実効を持つ。
+**組み立てを CLI 側に置く理由**: 昇格した correction は `weak_signal_key` を持つ（2節#6）ので、
+`promote_signals`（`scripts/lib/correction_semantic/promote.py:475-590`）の戻り値を変えずに、CLI が
+追記後のファイルから組み立てられる。戻り値を変えると、stdout ではない自動昇格
+（`scripts/lib/correction_semantic/idiom_autopromote.py:162-180`）の内部結果にも新しいキーが生え、
+#379 の裁定範囲（stdout の一時キー）を越える。
 
-| 案 | やること | 機構数 | 採否 |
-|---|---|---|---|
-| (D) `--promote-weak` の出力に **key ごとの** `--apply` 雛形コマンドをそのまま印字＋通知文言に「出力された雛形を全件実行するまでが1手順」と明記 | ①`correction_semantic/promote.py:475-590`（関数 `promote_signals`）のループ内（563-577行目付近。`_build_correction_record` が返す `correction_id`/`session_id`/`timestamp` を握っている箇所）で、昇格に成功した key ごとに `{key, correction_id, source_correction_id}` を積んだ `promoted_records` を戻り値へ追加する（`make_source_correction_id(session_id, timestamp)` で組む） ②`reflect.py` の `--promote-weak` ハンドラが `promoted_records` を stdout JSON へそのまま含める（非 dry-run のみ・dry-run では省略） ③`daily/proposal_digest.py:676` の「1 を選んだ場合」文言を「出力された雛形（`promoted_records` の各要素）を**全件**実行するまでが1手順」に書き換える | 3（`promote_signals` の戻り値拡張1・stdout反映1・文言書き換え1。いずれも既存コードへの追記で新規ストア無し） | **採用（推奨）** |
-| (E) 朝の SessionStart 経路にも在庫（`correction_backlog`）を運ぶ | `build_proposal_digest`/`build_session_proposals` に `correction_backlog` の呼び出しを追加し、SessionStart でも在庫3択を出す | 1〜（`build_session_proposals` は #443 ADR-054 PR2-b で「順位と打ち切りを分離」する複雑な合成ロジックを持つため、在庫を混ぜると打ち切り件数・`max_groups` 配分の再設計が要る） | **今回は採らない**。理由: (D) は「promote した直後」に手を打つ設計で、agentがその場で `--apply` まで完走すれば在庫レーンに落ちる前に解決する。(E) は「一度promoteされ、放置され、翌朝以降に発見する」ための保険であり、(D) が効けば必要性が下がる。(D) 導入後も脱落が残るなら次点として issue 化する |
-| (D') 既読化（`record_reviewed`）を `--promote-weak` 内から `--apply` 成功時へ移す | `reflect.py:1218` の呼び出し位置を変更 | 1（既存呼び出しの移動） | **今回は採らない**。理由: `reflect.py:1174-1218` のコメントが明示する `#412 [Must]5` の契約（「昇格できた key だけを即座に既読化しないと、TTL失効等で `promoted=0` でも既読化され二度と出ない silent failure が再発する」）に触れる。既読化を `--apply` 成功時に遅らせると、`--apply` を実行しないまま日をまたいだ場合に**同一指摘が新規4択へ再出現**するようになり、それは0節で確認した「往復は実際には起きていない」という現状の良い性質（二重質問防止）を壊す副作用がある。#412 の契約を壊さずに達成する保証が無いため、この設計では採用しない |
+**案内文**: `scripts/lib/daily/proposal_digest.py:676` の「1 を選んだ場合」を「出力の `promoted_records` の
+識別子を使い、全件 `--apply` まで進める」へ書き換える。識別子が null の key は「識別子を出せません（理由）。
+`--view` で確認してください」と表示する。
 
-**推奨: (D)。**
-理由: (D) は新規ストアを作らず、脱落点である「`--apply` に必要な `source_correction_id` を
-agentが自力で組む」という手間そのものを消す。文言追記も既存の3点セット手順を「全件実行するまでが
-1手順」という制約に強化するだけで、#412 の契約にも触れない。#379 凍結との整合は6節のとおり
-**ユーザー裁定済み（対象外）**。
+**文書の訂正（本 PR に含める）**: `skills/evolve/references/correction-review.md` 手順4・6 と
+`skills/evolve/SKILL.md:256` を実装に合わせる。(a) 既読化は `--promote-weak` の実行と同時に終わる
+(b) 既読化されるのは昇格に成功した key だけで、失敗した key は未既読のまま残る
+(c) `source_correction_id` は自分で組まず `promoted_records` の値を使う。
 
-**文書の訂正を本 PR の変更範囲に含める**: `correction-review.md:129`（手順6）と
-`SKILL.md:256` は現状「`--apply` の後に既読化」と読める語順になっているが、実装
-（`reflect.py:1218`、2節#3）は既読化を `--promote-weak` 内で即時行う。両ファイルを
-「既読化は `--promote-weak` 実行と同時に完了する。以後は出力された `promoted_records` の雛形を
-使って `--apply` まで進める」という順序へ書き換える（コードが正・文書側を訂正）。
+## 4. 凍結との整合（ユーザー裁定済み）
 
-## 5. #632 の取り込み
+`promoted_records` は `--promote-weak` の stdout JSON の一時キーで、永続化ゼロ（④-5 で検査する）。
+ユーザー裁定（2026-09-06）で #379 の凍結対象外。`promote_signals` の戻り値・永続ストア・evolve phases の
+result キーには何も足さない。
 
-本設計は #632 の裁定を待たない。(D) は `reflect_apply_events.jsonl` への記録経路
-（`--apply` コマンド自体）を変更せず、出力の**手前**（`promote_signals` の戻り値・`--promote-weak`
-の stdout）に雛形を足すだけなので、`reflect_target_kind` の集計対象（#632 の論点）とは独立。
+## 5. #632 との関係
 
-## 6. 凍結との整合（ユーザー裁定済み）
+(D) は `--apply` の記録経路を変えないため、`reflect_target_kind` の集計対象（#632）と独立。
 
-- `promoted_records`（本設計内での雛形フィールド名。#379 裁定時点の呼称は `apply_command_template`
-  だが指すものは同じ＝reflect CLI stdout の一時キー）は `promote_signals` の**戻り値**と
-  `--promote-weak` の**stdout JSON への追加キー**であり、`corrections.jsonl` 等の永続化ストアに
-  フィールドを足さない。evolve phases の永続化された result キー・新規ストア・新規 weak_signal
-  channel のいずれでもない。
-- **ユーザー裁定（2026-09-06）で凍結対象外**。reflect CLI stdout の一時キー（`--apply` 雛形。
-  裁定時の呼称 `apply_command_template`／本設計の `promoted_records`）は**永続化ゼロ**
-  （`corrections.jsonl` 等への新規フィールド追加は無い）。前例 #587（`gh issue view 587` 本文
-  「#379の新設凍結をこの1件だけ解除する（ユーザー裁定 2026-09-01）」）と同様、凍結対象範囲の
-  解釈を頭が単独で確定せずユーザーへ仰いだ結果、対象外との裁定を得た。
+## 6. 取り消し後の数え方
 
-## 7. 検証（設計時点の計画。実装フェーズで実施）
+8節の分子は「現在有効な反映」とする。取り消し（`--revoke`）を畳んだ状態は `reflect.py:143-170`
+（`_active_applied`、`fold_corrections` は `scripts/lib/reflect_fold.py:141`）が正典。一度でも反映した件数
+（取り消し前）は参考値として並記する。
 
-- **陽性**: `--promote-weak` を非 dry-run で1件実行し、stdout JSON の `promoted_records` に
-  実在する `source_correction_id`（`--apply <source_correction_id> --target-path ... --draft-line-file
-  ...` の雛形コマンドを組み立てられる値）が含まれることを確認する（④-1）。
-- **陽性対照**: 「いいえ」（`--reject-weak`）・「既に反映済み」（`--already-reflected-weak`）の
-  stdout JSON のキー構成が変わらない（`promoted_records` が追加されない）ことを確認し、経路が
-  変わっていないことを示す（④-3）。
-- **陰性試験（このチェックを通したまま壊す入力）**:
-  1. `promoted_keys` が空（全 key が昇格失敗）のとき、`promoted_records` は空リストになり、
-     存在しない `source_correction_id` を捏造しないことを要求する。
-  2. `session_id`/`timestamp` が欠落したレコードを昇格しようとしたとき、
-     `make_source_correction_id` が例外を投げずに済む場合のみ雛形を出し、組めない場合は
-     「雛形を生成できません・手動で `--view` から source_correction_id を確認してください」と
-     明示することを要求する（黙って壊れた雛形を出さない）。
-  3. `--dry-run` で `--promote-weak` を実行したとき、stdout JSON に
-     `source_correction_id` を含む `promoted_records` が**出ない**ことを要求する（④-2。
-     dry-run は corrections.jsonl に何も書かないため、`source_correction_id` は実在しない
-     id になり得る — 見せてはいけない）。
+## 7. 検証
 
-## 8. 未実測と実行契約
+- **陽性**: 非 dry-run で2 key を昇格し、`promoted_records` の key 集合が `promoted_keys` と一致し、
+  各 `source_correction_id` が `resolve_source_correction_id` で1件に解決されること（④-1・2）
+- **陽性対照**: `--reject-weak` / `--already-reflected-weak` の stdout キー集合を golden で固定し、
+  変わらないこと（④-4。golden は本 PR で新設する。現状は無い＝2節#8）
+- **陰性試験**（それぞれ、壊した実装で赤くなることを確かめる）:
+  1. 昇格成功1件＋失敗1件（期限切れ）を同時に渡す → `promoted_records` は成功の1件だけ。失敗 key は
+     表示されず既読にもならない（④-1）
+  2. 同じ `session_id`・同じ時刻（`datetime.now` を固定）の2件を1回で昇格する → 識別子が衝突するので
+     両方とも `source_correction_id` は null で `reason` が入る。衝突した識別子を出さない（④-2。
+     実データ313件の衝突は0件＝codex 巡4 の集計）
+  3. `--dry-run` → `promoted_records` が出ない（④-3）
+  4. 永続化ゼロ: 非 dry-run 後に `corrections.jsonl` の新規行・`weak_signals.jsonl`・
+     `correction_review_seen.jsonl` のキー集合を変更前と比べる。`promoted_records` を誤って
+     correction に載せる実装で赤くなること（④-5）
+- **既存テスト**: `promote_signals` の既存テストが無修正で通ること（戻り値を変えていない証拠）
 
-- **未実測**: (D) の雛形提示・文言強化により、agentが実際に同セッション内で `--apply` まで
-  完走する率が上がるかは運用しないと分からない。「手間を減らせば実行される」という因果は仮説。
-- **実装前確認事項**: `promoted_records`／`--reject-weak`・`--already-reflected-weak` の
-  stdout keyset に golden テスト（キー集合のスナップショット比較）が既にあるかを実装着手前に
-  確認する。無ければ本 PR で追加する（キー追加・削除を検出せず後方互換を壊す事故を防ぐ）。
+## 8. 計測と実行契約
+
+- **measure-now の3問**:
+  ① 今日作れるか: 停止点の分類（2節#2）を今日の会話記録から作る（計測中・本設計の確定前に反映する）
+  ② 片側だけでも今出る結論: 残っている6件は識別子を計算できる（2節#3）＝識別子が組めないことは6件の
+  止まりの原因ではない可能性がある。これは2節#2の分類で確かめる
+  ③ 既存データで代理できるか: 到達率そのものは、(D) の出力を見た agent がどう動くかに依存するため
+  過去データでは代理できない。これだけは運用後に測る
 - **実行契約**:
   - 起点: 実装 PR マージ日
-  - **再測条件（観測可能量。分母は前向き窓に固定）**: **実装 PR マージ日以降**に
-    `decision=promoted` が付いた key の件数を分母とし、そのうち同一 key 由来で
-    `reflect_apply_events.jsonl` の `correction_applied` に到達した件数を分子とする比率。
-    **マージ前・バックフィル分は分母に含めない**。
-  - **基準値（時刻を固定して凍結）**: マージ前30日窓（2026-09-05T01:33Z 時点・#631起票時）
-    = **1/38**（手動仕分け前スナップショット）。
-    **参考値（基準値には含めない）**: 2026-09-06 実測で `reflect_apply_events.jsonl` の
-    `correction_applied` は19件（`reflect_applied_at` 日付別: `2026-09-05` 18件・`2026-09-02`
-    1件）まで増えているが、この19件は2026-09-05にユーザーが手動で仕分け・`--apply` を実行した
-    結果（PJ memory `handover_20260905_pillar2_funnel`）であり、(D) 実装前の自然発生値ではない
-    ため再測条件の分母・分子いずれにも使わない。
-  - 実行者: 頭
-  - 判定者: ユーザー
-  - 期限: 実装 PR マージから30日
-  - 期限超過時: 前向き窓の比率が基準値（1/38 ≈ 2.6%）から改善していなければ、(E) または
-    (D') 代替案の再検討をユーザーへ提起する
+  - 再測条件: マージ日以降に `decision=promoted` になった key が **10件**に達した時点
+  - 観測量: そのうち現在有効な `correction_applied` に届いた件数（6節）／分母
+  - 基準値: 1/38（2026-09-05T01:33Z 時点の30日窓で凍結）
+  - 実行者: 頭／判定者: ユーザー
+  - 期限: マージから30日（10件に届かなければ、その時点の件数で判定する）
+  - 期限超過時: 基準値から改善していなければ (E) か (D') の再検討をユーザーへ提起する
 
-## Nit（issue候補・本設計の対象外）
+## 9. issue 候補（本設計の対象外・実害0件。起票は合意後）
 
-- `correction_backlog.py:70` の `age_days = (datetime.now(timezone.utc) - ts).days` は
-  `ts` が未来日時（時計ずれ等）のとき負値を返し得る。丸め処理が無い。別 issue 候補。
+codex 巡4 で見つかった既存コードの欠陥。いずれも #631 の変更では触らず、新しい経路も増やさない。
+
+- `--apply` で確認イベントの追記だけが失敗すると、status=applied のまま exit 0 になる
+  （`reflect.py:1581-1603`）。実害0件（確認イベントの無い applied 4件はすべて専用ストア導入前の
+  2026-07-01〜08-19）
+- `_rewrite_promoted` が store_write を通らず直接置き換える（`promote.py:405-430`）。既存の経路
+- `append_jsonl` が dry_run でも `open(..., "a")` で空ファイルを作る（`scripts/lib/rl_common/persistence.py:223`）。
+  実データのファイルは既に在るため実害0件
+- `scripts/lib/correction_semantic/correction_backlog.py:70` の `age_days` が未来日時で負値になる
 
 ## ブロッカー
 
