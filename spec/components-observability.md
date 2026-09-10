@@ -6,6 +6,8 @@ CLAUDE.md のサマリ表には 1 行（名前 + 一言 + 参照）だけ追記�
 
 `shrink_freeze` の例外として、#587（2026-09-01）の `reflect_apply_events.jsonl` 1件だけは
 ユーザー裁定により凍結スナップショットへの追加を認める。
+同ストアの `correction_reverted` は `reverts_applied_id` がその時点で有効な最新 applied の場合だけ
+target を取り消し状態へ遷移させる。stale・時刻曖昧は柱2 health を degraded にし、取り消しは申告分だけ反映する。
 
 | コンポーネント | 説明 |
 |----------------|------|

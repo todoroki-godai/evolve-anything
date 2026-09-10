@@ -71,6 +71,7 @@ def _hash_correction_message(base: dict) -> Optional[str]:
 @dataclass
 class FoldedCorrection:
     base: dict
+    reflect_applied_id: Optional[str] = None
     reflect_applied_at: Optional[str] = None
     reflect_target_kind: Optional[str] = None
     reflect_target_path: Optional[str] = None
@@ -78,6 +79,8 @@ class FoldedCorrection:
     correction_message_sha256: Optional[str] = None
     has_pillar2_fields: bool = False
     reconciled: bool = False
+    reverted: bool = False
+    ambiguous_revert: bool = False
 
 
 @dataclass
@@ -91,6 +94,8 @@ class FoldHealth:
     orphan_confirmations: int = 0
     duplicate_confirmations: int = 0
     hash_mismatch_count: int = 0
+    stale_reverts: int = 0
+    ambiguous_reverts: int = 0
     invalid_base_id_records: list[dict] = field(default_factory=list, repr=False)
 
 
@@ -116,6 +121,20 @@ def _applied_is_valid(event: dict) -> bool:
         validate_correction_id(event.get("correction_id"))
         and validate_correction_id(event.get("target_correction_id"))
         and validate_correction_id(event.get("confirms_attempt_id"))
+    )
+
+
+def _reverted_is_valid(event: dict) -> bool:
+    reason = event.get("revert_reason")
+    return (
+        event.get("schema_version") == 1
+        and validate_correction_id(event.get("correction_id"))
+        and validate_correction_id(event.get("reverts_applied_id"))
+        and _parse_iso8601_utc(event.get("reverted_at")) is not None
+        and isinstance(reason, str)
+        and bool(reason.strip())
+        and "\n" not in reason
+        and "\r" not in reason
     )
 
 
@@ -165,13 +184,24 @@ def fold_corrections(
     attempts_by_own_id: dict[str, dict] = {}
     attempted_by_target: dict[str, list[dict]] = {}
     applied_events: list[dict] = []
+    reverted_events: list[dict] = []
     for event in event_records:
         if not isinstance(event, dict):
             continue
         event_type = event.get("event_type")
-        if event_type not in ("correction_apply_attempted", "correction_applied"):
+        if event_type not in (
+            "correction_apply_attempted",
+            "correction_applied",
+            "correction_reverted",
+        ):
             continue
         if event.get("correction_id") in duplicate_event_ids:
+            continue
+        if event_type == "correction_reverted":
+            if not _reverted_is_valid(event):
+                health.invalid_events += 1
+                continue
+            reverted_events.append(event)
             continue
         if event.get("schema_version") != 1:
             health.unknown_schema_events += 1
@@ -210,6 +240,7 @@ def fold_corrections(
         confirmation_count[attempt_id] = confirmation_count.get(attempt_id, 0) + 1
 
     applied_by_target: dict[str, list[tuple[dict, dict]]] = {}
+    applied_by_own_id: dict[str, tuple[dict, dict]] = {}
     for event in applied_events:
         attempt_id = event["confirms_attempt_id"]
         if confirmation_count[attempt_id] > 1:
@@ -222,20 +253,9 @@ def fold_corrections(
         if attempt.get("target_correction_id") != event.get("target_correction_id"):
             health.orphan_confirmations += 1
             continue
-        applied_by_target.setdefault(event["target_correction_id"], []).append(
-            (event, attempt)
-        )
-
-    def latest_pair(pairs: list[tuple[dict, dict]]) -> Optional[tuple[dict, dict]]:
-        if not pairs:
-            return None
-        return max(
-            pairs,
-            key=lambda pair: (
-                _parse_iso8601_utc(pair[0].get("reflect_applied_at")),
-                pair[0].get("correction_id", ""),
-            ),
-        )
+        pair = (event, attempt)
+        applied_by_target.setdefault(event["target_correction_id"], []).append(pair)
+        applied_by_own_id[event["correction_id"]] = pair
 
     def latest_attempt(events: list[dict]) -> Optional[dict]:
         if not events:
@@ -248,24 +268,102 @@ def fold_corrections(
             ),
         )
 
-    for target_id, pairs in applied_by_target.items():
-        if target_id not in folded_by_id:
-            latest = latest_pair(pairs)
-            timestamp = (
-                _parse_iso8601_utc(latest[0].get("reflect_applied_at"))
-                if latest
-                else None
+    reverts_by_target: dict[str, list[dict]] = {}
+    for event in reverted_events:
+        pair = applied_by_own_id.get(event["reverts_applied_id"])
+        if pair is None:
+            health.stale_reverts += 1
+            continue
+        target_id = pair[0]["target_correction_id"]
+        reverts_by_target.setdefault(target_id, []).append(event)
+
+    active_by_target: dict[str, tuple[dict, dict]] = {}
+    reverted_targets: set[str] = set()
+    ambiguous_targets: set[str] = set()
+    for target_id in applied_by_target.keys() | reverts_by_target.keys():
+        pairs = applied_by_target.get(target_id, [])
+        usable_reverts = []
+        ambiguous_reverts = []
+        for event in reverts_by_target.get(target_id, []):
+            reverted_at = _parse_iso8601_utc(event.get("reverted_at"))
+            referenced = applied_by_own_id[event["reverts_applied_id"]][0]
+            referenced_at = _parse_iso8601_utc(referenced.get("reflect_applied_at"))
+            if reverted_at <= referenced_at:
+                ambiguous_reverts.append(event)
+                continue
+            usable_reverts.append(event)
+
+        unresolved_reverts = [
+            event
+            for event in ambiguous_reverts
+            if not any(
+                pair[0].get("correction_id") != event.get("reverts_applied_id")
+                and _parse_iso8601_utc(pair[0].get("reflect_applied_at"))
+                > _parse_iso8601_utc(event.get("reverted_at"))
+                for pair in pairs
             )
+        ]
+        if unresolved_reverts:
+            health.ambiguous_reverts += len(unresolved_reverts)
+            ambiguous_targets.add(target_id)
+
+        transitions = [
+            (
+                _parse_iso8601_utc(pair[0].get("reflect_applied_at")),
+                pair[0].get("correction_id", ""),
+                "applied",
+                pair,
+            )
+            for pair in pairs
+        ]
+        transitions.extend(
+            (
+                _parse_iso8601_utc(event.get("reverted_at")),
+                event.get("correction_id", ""),
+                "reverted",
+                event,
+            )
+            for event in usable_reverts
+        )
+        current: Optional[tuple[dict, dict]] = None
+        for _, _, transition_type, payload in sorted(
+            transitions, key=lambda transition: transition[:3]
+        ):
+            if transition_type == "applied":
+                current = payload
+                continue
+            if (
+                current is None
+                or current[0].get("correction_id")
+                != payload.get("reverts_applied_id")
+            ):
+                health.stale_reverts += 1
+                continue
+            current = None
+            reverted_targets.add(target_id)
+        if current is not None:
+            active_by_target[target_id] = current
+
+    for target_id in reverted_targets - active_by_target.keys() - ambiguous_targets:
+        if target_id in folded_by_id:
+            folded_by_id[target_id].reverted = True
+    for target_id in ambiguous_targets:
+        if target_id in folded_by_id:
+            folded_by_id[target_id].ambiguous_revert = True
+
+    for target_id, pair in active_by_target.items():
+        if target_id in ambiguous_targets:
+            continue
+        if target_id not in folded_by_id:
+            timestamp = _parse_iso8601_utc(pair[0].get("reflect_applied_at"))
             if timestamp is not None and (now - timestamp).days > decay_grace_days:
                 health.orphan_events_expected += 1
             else:
                 health.orphan_events_unexpected += 1
             continue
-        pair = latest_pair(pairs)
-        if pair is None:
-            continue
         applied_event, attempt_event = pair
         folded = folded_by_id[target_id]
+        folded.reflect_applied_id = applied_event.get("correction_id")
         folded.reflect_applied_at = applied_event.get("reflect_applied_at")
         folded.reflect_target_kind = _read_reflect_target_kind(attempt_event)
         folded.reflect_target_path = attempt_event.get("reflect_target_path")
@@ -281,6 +379,8 @@ def fold_corrections(
             continue
         folded = folded_by_id[target_id]
         if folded.has_pillar2_fields:
+            continue
+        if target_id in reverted_targets or target_id in ambiguous_targets:
             continue
         if folded.base.get("reflect_status") != "applied":
             continue

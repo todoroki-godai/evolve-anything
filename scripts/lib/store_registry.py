@@ -128,7 +128,7 @@ _DECLARATIONS: List[StoreDeclaration] = [
     ),
     StoreDeclaration(
         name="reflect_apply_events.jsonl",
-        writer="skills/reflect/scripts/reflect.py --apply/--skip ハンドラ（柱2反映イベント）",
+        writer="skills/reflect/scripts/reflect.py --apply/--skip/--revoke ハンドラ（柱2反映イベント）",
         reader="scripts/lib/reflect_fold.py・scripts/lib/pillar2_metrics.py",
         retention="permanent",
         classification="raw_event",

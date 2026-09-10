@@ -14,6 +14,7 @@ NOW = datetime(2026, 9, 1, tzinfo=timezone.utc)
 BASE_ID = "a" * 32
 ATTEMPT_ID = "b" * 32
 APPLIED_ID = "c" * 32
+REVERT_ID = "f" * 32
 BASELINE_IDS = {
     "411114e30ec74a1aacf14a1c0572daff",
     "c25c83983e1f4a0a98b11133a02cab66",
@@ -64,6 +65,19 @@ def _events(applied_at="2026-08-31T10:01:00+00:00"):
     ]
 
 
+def _revert(**overrides):
+    event = {
+        "correction_id": REVERT_ID,
+        "schema_version": 1,
+        "event_type": "correction_reverted",
+        "reverts_applied_id": APPLIED_ID,
+        "reverted_at": "2026-08-31T10:02:00+00:00",
+        "revert_reason": "The reflected change was reverted",
+    }
+    event.update(overrides)
+    return event
+
+
 def _count(tmp_path, bases, events):
     corrections = tmp_path / "corrections.jsonl"
     event_path = tmp_path / "reflect_apply_events.jsonl"
@@ -86,7 +100,117 @@ def test_count_applied_reflections_uses_reflect_applied_at(tmp_path):
     fresh = _count(tmp_path, [_base(timestamp="2026-01-01T00:00:00+00:00")], _events())
     assert old["count"] == 0
     assert fresh["count"] == 1
+    assert fresh["applied_list"][0]["applied_id"] == APPLIED_ID
     assert fresh["applied_list"][0]["reflect_applied_at"] == "2026-08-31T10:01:00+00:00"
+
+
+def test_reverted_reflection_is_removed_without_degrading_health(tmp_path):
+    result = _count(tmp_path, [_base()], _events() + [_revert()])
+
+    assert result["count"] == 0
+    assert result["applied_list"] == []
+    assert result["health"]["stale_reverts"] == 0
+    assert result["health"]["ambiguous_reverts"] == 0
+    assert result["measured"] is True
+
+
+def test_reverted_row_reduces_count_without_becoming_legacy_unverified(tmp_path):
+    second_base = _base(
+        correction_id="1" * 32,
+        extracted_learning="Keep the measured row",
+    )
+    second_attempt = {
+        **_events()[0],
+        "correction_id": "2" * 32,
+        "target_correction_id": second_base["correction_id"],
+        "reflect_draft_line": second_base["extracted_learning"],
+        "correction_message_sha256": _hash_correction_message(second_base),
+    }
+    second_applied = {
+        **_events()[1],
+        "correction_id": "3" * 32,
+        "target_correction_id": second_base["correction_id"],
+        "confirms_attempt_id": second_attempt["correction_id"],
+    }
+    active = _count(
+        tmp_path,
+        [_base(), second_base],
+        _events() + [second_attempt, second_applied],
+    )
+    revoked = _count(
+        tmp_path,
+        [_base(), second_base],
+        _events() + [second_attempt, second_applied, _revert()],
+    )
+
+    assert active["count"] == 2
+    assert revoked["count"] == 1
+    assert revoked["legacy_unverified_count"] == 0
+    assert revoked["measured"] is True
+
+
+def test_new_applied_after_reverting_latest_is_counted_without_degradation(tmp_path):
+    events = _events()
+    events.extend(
+        [
+            {
+                **events[0],
+                "correction_id": "d" * 32,
+                "attempted_at": "2026-08-31T11:00:00+00:00",
+            },
+            {
+                **events[1],
+                "correction_id": "e" * 32,
+                "confirms_attempt_id": "d" * 32,
+                "reflect_applied_at": "2026-08-31T11:01:00+00:00",
+            },
+            _revert(
+                reverts_applied_id="e" * 32,
+                reverted_at="2026-08-31T11:02:00+00:00",
+            ),
+            {
+                **events[0],
+                "correction_id": "1" * 32,
+                "attempted_at": "2026-08-31T12:00:00+00:00",
+            },
+            {
+                **events[1],
+                "correction_id": "2" * 32,
+                "confirms_attempt_id": "1" * 32,
+                "reflect_applied_at": "2026-08-31T12:01:00+00:00",
+            },
+        ]
+    )
+
+    result = _count(tmp_path, [_base()], events)
+
+    assert result["count"] == 1
+    assert result["applied_list"][0]["applied_id"] == "2" * 32
+    assert result["health"]["degraded"] is False
+    assert result["measured"] is True
+
+
+@pytest.mark.parametrize(
+    ("event", "health_key"),
+    [
+        pytest.param(
+            _revert(reverts_applied_id="1" * 32),
+            "stale_reverts",
+            id="stale",
+        ),
+        pytest.param(
+            _revert(reverted_at="2026-08-31T10:01:00+00:00"),
+            "ambiguous_reverts",
+            id="ambiguous",
+        ),
+    ],
+)
+def test_revert_health_degrades_measurement(tmp_path, event, health_key):
+    result = _count(tmp_path, [_base()], _events() + [event])
+
+    assert result["health"][health_key] == 1
+    assert result["health"]["degraded"] is True
+    assert result["measured"] is False
 
 
 def test_invalidated_excluded_from_count(tmp_path):

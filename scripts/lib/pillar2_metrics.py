@@ -156,6 +156,15 @@ def _count_scoped_invalid_base_ids(fold_health, project_root: Path) -> dict[str,
     return counts
 
 
+def pillar2_count_key(folded_correction) -> tuple:
+    """柱2の1件を定義する、反映先と正規化済み行の共有キー。"""
+    return (
+        folded_correction.reflect_target_kind,
+        folded_correction.reflect_target_path,
+        folded_correction.reflect_draft_line.strip(),
+    )
+
+
 def count_applied_reflections(
     project_root: Path,
     *,
@@ -218,6 +227,8 @@ def count_applied_reflections(
             continue
         if folded_correction.base.get("reflect_status") != "applied":
             continue
+        if folded_correction.reverted or folded_correction.ambiguous_revert:
+            continue
         if not folded_correction.has_pillar2_fields:
             if (
                 (
@@ -240,20 +251,21 @@ def count_applied_reflections(
 
     groups: dict[tuple, list] = {}
     for folded_correction in eligible:
-        key = (
-            folded_correction.reflect_target_kind,
-            folded_correction.reflect_target_path,
-            folded_correction.reflect_draft_line.strip(),
-        )
+        key = pillar2_count_key(folded_correction)
         groups.setdefault(key, []).append(folded_correction)
 
     applied_list = [
         {
             "target_kind": key[0],
             "target_path": key[1],
+            "applied_id": min(
+                grouped_corrections,
+                key=lambda item: _parse_iso8601_utc(item.reflect_applied_at),
+            ).reflect_applied_id,
             "reflect_applied_at": min(
-                item.reflect_applied_at for item in grouped_corrections
-            ),
+                grouped_corrections,
+                key=lambda item: _parse_iso8601_utc(item.reflect_applied_at),
+            ).reflect_applied_at,
             "reconciled": any(item.reconciled for item in grouped_corrections),
         }
         for key, grouped_corrections in groups.items()
@@ -273,6 +285,8 @@ def count_applied_reflections(
         or fold_health.orphan_confirmations > 0
         or fold_health.duplicate_confirmations > 0
         or fold_health.hash_mismatch_count > 0
+        or fold_health.stale_reverts > 0
+        or fold_health.ambiguous_reverts > 0
         or legacy_unverified_count > 0
         or invalid_base_id_applied_row_count > 0
     )
@@ -304,6 +318,8 @@ def count_applied_reflections(
             "orphan_confirmations": fold_health.orphan_confirmations,
             "duplicate_confirmations": fold_health.duplicate_confirmations,
             "hash_mismatch_count": fold_health.hash_mismatch_count,
+            "stale_reverts": fold_health.stale_reverts,
+            "ambiguous_reverts": fold_health.ambiguous_reverts,
             "invalid_base_id_applied_row_count": invalid_base_id_applied_row_count,
             "invalid_base_id_non_applied_row_count": invalid_base_id_non_applied_row_count,
             **invalid_base_id_counts,

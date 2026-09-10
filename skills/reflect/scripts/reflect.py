@@ -26,7 +26,8 @@ from reflect_apply_match import (
     classify_reflect_target_kind,
     normalize_reflect_target_path,
 )
-from reflect_fold import _hash_correction_message
+from reflect_fold import _hash_correction_message, _parse_iso8601_utc, fold_corrections
+from pillar2_metrics import pillar2_count_key
 from reflect_utils import (
     read_all_memory_entries,
     read_auto_memory,
@@ -43,6 +44,7 @@ from rl_common import (
     cleanup_false_positives,
     new_correction_id,
     resolve_correction_id,
+    validate_correction_id,
 )
 from rl_common import persistence
 from rl_common.persistence import split_corrections_lines
@@ -136,6 +138,124 @@ def load_corrections(filepath: Path = CORRECTIONS_FILE) -> list[dict]:
         indexed.record
         for indexed in persistence.iter_indexed_lines(filepath.read_text(encoding="utf-8"))
     ]
+
+
+def _active_applied(corrections_file: Path, event_records: list[dict]) -> list[dict]:
+    """柱2 reducer が有効と判定した applied を取り消し操作向けに返す。"""
+    folded, _ = fold_corrections(load_corrections(corrections_file), event_records)
+    active = [
+        item
+        for item in folded
+        if item.has_pillar2_fields and item.reflect_applied_id is not None
+    ]
+    group_counts = Counter(pillar2_count_key(item) for item in active)
+    return [
+        {
+            "applied_id": item.reflect_applied_id,
+            "target_path": item.reflect_target_path,
+            "reflect_applied_at": item.reflect_applied_at,
+            "other_active_applied_count": group_counts[pillar2_count_key(item)] - 1,
+        }
+        for item in active
+    ]
+
+
+def list_applied(corrections_file: Path) -> dict:
+    """有効な柱2 applied をストアへ書かずに列挙する。"""
+    import rl_common
+
+    events_file = Path(rl_common.DATA_DIR) / "reflect_apply_events.jsonl"
+    return {
+        "status": "applied-list",
+        "applied": _active_applied(corrections_file, load_corrections(events_file)),
+    }
+
+
+def revoke_applied(
+    corrections_file: Path,
+    applied_id: str,
+    reason: str,
+    *,
+    dry_run: bool = False,
+) -> dict:
+    """イベントストアの flock 内で CAS を再確認して取り消しを追記する。"""
+    from rl_common.store_write import guard_problem
+
+    if not validate_correction_id(applied_id):
+        return {"status": "invalid-request", "reason": "applied_id が不正です"}
+    if not isinstance(reason, str) or not reason.strip() or "\n" in reason or "\r" in reason:
+        return {"status": "invalid-request", "reason": "reason は空でない1行が必要です"}
+    if not persistence._HAVE_FCNTL:
+        return {"status": "unsupported-platform", "reason": fcntl_unsupported_reason()}
+    problem = guard_problem("reflect_apply_events.jsonl")
+    if problem is not None:
+        return {"status": "store-rejected", "reason": problem}
+    event = {
+        "correction_id": new_correction_id(),
+        "schema_version": 1,
+        "event_type": "correction_reverted",
+        "reverts_applied_id": applied_id,
+        "revert_reason": reason,
+    }
+    decision = {
+        "eligible": False,
+        "reason": "applied は現在の有効な最新ではありません",
+        "other_active_applied_count": 0,
+    }
+
+    def should_block(existing: list[dict]) -> bool:
+        if any(
+            isinstance(row, dict)
+            and row.get("correction_id") == event["correction_id"]
+            for row in existing
+        ):
+            decision["reason"] = "生成した event ID が既存行と重複しました"
+            return True
+        active = {
+            item["applied_id"]: item
+            for item in _active_applied(corrections_file, existing)
+        }
+        selected = active.get(applied_id)
+        if selected is None:
+            return True
+        reverted_at = datetime.now(timezone.utc)
+        applied_at = _parse_iso8601_utc(selected["reflect_applied_at"])
+        if applied_at is None or reverted_at <= applied_at:
+            decision["reason"] = "applied と revoke の時刻順を確定できません"
+            return True
+        event["reverted_at"] = reverted_at.isoformat()
+        decision["eligible"] = True
+        decision["other_active_applied_count"] = selected[
+            "other_active_applied_count"
+        ]
+        return False
+
+    result = append_unique_record(
+        "reflect_apply_events.jsonl",
+        event,
+        block_existing=should_block,
+        dry_run=dry_run,
+    )
+    if result.status in ("appended", "dry_run") and decision["eligible"]:
+        response = {
+            "status": "revoked" if result.status == "appended" else "dry_run",
+            "reverts_applied_id": applied_id,
+            "revert_event_id": event["correction_id"],
+        }
+        other_count = decision["other_active_applied_count"]
+        if other_count > 0:
+            response["other_active_applied_count"] = other_count
+            response["count_note"] = (
+                f"同じ行を他 {other_count} 件が保持しているため件数は変わりません"
+            )
+        return response
+    return {
+        "status": "retry-required",
+        "reverts_applied_id": applied_id,
+        "reason": (
+            decision["reason"] if result.status == "duplicate_id" else result.reason
+        ),
+    }
 
 
 @dataclass(frozen=True)
@@ -1041,11 +1161,12 @@ def main():
     parser.add_argument("--promote-episodic", action="store_true", help="指定 correction を episodic 層に昇格")
     parser.add_argument("--session-id", type=str, default=None, help="--promote-episodic: 昇格する correction の session_id")
     parser.add_argument("--timestamp", type=str, default=None, help="--promote-episodic: 昇格する correction の timestamp")
-    parser.add_argument("--apply", type=str, default=None, metavar="SOURCE_CORRECTION_ID",
+    _pillar2_action_group = parser.add_mutually_exclusive_group()
+    _pillar2_action_group.add_argument("--apply", type=str, default=None, metavar="SOURCE_CORRECTION_ID",
                         help="#475 §6.1: 指定 correction（make_source_correction_id 形式の"
                              "source_correction_id）を、--target-path に該当行が実在するか"
                              "確認してから applied にする。1呼び出し=1 correction 固定")
-    parser.add_argument("--skip", type=str, default=None, metavar="SOURCE_CORRECTION_ID",
+    _pillar2_action_group.add_argument("--skip", type=str, default=None, metavar="SOURCE_CORRECTION_ID",
                         help="#514: 指定 correction（make_source_correction_id 形式の"
                              "source_correction_id）を skipped にする（修正在庫の『もう出さない』）。"
                              "--apply と同じ --dry-run 規約。既に applied 済みのレコードは上書きしない")
@@ -1087,6 +1208,24 @@ def main():
                              "corrections.jsonl に reflect_status=promoted の新規レコードを"
                              "作るため、#514 修正在庫レーンに再提示バグが引っ越す。ここでは"
                              "record_reviewed のみ呼ぶ）")
+    _pillar2_action_group.add_argument(
+        "--list-applied",
+        action="store_true",
+        help="現在有効な柱2 applied を ID・反映先・反映日時つきで表示する（read-only）",
+    )
+    _pillar2_action_group.add_argument(
+        "--revoke",
+        type=str,
+        default=None,
+        metavar="APPLIED_ID",
+        help="現在有効な最新の correction_applied を取り消す",
+    )
+    parser.add_argument(
+        "--reason",
+        type=str,
+        default=None,
+        help="--revoke の監査理由（空でない1行）",
+    )
     parser.add_argument("--pj", type=str, default=None,
                         help="--promote-weak/--reject-weak/--already-reflected-weak: "
                              "既読記録の pj_slug（未指定は現在の PJ を"
@@ -1109,11 +1248,40 @@ def main():
                              "固定帰属を避けて origin PJ の絶対パスを渡す用途（#412 [Must]4）")
     args = parser.parse_args()
 
+    weak_actions = [
+        ("--promote-weak", args.promote_weak),
+        ("--reject-weak", args.reject_weak),
+        ("--already-reflected-weak", args.already_reflected_weak),
+    ]
+    pillar2_read_or_revoke = (
+        "--revoke" if args.revoke is not None else "--list-applied"
+        if args.list_applied
+        else None
+    )
+    for weak_flag, value in weak_actions:
+        if pillar2_read_or_revoke is not None and value is not None:
+            parser.error(
+                f"argument {weak_flag}: not allowed with argument {pillar2_read_or_revoke}"
+            )
+
     corrections_file = Path(args.corrections_file) if args.corrections_file else CORRECTIONS_FILE
     current_project = args.project_dir or os.environ.get("CLAUDE_PROJECT_DIR")
     project_root = Path(current_project) if current_project else Path.cwd()
     weak_signals_file = Path(args.weak_signals_file) if args.weak_signals_file else None
     idioms_file = Path(args.idioms_file) if args.idioms_file else None
+
+    if args.list_applied:
+        print(json.dumps(list_applied(corrections_file), ensure_ascii=False, indent=2))
+        return
+
+    if args.revoke is not None:
+        result = revoke_applied(
+            corrections_file, args.revoke, args.reason, dry_run=args.dry_run
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        if result.get("status") not in ("revoked", "dry_run"):
+            sys.exit(1)
+        return
 
     if args.resolve_source_id is not None:
         result = resolve_source_correction_id(
