@@ -175,6 +175,7 @@ def append_unique_record(
 
     rl_common.ensure_data_dir()
     filepath = rl_common.DATA_DIR / store_name
+
     def should_block(existing: list[dict]) -> bool:
         return has_duplicate_id(existing, correction_id) or bool(
             block_existing is not None and block_existing(existing)

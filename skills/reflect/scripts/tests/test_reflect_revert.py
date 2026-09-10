@@ -105,6 +105,45 @@ def test_list_applied_is_read_only_and_includes_revoke_identifiers(tmp_path, cap
     assert not events.with_name(events.name + ".lock").exists()
 
 
+def test_list_applied_does_not_truncate_revoke_candidates(tmp_path, capsys):
+    corrections = tmp_path / "corrections.jsonl"
+    events = rl_common.DATA_DIR / "reflect_apply_events.jsonl"
+    events.parent.mkdir(parents=True, exist_ok=True)
+    bases = []
+    event_rows = []
+    for index in range(11):
+        base = {
+            **_base(),
+            "correction_id": f"{index + 1:032x}",
+            "extracted_learning": f"Learning {index}",
+        }
+        attempt_id = f"{index + 101:032x}"
+        bases.append(base)
+        event_rows.extend(
+            [
+                {
+                    **_attempt(attempt_id),
+                    "target_correction_id": base["correction_id"],
+                    "reflect_draft_line": base["extracted_learning"],
+                    "correction_message_sha256": _hash_correction_message(base),
+                },
+                {
+                    **_applied(
+                        f"{index + 201:032x}", attempt_id=attempt_id
+                    ),
+                    "target_correction_id": base["correction_id"],
+                },
+            ]
+        )
+    _write(corrections, bases)
+    _write(events, event_rows)
+
+    _run_cli("--list-applied", "--corrections-file", str(corrections))
+
+    output = json.loads(capsys.readouterr().out)
+    assert len(output["applied"]) == 11
+
+
 def test_revoke_appends_event_and_removes_applied_from_list(tmp_path, capsys):
     corrections, events = _seed(tmp_path)
 
@@ -229,7 +268,7 @@ def test_revoke_is_mutually_exclusive_with_existing_write_actions(
     assert "not allowed with argument --revoke" in capsys.readouterr().err
 
 
-@pytest.mark.parametrize("reason", ["", "line one\nline two"])
+@pytest.mark.parametrize("reason", ["", "   ", "line one\nline two"])
 def test_revoke_requires_nonempty_single_line_reason(tmp_path, capsys, reason):
     corrections, events = _seed(tmp_path)
     before = events.read_bytes()

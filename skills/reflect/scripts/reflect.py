@@ -166,7 +166,6 @@ def list_applied(corrections_file: Path) -> dict:
 
 def revoke_applied(corrections_file: Path, applied_id: str, reason: str) -> dict:
     """イベントストアの flock 内で CAS を再確認して取り消しを追記する。"""
-    import rl_common
     from rl_common.store_write import guard_problem
 
     if not validate_correction_id(applied_id):
