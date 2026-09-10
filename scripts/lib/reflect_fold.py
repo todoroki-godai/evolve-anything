@@ -257,17 +257,6 @@ def fold_corrections(
         applied_by_target.setdefault(event["target_correction_id"], []).append(pair)
         applied_by_own_id[event["correction_id"]] = pair
 
-    def latest_pair(pairs: list[tuple[dict, dict]]) -> Optional[tuple[dict, dict]]:
-        if not pairs:
-            return None
-        return max(
-            pairs,
-            key=lambda pair: (
-                _parse_iso8601_utc(pair[0].get("reflect_applied_at")),
-                pair[0].get("correction_id", ""),
-            ),
-        )
-
     def latest_attempt(events: list[dict]) -> Optional[dict]:
         if not events:
             return None
