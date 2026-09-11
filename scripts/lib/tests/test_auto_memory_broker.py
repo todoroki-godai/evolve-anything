@@ -1080,8 +1080,15 @@ def test_drain_report_template_prints_every_counter(tmp_memory_dir, tmp_data_dir
     doc = _DRAIN_DOC.read_text(encoding="utf-8")
     start = doc.index('print("auto-memory: "')
     snippet = doc[start:doc.index("\n```", start)]
+    # 値も見る。全部 0 の戻り値で検査すると「常に 0 を印字するテンプレ」と区別できない
+    probe = dict(summary)
+    expected = {k: i + 1 for i, k in enumerate(counters)}
+    probe.update(expected)
+    probe["contamination_hits"] = [{"pattern_id": "probe_pattern", "category": "x", "line": 1}]
     printed: list = []
-    exec(snippet, {"print": printed.append, "summary": summary})  # noqa: S102
+    exec(snippet, {"print": printed.append, "summary": probe})  # noqa: S102
     line = printed[0]
-    missing = [k for k in counters if f"{k}=" not in line]
-    assert not missing, f"drain 報告テンプレの出力に出ていない件数: {missing}（出力: {line}）"
+    parsed = dict(tok.split("=", 1) for tok in line.split() if "=" in tok)
+    for k, v in expected.items():
+        assert parsed.get(k) == str(v), f"件数 {k} が出力と一致しない（出力: {line}）"
+    assert "probe_pattern" in parsed.get("hits", ""), f"止めた理由が出ていない（出力: {line}）"
