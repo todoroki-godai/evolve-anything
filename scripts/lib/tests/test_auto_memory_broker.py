@@ -1048,3 +1048,29 @@ def test_enqueue_all_matching_no_stderr_noise(tmp_data_dir, capsys):
 # purge_mismatched_pending のテストは scripts/lib/tests/test_auto_memory_purge.py
 # （auto_memory_purge.py・#206）に分離済み。auto_memory_broker.py の 800 行バジェット
 # 超過を避けるため、purge 機能は新規モジュールとして切り出した。
+
+
+# ─── drain 報告テンプレとの同期（#550） ────────────────────────────────────
+
+_DRAIN_DOC = (
+    Path(__file__).resolve().parents[3]
+    / "skills" / "evolve" / "references" / "auto-memory-drain.md"
+)
+
+
+def test_drain_report_template_prints_every_counter(tmp_memory_dir, tmp_data_dir):
+    """ingest の戻り値のうち件数は、drain 報告テンプレに全部出る。
+
+    出ない件数があると「起きていない」と「記録していない」を区別できなくなる（#550）。
+    キーの一覧をテスト側に書き写さず、実際の戻り値から取る（写した一覧は腐る）。
+    件数の判定は「一覧（list/dict）でない値」にする。int 限定にすると、
+    型が str に変わった瞬間その件数が静かに検査の外へ落ちる（実測で緑になった）。
+    """
+    summary = amb.ingest_memory_results(
+        [], [], {}, tmp_memory_dir, tmp_memory_dir / "MEMORY.md", tmp_data_dir,
+    )
+    counters = sorted(k for k, v in summary.items() if not isinstance(v, (list, dict)))
+    assert counters, "件数キーが1つも無い（戻り値の形が変わった）"
+    doc = _DRAIN_DOC.read_text(encoding="utf-8")
+    missing = [k for k in counters if f"summary['{k}']" not in doc]
+    assert not missing, f"drain 報告テンプレに出ていない件数: {missing}"

@@ -43,9 +43,14 @@ summary = auto_memory_broker.ingest_memory_results(
 )
 print(f"auto-memory: stored={summary['stored']} blocked={summary['blocked']} "
       f"skipped={summary['skipped']} contaminated={summary['contaminated']} "
+      f"transition_checked={summary['transition_checked']} "
+      f"transition_rejected={summary['transition_rejected']} "
       f"guard_unavailable={summary['guard_unavailable']}")
 ```
 
 - ingest が生成後ゲート（belief_entropy）を内蔵: ソースを落とした要約は書込なしで `belief_blocks.jsonl` に記録（blocked にカウント）
 - 空応答（skipped）はキューに残り次回 drain で再試行される。stored/blocked は消化される
-- 結果（stored/blocked/skipped/contaminated/guard_unavailable）を Report に報告する
+- 結果（stored/blocked/skipped/contaminated/transition_rejected/guard_unavailable）を Report に報告する。
+  **0 件でも省略しない**（黙って消えると「起きていない」と「記録していない」が区別できなくなる・#550）。
+  `contaminated` は書込境界の guard による reject、`transition_rejected` は同名エントリの上書きが
+  決定論の遷移検証で止められた件数（`auto_memory_broker.ingest_memory_results` の戻り値が単一ソース）
