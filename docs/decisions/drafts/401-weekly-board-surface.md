@@ -44,8 +44,10 @@ queue・judge・proposal の通知にも影響する（この性質は本設計�
    - **黙って消えない（fail-visible）**: SessionStart は次のいずれかで Tier1 の1行 health
      「戦果ボードの要約を読めません（理由）」を出す — (a) `evolve-queue.json` が実在するのに
      `_resolve_queue_data()` の結果が dict でない（`[]`/`null`・import 失敗で `absent` になった場合を含む。
-     実在の判定は `Path.exists()`）(b) `weekly_board` が dict でない、または `measured: False`
-     （理由は `reason` を出す）(c) 新しい収集関数の中で例外が出た（既存の `try/except` で `None` を返さず、
+     実在の判定は `Path.exists()`）(b) `weekly_board` が dict でない、`measured: False`
+     （理由は `reason` を出す）、または `week_id`/`computed_on` が str でない（`{"week_id": 今週}` のような
+     欠落を含む）。**この health 判定は `computed_on == 今日` の非表示判定より先に行う**（日付比較を
+     `.get()` で済ませて欠落を沈黙させない）(c) 新しい収集関数の中で例外が出た（既存の `try/except` で `None` を返さず、
      この health を返す）。ファイル自体が無いときは何も出さない（既存の absent と同じ）
    - **読取障害では `week_id` を進めない（M1）**: 3値のうち**いずれか1つでも読取障害
      （後述の各 `measured` フィールドが False）**なら `weekly_board` を
