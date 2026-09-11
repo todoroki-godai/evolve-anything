@@ -28,6 +28,7 @@ from .collectors import (  # noqa: F401
     _build_session_proposal_output,
     _judge_cap_digest,
     _build_judge_cap_output,
+    _build_weekly_board_output,
     _build_icebox_output,
     _build_live_checkout_output,
     _pj_slug,

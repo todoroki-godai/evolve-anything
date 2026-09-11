@@ -38,6 +38,7 @@ from session_notify import (  # noqa: E402
     _build_evolve_queue_output,
     _build_session_proposal_output,
     _build_judge_cap_output,
+    _build_weekly_board_output,
     _build_icebox_output,
     _build_live_checkout_output,
     _merge_notification_text,
@@ -205,7 +206,7 @@ def _collect_notifications(stack: "ExitStack") -> "tuple[list[NotificationItem],
         if item is not None:
             items.append(item)
 
-    # evolve-queue.json の env ガード + read を1回だけ行い、以下3箇所に使い回す（#412 [Should]6）。
+    # evolve-queue.json の env ガード + read を1回だけ行い、以下4箇所に使い回す（#412 [Should]6）。
     shared_queue = _call_builder(_resolve_queue_data) or (None, None, "absent")
 
     queue_item = _call_builder(_build_evolve_queue_output, shared_queue)
@@ -224,6 +225,10 @@ def _collect_notifications(stack: "ExitStack") -> "tuple[list[NotificationItem],
     judge_item = _call_builder(_build_judge_cap_output, shared_queue)
     if judge_item is not None:
         items.append(judge_item)
+
+    weekly_item = _call_builder(_build_weekly_board_output, shared_queue)
+    if weekly_item is not None:
+        items.append(weekly_item)
 
     icebox_item = _call_builder(_build_icebox_output, stack)
     if icebox_item is not None:
