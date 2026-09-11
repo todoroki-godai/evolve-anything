@@ -20,22 +20,33 @@ barrier）の見落としのみを脅威とする。悪意ある第三者は数�
 （捕捉率）の表示／y/n 判断 UI／複数 PJ 横断表示（値は evolve-anything 本体固定）／push 型通知／
 表示先を SessionStart 以外に広げること／SessionStart 側での集計・書込み／**手動実行と自動実行が
 同日に重なった場合の表示ズレ（M3）**: `evolve-daily-run` が同日に複数回（例: launchd の定時実行
-と手動デバッグ実行）走っても、後勝ちで `weekly_board` が上書きされるだけで、鍵や排他制御は足さ
-ない。runner の入口に排他は無く保存も非 atomic なので、2つの実行が重なると後勝ちで上書きされる
-（`bin/evolve-daily-run:88-100,178-199`・codex 巡2 M3）。起こりうる被害は「要約が1日余計に出る／
-1日ずれる」表示だけで、柱2/3/4の元データ（各ストア）は書き換えないため失われない。現在の発生件数: **0件**
+と手動デバッグ実行）走っても、鍵や排他制御は足さない。runner の入口に排他は無く、`evolve-queue.json`
+は**ファイル全体が非 atomic に**書かれる（`bin/evolve-daily-run:88-100,178-199`・codex 巡2 M3/巡3）。
+重なると、古い payload での上書きや JSON の破損が起こり得て、`weekly_board` だけでなく同じファイルを読む
+queue・judge・proposal の通知にも影響する（この性質は本設計の前から在る）。本設計が足す3値の集計は
+各ストアを**読むだけ**で書き換えないので、元データは失われない（runner の他工程＝ingest 等の書込みは
+本設計の範囲外）。壊れた `weekly_board` は④の妥当性判定で翌日の再計算に回り、queue 全体の破損は既存の
+破損分類（`corrupt`）で SessionStart に出る。現在の発生件数: **0件**
 （2026-09-11・手動実行の運用実績なし）。
 
 ④ **blocking の定義（機械判定できる条件だけ）**:
    - **週の最初の実行で更新される**: 上書き前の `evolve-queue.json` から読める直前の
-     `weekly_board.week_id`（辞書として壊れていれば `None` 扱い）が今回の ISO 週
+     `weekly_board` が**妥当**（dict で、`week_id` と `computed_on`（`YYYY-MM-DD`）がともに str、かつ
+     `measured` が False でない）なら、その `week_id` を直前の週とする。妥当でなければ（欠落・型違い・
+     `computed_on` 欠落・`measured: False` を含む）直前の週は `None` とする。直前の週が今回の ISO 週
      （`correction_rate.week_id_for(now)`, `scripts/lib/correction_rate.py:78`）と異なるときだけ
      3値を再計算し、`week_id`/`computed_on`（今日のローカル日付）を書き込む。**形の壊れ（M2a/b）
-     は「異なる週」に自然に畳み込む**（`None != 今回の week_id` は常に真になるため、壊れた
-     `weekly_board` を検出する専用分岐を作らない）
+     は「異なる週」に自然に畳み込む**（妥当でなければ `None` になり `None != 今回の week_id` は常に真。
+     `{"week_id": 今週}` のように `computed_on` だけ欠けた記録も再計算に回る）
    - **同週の2日目以降・同日2回目は不変**: 直前の `week_id` が今回と一致するなら再計算せず
      直前の `weekly_board` をそのまま維持する（`computed_on` も書き換えない）
    - **表示は `computed_on == 今日` の日だけ**: SessionStart は一致しなければ何も出さない
+   - **黙って消えない（fail-visible）**: SessionStart は次のいずれかで Tier1 の1行 health
+     「戦果ボードの要約を読めません（理由）」を出す — (a) `evolve-queue.json` が実在するのに
+     `_resolve_queue_data()` の結果が dict でない（`[]`/`null`・import 失敗で `absent` になった場合を含む。
+     実在の判定は `Path.exists()`）(b) `weekly_board` が dict でない、または `measured: False`
+     （理由は `reason` を出す）(c) 新しい収集関数の中で例外が出た（既存の `try/except` で `None` を返さず、
+     この health を返す）。ファイル自体が無いときは何も出さない（既存の absent と同じ）
    - **読取障害では `week_id` を進めない（M1）**: 3値のうち**いずれか1つでも読取障害
      （後述の各 `measured` フィールドが False）**なら `weekly_board` を
      `{"measured": False, "reason": ..., "generated_at": ...}` として書き、**`week_id` を書かない**
@@ -47,19 +58,25 @@ barrier）の見落としのみを脅威とする。悪意ある第三者は数�
 ⑤ **検証方法**:
    - **陽性**: 直前 `week_id` が先週のまま → 3値が更新され④の各関数の戻り値と一致する。
    - **陽性対照**: 直前 `week_id` が今回と同じ → 3値も `week_id` も変化しない。
-   - **陰性試験（4種。それぞれ measure-now 3問「①今日作れるか ②片側でも結論が出るか
-     ③既存データで代用できるか」への回答＝すべて Yes・下記「実測の一次データ」で裏付け済み）**:
+   - **陰性試験（5種）**。measure-now 3問への回答: ①今日作れるか＝検査の入力（フィクスチャ）は
+     既存テストの形で今日作れる（柱3は `scripts/lib/tests/test_correction_rate.py:654-680`、通知は
+     `NotificationItem` の既存テスト）。変異そのものは実装が無いため今日は当てられない ②片側で今出る結論＝
+     各変異で赤くなるべき検査の形（上の各項の入力と期待）は設計時点で確定している ③既存データで代用＝
+     実データは使わず固定フィクスチャで足りる（週判定・日付判定は `now` 注入で決定論）:
      1. 柱3の値取得を `gate.point_week` でなく `latest_coverage` に差し替える変異
         → 末尾週が未測定のフィクスチャで確定週の値と一致しなくなることを検出できるか
      2. 週の最初の実行判定を常に真にする変異（`week_id` 比較を無条件 `True` に差し替え）
         → 同週の2日目実行でも recompute される（陽性対照が赤くなる）ことを検出できるか
      3. 表示判定の `computed_on == 今日` を外す変異
         → `computed_on` が昨日の payload でも要約が出てしまうことを検出できるか
-     4. **（M1 追加）読取障害判定に `measured` フィールドでなく「例外が飛んだかどうか」だけを
-        使う変異**（＝柱3の「確定週がまだ無い」正常系を誤って読取障害扱いする実装に差し替え）
-        → 確定週が無いだけの正常フィクスチャで `week_id` が進まなくなる（＝「データ蓄積中」が
-        出ず、翌日も未来永劫再計算され続ける）ことを検出できるか
-   - 実装フェーズで4種を実際に当てて緑のまま残らないことを確認するまで「効いている」と扱わない
+     4. **（M1）読取障害の判定を「例外が飛んだかどうか」だけにする変異**
+        → 入力: 例外を投げずに `measured=False` を返すフィクスチャ（`scripts/lib/measurement_result.py:82-92`・
+        `scripts/lib/correction_rate.py:748-757`）。`week_id` が書かれたら失敗とする検査で検出できるか
+        （陽性対照は別に置く: 柱3が `measured=True` かつ `point_week is None` の正常フィクスチャでは
+        `week_id` が進み「データ蓄積中」になる）
+     5. **health を外す変異**（収集関数が形の壊れで `None` を返す）→ `[]`/`null`/`{"week_id": 今週}`/
+        `measured: False` の各フィクスチャで Tier1 health が出ないことを検出できるか
+   - 実装フェーズで5種を実際に当てて緑のまま残らないことを確認するまで「効いている」と扱わない
      （`verify-checks-by-breaking.md`）。
 
 ⑥ **目的の物差しで削る量**: **0**。可視性・到達頻度の話であり、CLAUDE.md の目的文と同じ単位の
@@ -103,18 +120,15 @@ False でなければ柱3の `point_week is None` だけを見て「データ蓄
 
 ### M2: 形が壊れているときの扱い
 
-- **(a) `evolve-queue.json` は有効 JSON だが期待する形でない**（`[]`/`null` 等）: 既存の
-  `_build_session_proposal_output`（`scripts/lib/session_notify/collectors.py:515`）と同型の
-  `isinstance(queue_data, dict)` ガードを新規収集関数でも使う（新しい分類器を作らない・
-  precedent 再利用）。ガードに落ちたら SessionStart 側は何も表示しない（absent と同義）。
-- **(b) `weekly_board` が壊れている・`computed_on` が無い**: SessionStart 側は
-  `isinstance(weekly_board, dict) and weekly_board.get("computed_on")` を満たさなければ
-  「測定不能（形式不正）」の Tier1 health を1回出す（M1 の `measured=False` 表示と同じ文言・
-  同じ分岐を再利用し、新しい表示文言を増やさない）。daily runner 側は④のとおり「壊れていれば
-  週が異なるとみなして再計算」に自然に畳み込むため、この状態は翌日には解消する。
-- **(c) SessionStart 側の import・読込失敗**: 既存9系統すべてが共有する
-  `try/except Exception` 契約（`scripts/lib/session_notify/collectors.py` 各 `_build_*_output`）を
-  そのまま使う。新しい防御を足さない。
+判定と表示は④「黙って消えない」が正典。ここは既存コードとの対応だけを書く。
+- **(a) `[]`/`null` など dict でない queue・import 失敗**: 既存の `isinstance(queue_data, dict)` ガード
+  （`scripts/lib/session_notify/collectors.py:515`）を使うが、既存の他レーンと違い、**ファイルが実在するのに
+  dict でなければ沈黙せず Tier1 health を返す**（既存 resolver は import 失敗を `absent` にするため
+  〔同:397-398〕、実在の判定を `Path.exists()` で別に取る）。新しい分類器は作らない
+- **(b) `weekly_board` の形の壊れ・`computed_on` 欠落・`measured: False`**: SessionStart は Tier1 health を
+  出す。daily runner は④の妥当性判定で翌日に再計算する（同週中に「今週」の壊れた記録が居座らない）
+- **(c) 新しい収集関数の中の例外**: 既存の `try/except` で捕まえたうえで `None` ではなく health を返す
+  （同:412-414,470-472 の既存レーンは `None` を返すが、本レーンだけは返さない）
 
 ## どの柱がどの PJ の数字か（表示文言に明記・S3）
 
@@ -125,13 +139,15 @@ False でなければ柱3の `point_week is None` だけを見て「データ蓄
 （`tracked_projects` 既定＝fleet_config 全体）。**表示文言にこの違いを1行明記する**
 （例:「柱2・柱4は evolve-anything 本体／指摘率は全PJ合算」）— 全 PJ のセッションで同じ数字が
 出る設計である以上、読み手が「今開いている PJ の数字」と誤読しないための最小の対策（新しい
-UI 要素は増やさず、既存の `text` 文字列に1文足すだけ＝はしご6段目）。
+UI 要素は増やさず、`text` と `digest` の両方に同じ1文を足す＝はしご6段目。複数通知時は `digest` が
+使われるため〔`scripts/lib/session_notify/merge.py:13-19,39-49`〕、`text` だけでは経路によって消える）。
 
 **非 git 配布時の slug フォールバック**: `resolve_pj_slug` は git 不可のとき basename へ
-フォールバックする（`scripts/lib/pj_slug.py:217-221`）。evolve-anything は通常 git clone で
-配布されるため `_PLUGIN_ROOT` は常に git 管理下にあり、この経路は実質到達しない。対応は
-行わない（現状0件の理論的リスクとして記録するにとどめる＝はしご1段目「そもそも要るか」で
-不要と判定）。
+フォールバックする（`scripts/lib/pj_slug.py:208-221`）。正準関数は固定文字列でなく repo のディレクトリ名を
+返すので、**運用前提**として「`_PLUGIN_ROOT` が evolve-anything 本体の git checkout を指し、解決した slug が
+採用履歴の保存 slug と一致する」ことに依存する（現在の launchd 設定は本体 checkout を指す＝codex 巡2 で確認）。
+前提が崩れた場合は柱4が0件か `measured=False` になり、後者は④の health で見える。検査は足さない
+（はしご1段目: 現状0件）。
 
 ## 3値の対応と Tier（S1）
 
