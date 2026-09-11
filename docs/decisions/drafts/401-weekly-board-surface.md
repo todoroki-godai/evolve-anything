@@ -43,7 +43,7 @@ queue・judge・proposal の通知にも影響する（この性質は本設計�
    - **表示は `computed_on == 今日` の日だけ**: SessionStart は一致しなければ何も出さない
    - **黙って消えない（fail-visible）**: SessionStart は次のいずれかで Tier1 の1行 health
      「戦果ボードの要約を読めません（理由）」を出す — (a) `evolve-queue.json` が実在するのに
-     `_resolve_queue_data()` の結果が dict でない（`[]`/`null`・import 失敗で `absent` になった場合を含む。
+     `_resolve_queue_data()` の結果が dict でない（`[]`/`null`・`daily.queue_notice` の import 失敗で `absent` になった場合を含む。`data_dir_migration` が import できず CC レイアウトを判定できないときは他レーンと同じく沈黙（M2(a)）。
      実在の判定は CC レイアウト確認後の `rl_common.resolve_data_dir(env)` 配下で `Path.exists()`）(b) `weekly_board` キーが在り dict でない、`measured: False`
      （理由は `reason` を出す）、または `week_id`/`computed_on` が str でない（`{"week_id": 今週}` のような
      欠落を含む）。**この health 判定は `computed_on == 今日` の非表示判定より先に行う**（日付比較を
@@ -126,14 +126,14 @@ False でなければ柱3の `point_week is None` だけを見て「データ蓄
 
 判定と表示は④「黙って消えない」が正典。ここは既存コードとの対応だけを書く。
 - **(a) `[]`/`null` など dict でない queue・import 失敗**: 既存の `isinstance(queue_data, dict)` ガード
-  （`scripts/lib/session_notify/collectors.py:515`）を使うが、既存の他レーンと違い、**ファイルが実在するのに
+  （`scripts/lib/session_notify/weekly_board_notice.py:31-32`）を使うが、既存の他レーンと違い、**ファイルが実在するのに
   dict でなければ沈黙せず Tier1 health を返す**（既存 resolver は import 失敗を `absent` にするため
-  〔同:397-398〕、CC レイアウト確認後に `rl_common.resolve_data_dir(env)` 配下の実在を調べる）。
+  〔`collectors.py:398-399`〕、CC レイアウト確認後に `rl_common.resolve_data_dir(env)` 配下の実在を調べる）。
   レイアウト判定を import できない場合は probe せず沈黙する。corrupt は既存 queue レーンだけが通知する。新しい分類器は作らない
 - **(b) `weekly_board` キーが在り dict でない等の形の壊れ・`computed_on` 欠落・`measured: False`**: SessionStart は Tier1 health を
   出す。キー欠落は沈黙する（旧 runner・未実行は形の壊れではない）。daily runner は④の妥当性判定で翌日に再計算する（同週中に「今週」の壊れた記録が居座らない）
 - **(c) 新しい収集関数の中の例外**: 既存の `try/except` で捕まえたうえで `None` ではなく health を返す
-  （同:412-414,470-472 の既存レーンは `None` を返すが、本レーンだけは返さない）
+  （`collectors.py:413-415,471-473` の既存レーンは `None` を返すが、本レーンだけは返さない）
 
 ## どの柱がどの PJ の数字か（表示文言に明記・S3）
 

@@ -15,7 +15,7 @@ def _build_weekly_board_output(shared: "tuple | None" = None, *, now=None) -> "N
         return NotificationItem(label="weekly_board", tier=1, text=text, digest=text, commit=None)
 
     try:
-        from . import collectors  # Shared resolver and optional dependencies stay patchable.
+        from . import collectors  # collectors が本モジュールを top-level import するため遅延
         data_dir, queue_data, file_state = shared if shared is not None else collectors._resolve_queue_data()
         if file_state == "corrupt":
             return None  # evolve_queue owns file corruption health.

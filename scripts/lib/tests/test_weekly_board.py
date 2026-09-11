@@ -166,7 +166,8 @@ def test_weekly_board_stays_silent_on_corrupt_queue(tmp_path):
     assert collectors._build_weekly_board_output((tmp_path, None, "corrupt"), now=NOW) is None
 
 
-def test_import_failure_visible_under_cc_redirect_layout(tmp_path, monkeypatch):
+@pytest.fixture
+def cc_redirect_layout(tmp_path, monkeypatch):
     import rl_common
     base = tmp_path / ".claude" / "plugins" / "data"
     source = base / "evolve-anything-evolve-anything"
@@ -178,6 +179,14 @@ def test_import_failure_visible_under_cc_redirect_layout(tmp_path, monkeypatch):
     monkeypatch.setattr(rl_common, "_CC_PLUGIN_DATA_BASE", base)
     monkeypatch.setattr(rl_common, "_DEFAULT_DATA_DIR", canonical)
     monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(source))
+
+
+def test_layout_module_import_failure_is_silent_in_cc_layout(cc_redirect_layout, monkeypatch):
+    monkeypatch.setattr(collectors, "_data_dir_migration", None)
+    assert collectors._build_weekly_board_output(now=NOW) is None
+
+
+def test_import_failure_visible_under_cc_redirect_layout(cc_redirect_layout, monkeypatch):
     monkeypatch.setattr(collectors, "_queue_notice", None)
     item = collectors._build_weekly_board_output(now=NOW)
     assert item is not None and item.tier == 1
