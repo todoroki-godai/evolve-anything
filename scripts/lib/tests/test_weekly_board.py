@@ -242,7 +242,7 @@ def test_injected_local_date_and_iso_year(sources, stamp, week, day):
     assert notify(sources[2], board, now) is not None
 
 
-def test_runner_reads_previous_before_overwrite_and_embeds(sources, monkeypatch):
+def test_runner_reads_previous_before_overwrite_and_embeds(sources, monkeypatch, capsys):
     import importlib.util
     from importlib.machinery import SourceFileLoader
     from pathlib import Path
@@ -263,15 +263,42 @@ def test_runner_reads_previous_before_overwrite_and_embeds(sources, monkeypatch)
     def fake_run(cmd, **kwargs):
         return SimpleNamespace(returncode=0, stderr="", stdout='[]' if cmd[0] == "gh" else '{"queue": []}')
     monkeypatch.setattr(runner.subprocess, "run", fake_run)
-    previous = build(sources, now=datetime.now().astimezone())
+    previous = build(sources, now=NOW)
     path.write_text(json.dumps({"weekly_board": previous}))
     for reader in sources[3:]:
         reader.reset_mock()
-    assert runner.main() == 0
+    assert runner.main(now=NOW) == 0
     assert json.loads(path.read_text())["weekly_board"] == previous
     for reader in sources[3:]:
         reader.assert_not_called()
     path.write_text('{}')
-    assert runner.main() == 0
+    assert runner.main(now=NOW) == 0
     assert json.loads(path.read_text())["weekly_board"]["pillar2_count"] == 7
     sources[3].assert_called_once()
+    monkeypatch.setattr(runner.weekly_board, "build_weekly_board", Mock(side_effect=RuntimeError("unexpected")))
+    capsys.readouterr()
+    assert runner.main(now=NOW) == 0
+    assert "weekly_board" not in json.loads(path.read_text())
+    assert capsys.readouterr().err.splitlines() == ["[evolve-daily-run] weekly board error: unexpected（continue）"]
+
+
+@pytest.mark.parametrize("reader", ["p2", "p3", "p4"])
+def test_measurement_reason_is_preserved(sources, reader):
+    reason = "source failure without wrapping"
+    if reader == "p2":
+        sources[3].return_value = {"measured": False, "reason": reason}
+    else:
+        result = sources[4 if reader == "p3" else 5].return_value
+        result.measured = False
+        result.reason = reason
+    assert build(sources)["reason"] == reason
+
+
+def test_health_text_is_at_most_80_characters(sources):
+    sources[3].side_effect = FileNotFoundError("missing " + "long/path/" * 40)
+    board = build(sources)
+    assert "FileNotFoundError" in board["reason"]
+    item = notify(sources[2], board)
+    assert len(item.text) <= 80
+    assert item.text == item.digest
+    assert item.tier == 1

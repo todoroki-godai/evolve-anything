@@ -558,7 +558,11 @@ def test_e2e_decision_text_survives_multi_system_merge_with_prefix_once(tmp_path
 
 
 def test_weekly_board_reaches_session_start_without_ack(tmp_path, monkeypatch, capsys):
-    today = datetime.now().astimezone().date().isoformat()
+    now = datetime(2026, 9, 7, 9, tzinfo=timezone.utc)
+    today = now.date().isoformat()
+    from session_notify.weekly_board_notice import _build_weekly_board_output
+    monkeypatch.setattr(restore_state, "_build_weekly_board_output",
+                        lambda shared: _build_weekly_board_output(shared, now=now))
     queue = {"weekly_board": {"week_id": "2026-W37", "computed_on": today,
              "pillar2_count": 7, "point_week": None, "pillar4_count": 1}}
     path = tmp_path / "evolve-queue.json"

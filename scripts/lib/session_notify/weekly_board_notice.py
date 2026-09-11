@@ -9,6 +9,8 @@ from .model import NotificationItem
 def _build_weekly_board_output(shared: "tuple | None" = None, *, now=None) -> "NotificationItem | None":
     """Read the daily snapshot only; health precedes the one-day display window (#401)."""
     def health(reason):
+        reason = " ".join(str(reason).split())
+        reason = reason if len(reason) <= 62 else reason[:61] + "…"
         text = f"戦果ボードの要約を読めません（{reason}）"
         return NotificationItem(label="weekly_board", tier=1, text=text, digest=text, commit=None)
 

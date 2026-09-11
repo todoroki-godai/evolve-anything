@@ -33,19 +33,22 @@ def build_weekly_board(queue_path: Path, project_root: Path, *, now=None) -> dic
     if previous_week == week_id:
         return previous
 
+    def unmeasured(reason):
+        return {"measured": False, "reason": reason, "generated_at": now.isoformat()}
+
     def measure():
         pillar2, health = read_measurement(
             lambda: pillar2_metrics.count_applied_reflections(project_root, now=now),
             fallback={}, reader_name="pillar2_metrics.count_applied_reflections",
         )
         if health["measured"] is False or pillar2.get("measured") is False:
-            raise ValueError(health.get("reason") or "柱2の集計 health が degraded")
+            return unmeasured(health.get("reason") or pillar2.get("reason") or "柱2の集計 health が degraded")
         correction = correction_rate.build_correction_rate_summary(now=now)
         if correction.measured is False:
-            raise ValueError(correction.reason or "指摘率の読取障害")
+            return unmeasured(correction.reason or "指摘率の読取障害")
         items = evolve_revert_listing.build_revert_listing(pj_slug.resolve_pj_slug(project_root))
         if items.measured is False:
-            raise ValueError(items.reason or "戻せる採用の読取障害")
+            return unmeasured(items.reason or "戻せる採用の読取障害")
         return {
             "week_id": week_id, "computed_on": now.date().isoformat(), "measured": True,
             "pillar2_count": pillar2["count"],
