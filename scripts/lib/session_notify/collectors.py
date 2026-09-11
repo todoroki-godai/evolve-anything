@@ -1,4 +1,4 @@
-"""ADR-054 Phase 0（B1）: SessionStart 通知9系統の収集関数（印字しない）。
+"""ADR-054 Phase 0（B1）: SessionStart 通知11系統の収集関数（印字しない）。
 
 各 ``_build_*_output`` は ``NotificationItem | None``（session_proposal のみ 2 チャネル
 のため ``dict | None``）を返す純粋な収集関数で、print は一切行わない。副作用（marker
@@ -14,6 +14,7 @@ from contextlib import ExitStack
 from pathlib import Path
 
 from .model import NotificationItem, _classify_daily_snapshot_file
+from .weekly_board_notice import _build_weekly_board_output  # noqa: F401 — #401
 from .live_checkout_notice import _build_live_checkout_output  # noqa: F401 — #548
 
 # #503 §3.1-3: decision_text の prefix 除去に使う。merge 側が付け直すため二重にしない。
@@ -392,7 +393,7 @@ def _resolve_queue_data() -> "tuple":
     Returns: ``(None, None, "absent")`` — hook 文脈でない/install レイアウト外/モジュール
              未解決のいずれか。``file_state`` は ``"absent" | "corrupt" | "ok"``
              （§4.6 の producer 破損判定。evolve_queue は corrupt を Tier1 に昇格し、
-             weekly_board は実在と payload の形から独立に health を判定する）。
+             weekly_board は corrupt では沈黙し、payload の形を health 判定する）。
     """
     if _queue_notice is None or _data_dir_migration is None:
         return None, None, "absent"
@@ -412,40 +413,6 @@ def _resolve_queue_data() -> "tuple":
     except Exception as e:
         print(f"[evolve-anything:restore_state] evolve-queue resolve error: {e}", file=sys.stderr)
         return None, None, "absent"
-
-
-def _build_weekly_board_output(shared: "tuple | None" = None, *, now=None) -> "NotificationItem | None":
-    """Read the daily snapshot only; health precedes the one-day display window (#401)."""
-    def health(reason):
-        text = f"戦果ボードの要約を読めません（{reason}）"
-        return NotificationItem(label="weekly_board", tier=1, text=text, digest=text, commit=None)
-
-    try:
-        data_dir, queue_data, _ = shared if shared is not None else _resolve_queue_data()
-        # The resolver can lose data_dir on import failure. Check existence independently.
-        data_dir = data_dir or os.environ.get("CLAUDE_PLUGIN_DATA")
-        if not data_dir or not (Path(data_dir) / "evolve-queue.json").exists():
-            return None
-        if not isinstance(queue_data, dict):
-            return health("evolve-queue.json を読めません")
-        board = queue_data.get("weekly_board")
-        if not isinstance(board, dict):
-            return health("weekly_board がありません、または形式が不正です")
-        if board.get("measured") is False:
-            return health(board.get("reason") or "読取障害")
-        if not isinstance(board.get("week_id"), str) or not isinstance(board.get("computed_on"), str):
-            return health("week_id / computed_on がありません、または形式が不正です")
-        now = now if now is not None else _dt.datetime.now().astimezone()
-        if board["computed_on"] != now.date().isoformat():
-            return None
-        point = board["point_week"]
-        rate = "データ蓄積中" if point is None else f"{point['rate']:.1%}（{point['week_id']}）"
-        text = (f"戦果ボード: 実際に反映された改善（直近30日）{board['pillar2_count']}件／"
-                f"指摘率 {rate}／戻せる採用 {board['pillar4_count']}件。"
-                "柱2・4は本体／指摘率は全PJ")
-        return NotificationItem(label="weekly_board", tier=1, text=text, digest=text, commit=None)
-    except Exception as exc:
-        return health(str(exc))
 
 
 def _build_evolve_queue_output(shared: "tuple | None" = None) -> "NotificationItem | None":

@@ -44,7 +44,7 @@ queue・judge・proposal の通知にも影響する（この性質は本設計�
    - **黙って消えない（fail-visible）**: SessionStart は次のいずれかで Tier1 の1行 health
      「戦果ボードの要約を読めません（理由）」を出す — (a) `evolve-queue.json` が実在するのに
      `_resolve_queue_data()` の結果が dict でない（`[]`/`null`・import 失敗で `absent` になった場合を含む。
-     実在の判定は `Path.exists()`）(b) `weekly_board` が dict でない、`measured: False`
+     実在の判定は `Path.exists()`）(b) `weekly_board` キーが在り dict でない、`measured: False`
      （理由は `reason` を出す）、または `week_id`/`computed_on` が str でない（`{"week_id": 今週}` のような
      欠落を含む）。**この health 判定は `computed_on == 今日` の非表示判定より先に行う**（日付比較を
      `.get()` で済ませて欠落を沈黙させない）(c) 新しい収集関数の中で例外が出た（既存の `try/except` で `None` を返さず、
@@ -56,6 +56,8 @@ queue・judge・proposal の通知にも影響する（この性質は本設計�
      （`point_week is None` だが読取自体は健全）は読取障害ではないため、`week_id` を進めて
      「データ蓄積中」を表示する
    - **3値は単一ソース関数のフィールドと一致する**（下表「3値の対応と読取障害の判定」）
+
+キー欠落は沈黙する（旧 runner・未実行は形の壊れではない）。queue 全体の corrupt は既存 queue レーンだけが Tier1 を通知する。
 
 ⑤ **検証方法**:
    - **陽性**: 直前 `week_id` が先週のまま → 3値が更新され④の各関数の戻り値と一致する。
@@ -127,7 +129,8 @@ False でなければ柱3の `point_week is None` だけを見て「データ蓄
   （`scripts/lib/session_notify/collectors.py:515`）を使うが、既存の他レーンと違い、**ファイルが実在するのに
   dict でなければ沈黙せず Tier1 health を返す**（既存 resolver は import 失敗を `absent` にするため
   〔同:397-398〕、実在の判定を `Path.exists()` で別に取る）。新しい分類器は作らない
-- **(b) `weekly_board` の形の壊れ・`computed_on` 欠落・`measured: False`**: SessionStart は Tier1 health を
+- **(b) `weekly_board` キーが在り dict でない等の形の壊れ・`computed_on` 欠落・`measured: False`**: SessionStart は Tier1 health を
+  キー欠落は沈黙する（旧 runner・未実行は形の壊れではない）。
   出す。daily runner は④の妥当性判定で翌日に再計算する（同週中に「今週」の壊れた記録が居座らない）
 - **(c) 新しい収集関数の中の例外**: 既存の `try/except` で捕まえたうえで `None` ではなく health を返す
   （同:412-414,470-472 の既存レーンは `None` を返すが、本レーンだけは返さない）

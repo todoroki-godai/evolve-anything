@@ -136,7 +136,7 @@ def test_yesterday_is_silent(sources):
     assert notify(sources[2], build(sources), NOW + timedelta(days=1)) is None
 
 
-@pytest.mark.parametrize("queue", [[], None, {}, {"weekly_board": []},
+@pytest.mark.parametrize("queue", [[], None, {"weekly_board": None}, {"weekly_board": []},
     {"weekly_board": {"week_id": "2026-W37"}},
     {"weekly_board": {"measured": False, "reason": "fixture failure"}},
     {"weekly_board": {"week_id": 37, "computed_on": "2026-09-06"}}])
@@ -155,13 +155,43 @@ def test_missing_file_is_silent(tmp_path):
     assert collectors._build_weekly_board_output((tmp_path, None, "absent"), now=NOW) is None
 
 
-def test_import_failure_with_existing_file_is_visible(tmp_path, monkeypatch):
-    monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
-    (tmp_path / "evolve-queue.json").write_text('{}')
+def test_queue_without_weekly_board_key_is_silent(tmp_path):
+    queue = {"queue": [], "generated_at": NOW.isoformat()}
+    (tmp_path / "evolve-queue.json").write_text(json.dumps(queue))
+    assert collectors._build_weekly_board_output((tmp_path, queue, "ok"), now=NOW) is None
+
+
+def test_weekly_board_stays_silent_on_corrupt_queue(tmp_path):
+    (tmp_path / "evolve-queue.json").write_text("{broken")
+    assert collectors._build_weekly_board_output((tmp_path, None, "corrupt"), now=NOW) is None
+
+
+def test_import_failure_visible_under_cc_redirect_layout(tmp_path, monkeypatch):
+    import rl_common
+    base = tmp_path / ".claude" / "plugins" / "data"
+    source = base / "evolve-anything-evolve-anything"
+    source.mkdir(parents=True)
+    canonical = tmp_path / ".claude" / "evolve-anything"
+    canonical.mkdir()
+    (canonical / ".data-dir-unified").touch()
+    (canonical / "evolve-queue.json").write_text('{}')
+    monkeypatch.setattr(rl_common, "_CC_PLUGIN_DATA_BASE", base)
+    monkeypatch.setattr(rl_common, "_DEFAULT_DATA_DIR", canonical)
+    monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(source))
     monkeypatch.setattr(collectors, "_queue_notice", None)
     item = collectors._build_weekly_board_output(now=NOW)
     assert item is not None and item.tier == 1
     assert "戦果ボードの要約を読めません" in item.text
+
+
+@pytest.mark.parametrize("migration_available", [True, False])
+def test_import_failure_custom_layout_is_silent(tmp_path, monkeypatch, migration_available):
+    monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
+    (tmp_path / "evolve-queue.json").write_text('{}')
+    monkeypatch.setattr(collectors, "_queue_notice", None)
+    if not migration_available:
+        monkeypatch.setattr(collectors, "_data_dir_migration", None)
+    assert collectors._build_weekly_board_output(now=NOW) is None
 
 
 def test_collector_exception_is_visible(monkeypatch):

@@ -463,6 +463,7 @@ def _silence_other_notifications(monkeypatch):
         "_build_evolve_queue_output",
         "_build_session_proposal_output",
         "_build_judge_cap_output",
+        "_build_weekly_board_output",
     ):
         monkeypatch.setattr(restore_state, name, lambda *a, **k: None)
 

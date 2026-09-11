@@ -577,3 +577,17 @@ def test_weekly_board_reaches_session_start_without_ack(tmp_path, monkeypatch, c
         assert "7件" in output["systemMessage"]
         assert "柱2・4は本体／指摘率は全PJ" in output["systemMessage"]
         assert path.read_bytes() == before
+
+
+def test_corrupt_queue_collects_only_one_tier1(tmp_path, monkeypatch):
+    from contextlib import ExitStack
+    source = _install_env(tmp_path, monkeypatch)
+    (source / "evolve-queue.json").write_text("{broken")
+    for name in ("_build_pending_trigger_output", "_build_spec_drift_output",
+                 "_build_evolve_drain_output", "_build_data_dir_migration_output",
+                 "_build_utterance_staleness_output", "_build_live_checkout_output",
+                 "_build_icebox_output"):
+        monkeypatch.setattr(restore_state, name, lambda *a, **kw: None)
+    with ExitStack() as stack:
+        items, _ = restore_state._collect_notifications(stack)
+    assert [(it.label, it.tier) for it in items] == [("queue", 1)]
