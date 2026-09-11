@@ -284,10 +284,22 @@ def test_runner_reads_previous_before_overwrite_and_embeds(sources, monkeypatch,
     assert runner.main(now=NOW) == 0
     assert json.loads(path.read_text())["weekly_board"]["pillar2_count"] == 7
     sources[3].assert_called_once()
+    path.write_text('{}')
+    sources[3].return_value = {
+        "measured": False, "count": 7,
+        "health": {"base_malformed_lines": 2, "orphan_events_unexpected": 1},
+    }
+    assert runner.main(now=NOW) == 0
+    saved = json.loads(path.read_text())["weekly_board"]
+    assert saved["measured"] is False
+    assert "壊れた記録 2 行" in saved["reason"]
+    assert "孤立イベント 1 件" in saved["reason"]
     monkeypatch.setattr(runner.weekly_board, "build_weekly_board", Mock(side_effect=RuntimeError("unexpected\nfailure")))
     capsys.readouterr()
     assert runner.main(now=NOW) == 0
-    assert "weekly_board" not in json.loads(path.read_text())
+    assert json.loads(path.read_text())["weekly_board"] == {
+        "measured": False, "reason": "unexpected failure", "generated_at": NOW.isoformat(),
+    }
     assert capsys.readouterr().err.splitlines() == ["[evolve-daily-run] weekly board error: unexpected failure（continue）"]
 
 

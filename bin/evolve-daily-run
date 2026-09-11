@@ -200,6 +200,7 @@ def main(*, now=None) -> int:
                 payload["weekly_board"] = weekly_board.build_weekly_board(out_path, _PLUGIN_ROOT, now=now)
             except Exception as e:  # noqa: BLE001 - fail-open, like proposals
                 reason = " ".join(str(e).split())
+                payload["weekly_board"] = {"measured": False, "reason": reason, "generated_at": now.isoformat()}
                 print(f"[evolve-daily-run] weekly board error: {reason}（continue）", file=sys.stderr, flush=True)
             out_text = json.dumps(payload, ensure_ascii=False)
         out_path.write_text(out_text, encoding="utf-8")
