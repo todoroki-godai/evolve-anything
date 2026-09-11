@@ -275,11 +275,11 @@ def test_runner_reads_previous_before_overwrite_and_embeds(sources, monkeypatch,
     assert runner.main(now=NOW) == 0
     assert json.loads(path.read_text())["weekly_board"]["pillar2_count"] == 7
     sources[3].assert_called_once()
-    monkeypatch.setattr(runner.weekly_board, "build_weekly_board", Mock(side_effect=RuntimeError("unexpected")))
+    monkeypatch.setattr(runner.weekly_board, "build_weekly_board", Mock(side_effect=RuntimeError("unexpected\nfailure")))
     capsys.readouterr()
     assert runner.main(now=NOW) == 0
     assert "weekly_board" not in json.loads(path.read_text())
-    assert capsys.readouterr().err.splitlines() == ["[evolve-daily-run] weekly board error: unexpected（continue）"]
+    assert capsys.readouterr().err.splitlines() == ["[evolve-daily-run] weekly board error: unexpected failure（continue）"]
 
 
 @pytest.mark.parametrize("reader", ["p2", "p3", "p4"])
