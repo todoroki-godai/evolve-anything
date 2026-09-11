@@ -13,7 +13,7 @@ import json
 import random
 import sys
 import unicodedata
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from typing import List, Tuple
 
@@ -43,8 +43,7 @@ import phase1_codex_probe as p  # noqa: E402
 # real_home マーカーは root conftest の HOME 隔離を opt-out するだけで、対象
 # ディレクトリ（実 ~/.codex/sessions）の実在は保証しない。実在チェックを
 # 怠ると、実 Codex セッションが無い環境（CI ランナー・別ユーザーの開発機等）
-# では target_files=0 のまま _assert_stage_counts_plausible の下限チェック
-# （227件）に引っかかり、意味のある失敗ではなく「環境にデータが無い」だけの
+# では `target_files > 0` のチェックに引っかかり、「環境にデータが無い」だけの
 # ことで赤くなる。実測（HOME を実 ~/.codex を含まない一時ディレクトリへ
 # 差し替えて実行）で target_files=0 → 2/4 の real_home テストが実際に FAILED
 # することを確認済み。
@@ -1062,51 +1061,61 @@ def test_production_guard_passes_when_unchanged_present_file():
 # 実データ E2E（C-1・実機ベンチ）
 # ─────────────────────────────────────────────────────────────────
 # ─────────────────────────────────────────────────────────────────
-# C-1: 実データ regression の桁チェック。
-#
-# 旧実装は ADR 実測値（2026-08-23 早朝）に対して厳密一致・狭いレンジで
-# assert していたため、実 ~/.codex/sessions が日々増える限り毎日落ちる作りに
-# なっていた（テスト名は order_of_magnitude＝桁が合っていることの検査のはず
-# なのに、実装は完全一致を要求していて名実が食い違っていた）。
-#
-# 下限は ADR 基準値（データは単調増加想定。削除運用は無い前提）。
-# 上限は基準値のおよそ2.2倍。根拠: 本修正当日（2026-08-23）の実測で
-# target_files が早朝227→同日昼231へ半日弱で +4 件増加した実ペースに対し、
-# 数ヶ月分の通常運用増加を吸収しつつ、重複カウント・暴走等の異常な増加は
-# 検出できる余裕として採用した（厳密な統計的根拠ではなく実測ペースからの
-# 経験的マージン。今後乖離が大きくなったら基準値ごと更新すること）。
-_ADR_BASELINE_LOWER_COUNTS = {
-    "target_files": 227,
-    "raw": 769,
-    "after_child_exclusion": 503,
-    "after_machinery_exclusion": 373,
-    "after_dedup": 259,
-}
-_ADR_BASELINE_UPPER_COUNTS = {
-    "target_files": 500,
-    "raw": 1700,
-    "after_child_exclusion": 1100,
-    "after_machinery_exclusion": 820,
-    "after_dedup": 570,
-}
+# C-1: 同じ期間・PJ の現存入力を独立に数えて raw と突合する。
+# 実セッションは削除・移動され得るため、ADR 実測値は固定下限にならない。
+# 上限も固定せず、独立集計との厳密一致で取りこぼしと二重計上を検出する。
+# ファイル列挙・行判定とも probe の内部関数を再利用しない。
 
 
-def _assert_stage_counts_plausible(c: "p.StageCounts") -> None:
-    """段階カウントが「桁が合っている」ことを検査する。
+def _independent_raw_count(sessions_root: Path, base_date: date, days: int,
+                           pj_filter: str) -> int:
+    """現存 JSONL の帰属済み user 発話行を、除外・dedup 前で数える。"""
+    total = 0
+    for path in sessions_root.glob("*/*/*/*.jsonl"):
+        try:
+            day = date(*map(int, path.relative_to(sessions_root).parts[:3]))
+        except ValueError:
+            continue
+        if not base_date - timedelta(days=days - 1) <= day <= base_date:
+            continue
+        attributed = False
+        first_cwd = None
+        count = 0
+        with path.open(encoding="utf-8") as lines:
+            for line in lines:
+                if not line.strip():
+                    continue
+                try:
+                    record = json.loads(line)
+                except ValueError:
+                    continue  # parse_error_lines は別の不変条件で検査する
+                payload = record.get("payload")
+                if not isinstance(payload, dict):
+                    continue
+                if record.get("type") == "session_meta":
+                    if payload.get("id"):
+                        if not attributed:
+                            first_cwd = payload.get("cwd")
+                        attributed = True
+                elif attributed:
+                    is_user = (
+                        record.get("type") == "response_item"
+                        and payload.get("type") == "message"
+                        and payload.get("role") == "user"
+                    ) or (
+                        record.get("type") == "event_msg"
+                        and payload.get("type") == "user_message"
+                    )
+                    count += int(is_user)
+        if first_cwd and pj_filter in first_cwd:
+            total += count
+    return total
 
-    (1) 各段階が ADR 基準値の下限〜上限レンジ内であること（stale exact-match
-    対策。レンジは上のモジュール定数が単一ソース）。
-    (2) パイプライン構造上必ず成り立つ段階間の非増加関係
-    （raw >= after_child_exclusion >= after_machinery_exclusion >= after_dedup）。
-    これは実データの増減に関係なく常に成り立つべき不変条件で、絶対値レンジと
-    違って将来も陳腐化しない。
-    """
-    for name, lower in _ADR_BASELINE_LOWER_COUNTS.items():
-        value = getattr(c, name)
-        upper = _ADR_BASELINE_UPPER_COUNTS[name]
-        assert lower <= value <= upper, (
-            f"{name}={value} は想定レンジ [{lower}, {upper}] 外です"
-        )
+
+def _assert_stage_counts_plausible(c: "p.StageCounts", expected_raw: int) -> None:
+    """独立集計との一致と、入力の増減に依存しない段階間不変条件。"""
+    assert expected_raw > 0
+    assert c.raw == expected_raw, f"raw={c.raw} independent_raw={expected_raw}"
     assert c.raw >= c.after_child_exclusion >= c.after_machinery_exclusion >= c.after_dedup >= 0, (
         "段階間の非増加関係が崩れています: "
         f"raw={c.raw} after_child_exclusion={c.after_child_exclusion} "
@@ -1115,62 +1124,65 @@ def _assert_stage_counts_plausible(c: "p.StageCounts") -> None:
     assert c.target_files > 0
 
 
-def test_assert_stage_counts_plausible_rejects_below_lower_bound():
-    """陰性試験: 下限未満（データ欠落・収集退行を模す）は赤くなる。
-    ／通したい検査経路: _assert_stage_counts_plausible の下限チェック。
-    """
-    c = p.StageCounts(
-        target_files=1, raw=1, after_child_exclusion=1,
-        after_machinery_exclusion=1, after_dedup=1,
-        unattributed_dropped=0, child_files=0, parse_error_lines=0,
-    )
-    with pytest.raises(AssertionError):
-        _assert_stage_counts_plausible(c)
-
-
-def test_assert_stage_counts_plausible_rejects_above_upper_bound():
-    """陰性試験: 上限超過（重複カウント・暴走を模す）は赤くなる。
-    ／通したい検査経路: _assert_stage_counts_plausible の上限チェック。
-    """
-    c = p.StageCounts(
-        target_files=10_000, raw=10_000, after_child_exclusion=10_000,
-        after_machinery_exclusion=10_000, after_dedup=10_000,
-        unattributed_dropped=0, child_files=0, parse_error_lines=0,
-    )
-    with pytest.raises(AssertionError):
-        _assert_stage_counts_plausible(c)
+@pytest.mark.parametrize("raw", [0, 2])
+def test_assert_stage_counts_plausible_rejects_missing_or_duplicate(raw):
+    """欠落・重複は独立集計との不一致で検出する。"""
+    with pytest.raises(AssertionError, match="independent_raw=1"):
+        _assert_stage_counts_plausible(p.StageCounts(target_files=1, raw=raw), 1)
 
 
 def test_assert_stage_counts_plausible_rejects_broken_stage_ordering():
-    """陰性試験: 段階間の非増加関係が崩れている（フィルタが効いていない等）
-    と、絶対値レンジ内でも赤くなる。
-    ／通したい検査経路: _assert_stage_counts_plausible の段階間不変条件チェック。
-    """
-    c = p.StageCounts(
-        target_files=300, raw=800, after_child_exclusion=900,  # raw を超える
-        after_machinery_exclusion=400, after_dedup=300,
-        unattributed_dropped=0, child_files=0, parse_error_lines=0,
-    )
+    """raw が正しくても段階間の増加を検出する。"""
+    with pytest.raises(AssertionError, match="非増加"):
+        _assert_stage_counts_plausible(
+            p.StageCounts(target_files=1, raw=1, after_child_exclusion=2), 1)
+
+
+def test_assert_stage_counts_plausible_rejects_empty_input():
+    """raw が一致しても空入力では段階間不変条件の検証にならない。"""
     with pytest.raises(AssertionError):
-        _assert_stage_counts_plausible(c)
+        _assert_stage_counts_plausible(p.StageCounts(target_files=1, raw=0), 0)
 
 
-def test_assert_stage_counts_plausible_accepts_baseline_boundary():
-    """陽性対照: ADR 基準値そのもの（下限の境界値）は許容される。"""
-    c = p.StageCounts(
-        target_files=227, raw=769, after_child_exclusion=503,
-        after_machinery_exclusion=373, after_dedup=259,
-        unattributed_dropped=0, child_files=0, parse_error_lines=0,
-    )
-    _assert_stage_counts_plausible(c)  # 例外が出ないこと自体が検査
+@pytest.mark.parametrize("raw", [1, 769, 10000])
+def test_assert_stage_counts_plausible_accepts_matching_input(raw):
+    """陽性対照: 非空入力は旧上限超えも独立集計と一致すれば許容。"""
+    _assert_stage_counts_plausible(p.StageCounts(target_files=1, raw=raw), raw)
+
+
+@pytest.mark.parametrize("channel", [_response_user, _event_user_message])
+def test_independent_raw_count_input_semantics(tmp_path, channel):
+    """境界日・帰属・初回 PJ・両チャネルを、手計算した件数で検査。"""
+    root = tmp_path / "sessions"
+    for day in (9, 10, 23, 24):
+        folder = root / "2026" / "08" / str(day)
+        folder.mkdir(parents=True)
+        _write(folder, "target.jsonl", [
+            channel("before meta"),
+            json.dumps({"type": "session_meta", "payload": {"cwd": "evolve-anything"}}),
+            channel("still unattributed"),
+            _session_meta("s1"), channel(""), channel("same"), channel("same"),
+            _response_role("assistant", "excluded"), _response_role("developer", "excluded"),
+            _unknown_record(), "", "{broken", json.dumps({"type": "event_msg", "payload": None}),
+            _session_meta("s2", cwd="/elsewhere"), channel("later segment"),
+            channel("<system-reminder>machinery</system-reminder>"),
+        ])
+        _write(folder, "other.jsonl", [_session_meta("other", cwd="/elsewhere"),
+            _session_meta("later"), channel("first PJ wins")])
+        _write(folder, "no-meta.jsonl", [channel("unattributed")])
+    assert _independent_raw_count(root, date(2026, 8, 23), 14, "evolve-anything") == 10
+    assert p.run_probe(sessions_root=root, days=14, base_date=date(2026, 8, 23)).counts.raw == 10
+    (root / "2026/08/10/target.jsonl").unlink()
+    assert _independent_raw_count(root, date(2026, 8, 23), 14, "evolve-anything") == 5
+    assert p.run_probe(sessions_root=root, days=14, base_date=date(2026, 8, 23)).counts.raw == 5
 
 
 @pytest.mark.real_home
 @_skip_if_no_real_codex_sessions
 def test_run_probe_against_real_codex_sessions_matches_expected_order_of_magnitude():
-    """壊す不変条件: C-1（実データで完走し段階件数が ADR 実測値と整合する）
+    """壊す不変条件: C-1（実データの raw が独立集計と一致する）
     ／通したい検査経路: run_probe のパイプライン全体（実 ~/.codex/sessions を読む）
-    + _assert_stage_counts_plausible（桁レンジ・段階間不変条件）
+    + _assert_stage_counts_plausible（独立集計・段階間不変条件）
     + assert_machinery_exclusion_matches_oracle（item5・実データでの独立オラクル突合）。
     """
     result = p.run_probe(
@@ -1179,7 +1191,11 @@ def test_run_probe_against_real_codex_sessions_matches_expected_order_of_magnitu
         days=_REAL_HOME_TEST_DAYS,
     )
     c = result.counts
-    _assert_stage_counts_plausible(c)
+    expected_raw = _independent_raw_count(
+        _REAL_CODEX_SESSIONS_ROOT, _REAL_HOME_TEST_BASE_DATE,
+        _REAL_HOME_TEST_DAYS, "evolve-anything",
+    )
+    _assert_stage_counts_plausible(c, expected_raw)
     assert c.parse_error_lines == 0
     p.assert_machinery_exclusion_matches_oracle(result)
 
