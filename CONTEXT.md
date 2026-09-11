@@ -94,3 +94,4 @@ AI も人も、ここの用語を使って会話・命名・記述する（Eric 
 | revert 3分岐 | `bin/evolve-revert` の適用判定。normal（現ファイル == `after_sha`＝採用直後のまま→復元）/ 冪等（== `before_sha`＝既に戻っている→再記録せず成功）/ conflict（どちらでもない＝採用後に人手編集→**上書きせず中止**し `--dump-before` を案内） | #402, ADR-053 |
 | pre_extension | revert 不可コードの1つ。記録拡張（PR-1・#420）より前に採用された、または PR-1 パイプラインを経由しない writer による accept entry。変更前本文が存在せず**恒久的に戻せない**（実測 2026-08-12: 既存 accept 10 件すべてが該当） | #402 |
 | 戦果ボード | #379 Step 4。growth-journal harness（結晶化イベント記録・成長ストーリー）削除の置換成果物。新規ストアを作らず optimize_history（accept/reject 決定ログ）と corrections を直読みし、「手直し回数の増減」「採用した改善（accepted/rejected/pending/excluded）」「取り下げ候補（accepted かつ verdict=REGRESSED）」を決定論表示する。`scripts/lib/results_board.py`、audit の Growth Report セクションから呼ばれる | #379 |
+| 週の要約（weekly_board） | 戦果ボードのうち柱2（実際に反映された改善）・柱3（指摘率の最新確定週）・柱4（戻せる採用）を、週の最初の自動実行の日だけ SessionStart に1行出す要約。集計は daily runner、表示側は読むだけ。`scripts/lib/weekly_board.py`・`scripts/lib/session_notify/weekly_board_notice.py` | #401 |

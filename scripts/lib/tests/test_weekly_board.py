@@ -296,10 +296,9 @@ def test_runner_reads_previous_before_overwrite_and_embeds(sources, monkeypatch,
     assert "孤立イベント 1 件" in saved["reason"]
     monkeypatch.setattr(runner.weekly_board, "build_weekly_board", Mock(side_effect=RuntimeError("unexpected\nfailure")))
     capsys.readouterr()
-    assert runner.main(now=NOW) == 0
-    assert json.loads(path.read_text())["weekly_board"] == {
-        "measured": False, "reason": "unexpected failure", "generated_at": NOW.isoformat(),
-    }
+    # Production (launchd) calls main() without now; the fail-open branch must not depend on it.
+    assert runner.main() == 0
+    assert "weekly_board" not in json.loads(path.read_text())
     assert capsys.readouterr().err.splitlines() == ["[evolve-daily-run] weekly board error: unexpected failure（continue）"]
 
 
