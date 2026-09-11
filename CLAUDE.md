@@ -109,6 +109,7 @@ bin/evolve-revert --list   # 柱4（採用のうち戻せる件数）
 - `skill_vuln_scan`: remote_exec/secret_exfil 等を combo 必須で検出。配布 Markdown の全 code block（info string 非依存・4-space indent 含む）と `.sh`/`.bash` を shell 候補化し、複数行 `$()`/quote/backtick を論理行結合。heredoc は shell 実行本文のみ検査し data 本文は除外（#555）
 - `memory_guard`: auto-memory 書込境界の runtime 記憶汚染検出。secret_exfil のみ reject、prompt_injection は advisory（reject せず書込は継続・検出結果は可視化）（検査失敗は fail-closed・#570）。同名エントリの上書きは決定論遷移検証でゲート
 - `daily`: 毎朝の evolve queue 自動実行。適用は対話で人間承認
+- `weekly_board`: daily runner がその ISO 週の最初の実行でだけ柱2・3・4を集計し `evolve-queue.json` に保存。SessionStart は読むだけ（`commit=None`）で計算日だけ表示、形の壊れ・読取障害は Tier1 health（fail-visible）（#401）
 - `icebox_notice`: fail-open で既存ファイル非破壊、閾値未満は無音
 - `memory_hygiene`: 重複残骸は手順提案のみで auto-apply しない
 - `invalid_frontmatter`: 壊れた frontmatter で発火不能なスキルを直接 surface（auto-fix せず人手修正提案）

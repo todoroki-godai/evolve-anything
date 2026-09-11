@@ -39,6 +39,7 @@ sys.path.insert(0, str(_PLUGIN_ROOT / "scripts" / "lib"))
 
 import icebox_reconcile  # noqa: E402
 import rl_common  # noqa: E402
+import weekly_board  # noqa: E402
 from correction_semantic import judge_runner  # noqa: E402
 from daily import plist as plist_mod  # noqa: E402
 from daily import proposal_digest as _proposal_digest  # noqa: E402
@@ -85,7 +86,7 @@ def _icebox_oldest_days(issues, now: datetime) -> "tuple[int, int]":
     return (max(days) if days else 0, len(days))
 
 
-def main() -> int:
+def main(*, now=None) -> int:
     env = os.environ.get("CLAUDE_PLUGIN_DATA", "")
     data_dir = rl_common.resolve_data_dir(env)
     data_dir.mkdir(parents=True, exist_ok=True)
@@ -195,6 +196,11 @@ def main() -> int:
                 )
             except Exception as e:  # noqa: BLE001 - fail-open（他ステップと同型）
                 print(f"[evolve-daily-run] proposal digest error: {e}（continue）", file=sys.stderr, flush=True)
+            try:
+                payload["weekly_board"] = weekly_board.build_weekly_board(out_path, _PLUGIN_ROOT, now=now)
+            except Exception as e:  # noqa: BLE001 - fail-open, like proposals
+                reason = " ".join(str(e).split())
+                print(f"[evolve-daily-run] weekly board error: {reason}（continue）", file=sys.stderr, flush=True)
             out_text = json.dumps(payload, ensure_ascii=False)
         out_path.write_text(out_text, encoding="utf-8")
         print(f"[evolve-daily-run] wrote {out_path} ({len(out_text)} bytes)", flush=True)

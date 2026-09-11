@@ -555,3 +555,43 @@ def test_e2e_decision_text_survives_multi_system_merge_with_prefix_once(tmp_path
     assert "改善案があります: 「rep1」。応答のあとで採否をお聞きします。" in msg
     assert "記録待ち1件" in msg  # 他系統は digest のまま同居
     assert msg.count("[evolve-anything] ") == 1  # I3
+
+
+def test_weekly_board_reaches_session_start_without_ack(tmp_path, monkeypatch, capsys):
+    now = datetime(2026, 9, 7, 9, tzinfo=timezone.utc)
+    today = now.date().isoformat()
+    from session_notify.weekly_board_notice import _build_weekly_board_output
+    monkeypatch.setattr(restore_state, "_build_weekly_board_output",
+                        lambda shared: _build_weekly_board_output(shared, now=now))
+    queue = {"weekly_board": {"week_id": "2026-W37", "computed_on": today,
+             "pillar2_count": 7, "point_week": None, "pillar4_count": 1}}
+    path = tmp_path / "evolve-queue.json"
+    path.write_text(json.dumps(queue))
+    monkeypatch.setattr(restore_state, "_resolve_queue_data", lambda: (tmp_path, queue, "ok"))
+    for name in ("_build_pending_trigger_output", "_build_spec_drift_output",
+                 "_build_evolve_drain_output", "_build_data_dir_migration_output",
+                 "_build_utterance_staleness_output", "_build_live_checkout_output",
+                 "_build_evolve_queue_output", "_build_session_proposal_output",
+                 "_build_judge_cap_output", "_build_icebox_output"):
+        monkeypatch.setattr(restore_state, name, lambda *a, **kw: None)
+    before = path.read_bytes()
+    for _ in range(2):
+        restore_state.handle_session_start({})
+        output = json.loads(capsys.readouterr().out)
+        assert "7件" in output["systemMessage"]
+        assert "柱2・4は本体／指摘率は全PJ" in output["systemMessage"]
+        assert path.read_bytes() == before
+
+
+def test_corrupt_queue_collects_only_one_tier1(tmp_path, monkeypatch):
+    from contextlib import ExitStack
+    source = _install_env(tmp_path, monkeypatch)
+    (source / "evolve-queue.json").write_text("{broken")
+    for name in ("_build_pending_trigger_output", "_build_spec_drift_output",
+                 "_build_evolve_drain_output", "_build_data_dir_migration_output",
+                 "_build_utterance_staleness_output", "_build_live_checkout_output",
+                 "_build_icebox_output"):
+        monkeypatch.setattr(restore_state, name, lambda *a, **kw: None)
+    with ExitStack() as stack:
+        items, _ = restore_state._collect_notifications(stack)
+    assert [(it.label, it.tier) for it in items] == [("queue", 1)]

@@ -1,4 +1,4 @@
-"""ADR-054 Phase 0（B1）: SessionStart 通知9系統の収集関数（印字しない）。
+"""ADR-054 Phase 0（B1）: SessionStart 通知11系統の収集関数（印字しない）。
 
 各 ``_build_*_output`` は ``NotificationItem | None``（session_proposal のみ 2 チャネル
 のため ``dict | None``）を返す純粋な収集関数で、print は一切行わない。副作用（marker
@@ -14,6 +14,7 @@ from contextlib import ExitStack
 from pathlib import Path
 
 from .model import NotificationItem, _classify_daily_snapshot_file
+from .weekly_board_notice import _build_weekly_board_output  # noqa: F401 — #401
 from .live_checkout_notice import _build_live_checkout_output  # noqa: F401 — #548
 
 # #503 §3.1-3: decision_text の prefix 除去に使う。merge 側が付け直すため二重にしない。
@@ -387,12 +388,12 @@ def _resolve_queue_data() -> "tuple":
     ``_build_evolve_queue_output`` / ``_build_session_proposal_output`` /
     ``_build_judge_cap_output`` が個別に env ガード〜read_queue を行っていた（同じ内容を
     1セッション開始ごとに3回パース）。``_collect_notifications``（restore_state.py）が
-    ここで1回だけ解決し、3箇所へ ``(data_dir, queue_data, file_state)`` を配る。
+    ここで1回だけ解決し、weekly_board を含む4箇所へ ``(data_dir, queue_data, file_state)`` を配る。
 
     Returns: ``(None, None, "absent")`` — hook 文脈でない/install レイアウト外/モジュール
              未解決のいずれか。``file_state`` は ``"absent" | "corrupt" | "ok"``
-             （§4.6 の producer 破損判定。呼び出し側は evolve_queue の収集関数だけが
-             corrupt を Tier1 health notice に昇格させる）。
+             （§4.6 の producer 破損判定。evolve_queue は corrupt を Tier1 に昇格し、
+             weekly_board は corrupt では沈黙し、payload の形を health 判定する）。
     """
     if _queue_notice is None or _data_dir_migration is None:
         return None, None, "absent"

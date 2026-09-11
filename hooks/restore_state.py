@@ -4,7 +4,7 @@
 保存済み checkpoint.json が存在する場合、前回の進化状態を復元して
 stdout に JSON で出力する。
 
-ADR-054 Phase 0（B1・SessionStart 通知の1行化）: 9系統の通知（+work_context summary）は
+ADR-054 Phase 0（B1・SessionStart 通知の1行化）: 11系統の通知（+work_context summary）は
 それぞれ「印字を行わない収集関数」（``_build_*_output``）が ``NotificationItem`` を返し、
 ``handle_session_start`` が1箇所で merge・print・commit（副作用の確定）を行う。収集関数・
 ``NotificationItem``・digest/merge ロジックの実体は ``scripts/lib/session_notify/``
@@ -38,6 +38,7 @@ from session_notify import (  # noqa: E402
     _build_evolve_queue_output,
     _build_session_proposal_output,
     _build_judge_cap_output,
+    _build_weekly_board_output,
     _build_icebox_output,
     _build_live_checkout_output,
     _merge_notification_text,
@@ -185,7 +186,7 @@ def _call_builder(builder: "Callable", *args):
 
 
 def _collect_notifications(stack: "ExitStack") -> "tuple[list[NotificationItem], dict | None]":
-    """9系統＋corrupt判定（+ #548 live_checkout）を順に呼び、``(items, proposal_output)`` を返す。
+    """11系統（weekly_board・live_checkout を含む）＋corrupt判定を順に呼び、``(items, proposal_output)`` を返す。
 
     各系統呼び出しは ``_call_builder`` で個別に保護されるため、1系統の例外が他系統の
     収集結果を巻き込まない。pending_trigger・icebox レーン1 は ``stack`` に lock を
@@ -205,7 +206,7 @@ def _collect_notifications(stack: "ExitStack") -> "tuple[list[NotificationItem],
         if item is not None:
             items.append(item)
 
-    # evolve-queue.json の env ガード + read を1回だけ行い、以下3箇所に使い回す（#412 [Should]6）。
+    # evolve-queue.json の env ガード + read を1回だけ行い、以下4箇所に使い回す（#412 [Should]6）。
     shared_queue = _call_builder(_resolve_queue_data) or (None, None, "absent")
 
     queue_item = _call_builder(_build_evolve_queue_output, shared_queue)
@@ -224,6 +225,10 @@ def _collect_notifications(stack: "ExitStack") -> "tuple[list[NotificationItem],
     judge_item = _call_builder(_build_judge_cap_output, shared_queue)
     if judge_item is not None:
         items.append(judge_item)
+
+    weekly_item = _call_builder(_build_weekly_board_output, shared_queue)
+    if weekly_item is not None:
+        items.append(weekly_item)
 
     icebox_item = _call_builder(_build_icebox_output, stack)
     if icebox_item is not None:
