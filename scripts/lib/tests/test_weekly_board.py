@@ -291,15 +291,12 @@ def test_runner_reads_previous_before_overwrite_and_embeds(sources, monkeypatch,
     assert capsys.readouterr().err.splitlines() == ["[evolve-daily-run] weekly board error: unexpected failure（continue）"]
 
 
-@pytest.mark.parametrize("reader", ["p2", "p3", "p4"])
+@pytest.mark.parametrize("reader", ["p3", "p4"])
 def test_measurement_reason_is_preserved(sources, reader):
     reason = "source failure without wrapping"
-    if reader == "p2":
-        sources[3].return_value = {"measured": False, "reason": reason}
-    else:
-        result = sources[4 if reader == "p3" else 5].return_value
-        result.measured = False
-        result.reason = reason
+    result = sources[4 if reader == "p3" else 5].return_value
+    result.measured = False
+    result.reason = reason
     assert build(sources)["reason"] == reason
 
 
@@ -311,3 +308,14 @@ def test_health_text_is_at_most_80_characters(sources):
     assert len(item.text) <= 80
     assert item.text == item.digest
     assert item.tier == 1
+
+
+def test_pillar2_degraded_health_reason_is_preserved(sources):
+    sources[3].return_value = {
+        "measured": False, "count": 7,
+        "health": {"base_malformed_lines": 2, "orphan_events_unexpected": 1},
+    }
+    board = build(sources)
+    assert board["measured"] is False
+    assert "壊れた記録 2 行" in board["reason"]
+    assert "孤立イベント 1 件" in board["reason"]

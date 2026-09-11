@@ -7,7 +7,7 @@ import correction_rate
 import evolve_revert_listing
 import pillar2_metrics
 import pj_slug
-from measurement_result import read_measurement
+from measurement_result import _pillar2_degraded_reason, read_measurement
 
 
 def build_weekly_board(queue_path: Path, project_root: Path, *, now=None) -> dict:
@@ -42,7 +42,7 @@ def build_weekly_board(queue_path: Path, project_root: Path, *, now=None) -> dic
             fallback={}, reader_name="pillar2_metrics.count_applied_reflections",
         )
         if health["measured"] is False or pillar2.get("measured") is False:
-            return unmeasured(health.get("reason") or pillar2.get("reason") or "柱2の集計 health が degraded")
+            return unmeasured(health.get("reason") or _pillar2_degraded_reason(pillar2))
         correction = correction_rate.build_correction_rate_summary(now=now)
         if correction.measured is False:
             return unmeasured(correction.reason or "指摘率の読取障害")
