@@ -5,6 +5,7 @@ from unittest.mock import Mock
 
 import pytest
 
+from evolve_revert_listing import build_revert_listing as real_revert_listing
 from measurement_result import MeasuredDict, MeasuredList
 from session_notify import collectors
 
@@ -16,8 +17,10 @@ def sources(monkeypatch, tmp_path):
     import weekly_board as wb
 
     p2 = Mock(return_value={"measured": True, "count": 7})
+    weeks = [{"week_id": "2026-W35", "measured": True, "rate": 0.125},
+             {"week_id": "2026-W36", "measured": False, "rate": None}]
     p3 = Mock(return_value=MeasuredDict({
-        "gate": {"point_week": {"week_id": "2026-W35", "rate": 0.125}},
+        "gate": wb.correction_rate.compute_display_gate(weeks),
         "latest_coverage": {"week_id": "2026-W36", "rate": None},
     }))
     p4 = Mock(return_value=MeasuredList([
@@ -43,7 +46,7 @@ def build(sources, previous=None, now=NOW):
 def test_first_week_uses_source_fields_and_scopes(sources):
     board = build(sources, {"week_id": "2026-W36", "computed_on": "2026-09-01"})
     assert board == {"week_id": "2026-W37", "computed_on": "2026-09-07", "measured": True,
-                     "pillar2_count": 7, "point_week": {"week_id": "2026-W35", "rate": 0.125},
+                     "pillar2_count": 7, "point_week": {"week_id": "2026-W35", "rate": 0.125, "measured": True},
                      "pillar4_count": 1}
     _, _, root, p2, p3, p4, slug = sources
     p2.assert_called_once_with(root, now=NOW)
@@ -173,3 +176,72 @@ def test_zero_counts_are_measured(sources):
     board = build(sources)
     assert board["measured"] is True
     assert board["pillar2_count"] == board["pillar4_count"] == 0
+
+
+def test_revert_count_from_fixed_history_and_actual_files(sources, monkeypatch):
+    import hashlib
+    wb, _, root, *_ = sources
+    target = root / "skills" / "example" / "SKILL.md"
+    target.parent.mkdir(parents=True)
+    target.write_text("applied")
+    entry = {"id": "one", "human_accepted": True, "scope": "project",
+             "repo_id": str(root), "relative_path": "skills/example/SKILL.md",
+             "timestamp": "2026-09-06T00:00:00Z", "revert_schema_version": 1,
+             "revert_before_b64": "eJwDAAAAAAE=", "revert_encoding": "zlib+base64",
+             "after_sha": hashlib.sha256(b"applied").hexdigest()}
+    history = [entry, dict(entry, id="older", timestamp="2026-08-01T00:00:00Z",
+                           after_sha=hashlib.sha256(b"previous").hexdigest()),
+               {"id": "legacy", "human_accepted": True, "timestamp": "2026-07-01T00:00:00Z"}]
+    reader = Mock(return_value=MeasuredList(history))
+    monkeypatch.setattr(wb.evolve_revert_listing, "load_effective_history", reader)
+    monkeypatch.setattr(wb.evolve_revert_listing, "build_revert_listing", real_revert_listing)
+    assert build(sources)["pillar4_count"] == 1
+    assert target.read_text() == "applied"
+    reader.assert_called_once_with("evolve-anything")
+
+
+@pytest.mark.parametrize("stamp,week,day", [
+    ("2026-09-07T00:30:00+09:00", "2026-W37", "2026-09-07"),
+    ("2027-01-01T00:30:00+09:00", "2026-W53", "2027-01-01"),
+])
+def test_injected_local_date_and_iso_year(sources, stamp, week, day):
+    now = datetime.fromisoformat(stamp)
+    board = build(sources, now=now)
+    assert board["computed_on"] == day
+    assert board["week_id"] == week
+    assert notify(sources[2], board, now) is not None
+
+
+def test_runner_reads_previous_before_overwrite_and_embeds(sources, monkeypatch):
+    import importlib.util
+    from importlib.machinery import SourceFileLoader
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    script = Path(__file__).resolve().parents[3] / "bin" / "evolve-daily-run"
+    loader = SourceFileLoader("daily_weekly_test", str(script))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    runner = importlib.util.module_from_spec(spec)
+    loader.exec_module(runner)
+    _, path, root, *_ = sources
+    monkeypatch.setattr(runner, "_PLUGIN_ROOT", root)
+    monkeypatch.setattr(runner.rl_common, "resolve_data_dir", lambda env: root)
+    monkeypatch.setattr(runner, "load_user_config", lambda: {})
+    monkeypatch.setattr(runner.judge_runner, "run_daily_judge", Mock(return_value={}))
+    monkeypatch.setattr(runner._proposal_digest, "build_proposal_digest", Mock(return_value={}))
+    monkeypatch.setattr(runner.icebox_reconcile, "build_verdicts", Mock(return_value={"verdicts": []}))
+    def fake_run(cmd, **kwargs):
+        return SimpleNamespace(returncode=0, stderr="", stdout='[]' if cmd[0] == "gh" else '{"queue": []}')
+    monkeypatch.setattr(runner.subprocess, "run", fake_run)
+    previous = build(sources, now=datetime.now().astimezone())
+    path.write_text(json.dumps({"weekly_board": previous}))
+    for reader in sources[3:]:
+        reader.reset_mock()
+    assert runner.main() == 0
+    assert json.loads(path.read_text())["weekly_board"] == previous
+    for reader in sources[3:]:
+        reader.assert_not_called()
+    path.write_text('{}')
+    assert runner.main() == 0
+    assert json.loads(path.read_text())["weekly_board"]["pillar2_count"] == 7
+    sources[3].assert_called_once()
