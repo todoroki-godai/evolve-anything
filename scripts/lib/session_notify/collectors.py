@@ -387,12 +387,12 @@ def _resolve_queue_data() -> "tuple":
     ``_build_evolve_queue_output`` / ``_build_session_proposal_output`` /
     ``_build_judge_cap_output`` が個別に env ガード〜read_queue を行っていた（同じ内容を
     1セッション開始ごとに3回パース）。``_collect_notifications``（restore_state.py）が
-    ここで1回だけ解決し、3箇所へ ``(data_dir, queue_data, file_state)`` を配る。
+    ここで1回だけ解決し、weekly_board を含む4箇所へ ``(data_dir, queue_data, file_state)`` を配る。
 
     Returns: ``(None, None, "absent")`` — hook 文脈でない/install レイアウト外/モジュール
              未解決のいずれか。``file_state`` は ``"absent" | "corrupt" | "ok"``
-             （§4.6 の producer 破損判定。呼び出し側は evolve_queue の収集関数だけが
-             corrupt を Tier1 health notice に昇格させる）。
+             （§4.6 の producer 破損判定。evolve_queue は corrupt を Tier1 に昇格し、
+             weekly_board は実在と payload の形から独立に health を判定する）。
     """
     if _queue_notice is None or _data_dir_migration is None:
         return None, None, "absent"
