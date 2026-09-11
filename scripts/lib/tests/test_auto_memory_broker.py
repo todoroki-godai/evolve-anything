@@ -1059,18 +1059,29 @@ _DRAIN_DOC = (
 
 
 def test_drain_report_template_prints_every_counter(tmp_memory_dir, tmp_data_dir):
-    """ingest の戻り値のうち件数は、drain 報告テンプレに全部出る。
+    """drain 報告テンプレの print を実行すると、ingest が返す件数が全部出る。
 
     出ない件数があると「起きていない」と「記録していない」を区別できなくなる（#550）。
-    キーの一覧をテスト側に書き写さず、実際の戻り値から取る（写した一覧は腐る）。
-    件数の判定は「一覧（list/dict）でない値」にする。int 限定にすると、
-    型が str に変わった瞬間その件数が静かに検査の外へ落ちる（実測で緑になった）。
+    キーの一覧はテスト側に書き写さず、実際の戻り値から取る（写した一覧は腐る）。
+    件数の判定は「一覧（list/dict）でない値」（int 限定だと型が変わった瞬間に
+    静かに検査の外へ落ちる。実測で緑になった）。
+
+    **検出できる種別は限られる**（既知の種別のみ検出・迂回可能）: テンプレの print 自体を
+    条件分岐で包む・別の場所へ移す・Report への転記をやめる、といった変更はこの検査を
+    素通りする（2026-09-12 実測）。件数を一覧（`[n]`）や辞書に包む変更も素通りする。
+    守れるのは「戻り値にキーが増えた／改名されたのにテンプレが追随していない」場合だけ。
     """
     summary = amb.ingest_memory_results(
         [], [], {}, tmp_memory_dir, tmp_memory_dir / "MEMORY.md", tmp_data_dir,
     )
     counters = sorted(k for k, v in summary.items() if not isinstance(v, (list, dict)))
     assert counters, "件数キーが1つも無い（戻り値の形が変わった）"
+
     doc = _DRAIN_DOC.read_text(encoding="utf-8")
-    missing = [k for k in counters if f"summary['{k}']" not in doc]
-    assert not missing, f"drain 報告テンプレに出ていない件数: {missing}"
+    start = doc.index('print("auto-memory: "')
+    snippet = doc[start:doc.index("\n```", start)]
+    printed: list = []
+    exec(snippet, {"print": printed.append, "summary": summary})  # noqa: S102
+    line = printed[0]
+    missing = [k for k in counters if f"{k}=" not in line]
+    assert not missing, f"drain 報告テンプレの出力に出ていない件数: {missing}（出力: {line}）"

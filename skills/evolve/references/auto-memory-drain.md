@@ -41,16 +41,17 @@ summary = auto_memory_broker.ingest_memory_results(
     records, emit["requests"], responses,
     memory_dir, memory_md_path, rl_common.DATA_DIR,
 )
-print(f"auto-memory: stored={summary['stored']} blocked={summary['blocked']} "
-      f"skipped={summary['skipped']} contaminated={summary['contaminated']} "
-      f"transition_checked={summary['transition_checked']} "
-      f"transition_rejected={summary['transition_rejected']} "
-      f"guard_unavailable={summary['guard_unavailable']}")
+print("auto-memory: " + " ".join(
+    f"{k}={v}" for k, v in summary.items() if not isinstance(v, (list, dict))
+) + " hits=" + str([h.get("pattern_id") for h in summary["contamination_hits"]]))
 ```
 
 - ingest が生成後ゲート（belief_entropy）を内蔵: ソースを落とした要約は書込なしで `belief_blocks.jsonl` に記録（blocked にカウント）
 - 空応答（skipped）はキューに残り次回 drain で再試行される。stored/blocked は消化される
-- 結果（stored/blocked/skipped/contaminated/transition_rejected/guard_unavailable）を Report に報告する。
-  **0 件でも省略しない**（黙って消えると「起きていない」と「記録していない」が区別できなくなる・#550）。
-  `contaminated` は書込境界の guard による reject、`transition_rejected` は同名エントリの上書きが
-  決定論の遷移検証で止められた件数（`auto_memory_broker.ingest_memory_results` の戻り値が単一ソース）
+- 上の print が出した1行を、**そのまま Report へ転記する**（項目を選ばない・**0 件でも省略しない**）。
+  黙って消えると「起きていない」と「記録していない」を区別できなくなる（#550）。
+  出す項目は `ingest_memory_results` の戻り値が単一ソースで、ここに列挙しない（列挙は必ず腐る）
+- 数え方の注意: `contaminated` は**汚染 reject と検査不能の合算**で `guard_unavailable` を含む
+  （`auto_memory_broker.py:690-727`）。純粋な汚染 reject は `contaminated - guard_unavailable`。
+  足し合わせると二重に数える。`transition_rejected` は同名エントリの上書きが決定論の遷移検証で
+  止められた件数で、分母は `transition_checked`（`memory_transition_checks.jsonl` にも残る）
