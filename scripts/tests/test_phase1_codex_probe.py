@@ -43,7 +43,7 @@ import phase1_codex_probe as p  # noqa: E402
 # real_home マーカーは root conftest の HOME 隔離を opt-out するだけで、対象
 # ディレクトリ（実 ~/.codex/sessions）の実在は保証しない。実在チェックを
 # 怠ると、実 Codex セッションが無い環境（CI ランナー・別ユーザーの開発機等）
-# では旧実装の固定下限チェック（227件）に引っかかり、意味のある失敗ではなく「環境にデータが無い」だけの
+# では `target_files > 0` のチェックに引っかかり、「環境にデータが無い」だけの
 # ことで赤くなる。実測（HOME を実 ~/.codex を含まない一時ディレクトリへ
 # 差し替えて実行）で target_files=0 → 2/4 の real_home テストが実際に FAILED
 # することを確認済み。
@@ -210,7 +210,7 @@ def test_real_home_skip_wiring_available_vs_unavailable(pytester, tmp_path):
         test_wiring_probe=f'''
 import sys
 sys.path.insert(0, {tests_dir!r})
-from datetime import date, timedelta
+from datetime import date
 from pathlib import Path
 import test_phase1_codex_probe as t
 
@@ -1114,6 +1114,7 @@ def _independent_raw_count(sessions_root: Path, base_date: date, days: int,
 
 def _assert_stage_counts_plausible(c: "p.StageCounts", expected_raw: int) -> None:
     """独立集計との一致と、入力の増減に依存しない段階間不変条件。"""
+    assert expected_raw > 0
     assert c.raw == expected_raw, f"raw={c.raw} independent_raw={expected_raw}"
     assert c.raw >= c.after_child_exclusion >= c.after_machinery_exclusion >= c.after_dedup >= 0, (
         "段階間の非増加関係が崩れています: "
@@ -1137,9 +1138,15 @@ def test_assert_stage_counts_plausible_rejects_broken_stage_ordering():
             p.StageCounts(target_files=1, raw=1, after_child_exclusion=2), 1)
 
 
-@pytest.mark.parametrize("raw", [0, 1, 769, 10000])
+def test_assert_stage_counts_plausible_rejects_empty_input():
+    """raw が一致しても空入力では段階間不変条件の検証にならない。"""
+    with pytest.raises(AssertionError):
+        _assert_stage_counts_plausible(p.StageCounts(target_files=1, raw=0), 0)
+
+
+@pytest.mark.parametrize("raw", [1, 769, 10000])
 def test_assert_stage_counts_plausible_accepts_matching_input(raw):
-    """陽性対照: 削除後の空入力や旧上限超えも独立集計と一致すれば許容。"""
+    """陽性対照: 非空入力は旧上限超えも独立集計と一致すれば許容。"""
     _assert_stage_counts_plausible(p.StageCounts(target_files=1, raw=raw), raw)
 
 
@@ -1164,8 +1171,10 @@ def test_independent_raw_count_input_semantics(tmp_path, channel):
             _session_meta("later"), channel("first PJ wins")])
         _write(folder, "no-meta.jsonl", [channel("unattributed")])
     assert _independent_raw_count(root, date(2026, 8, 23), 14, "evolve-anything") == 10
+    assert p.run_probe(sessions_root=root, days=14, base_date=date(2026, 8, 23)).counts.raw == 10
     (root / "2026/08/10/target.jsonl").unlink()
     assert _independent_raw_count(root, date(2026, 8, 23), 14, "evolve-anything") == 5
+    assert p.run_probe(sessions_root=root, days=14, base_date=date(2026, 8, 23)).counts.raw == 5
 
 
 @pytest.mark.real_home
@@ -1184,7 +1193,7 @@ def test_run_probe_against_real_codex_sessions_matches_expected_order_of_magnitu
     c = result.counts
     expected_raw = _independent_raw_count(
         _REAL_CODEX_SESSIONS_ROOT, _REAL_HOME_TEST_BASE_DATE,
-        _REAL_HOME_TEST_DAYS, p.DEFAULT_PJ_FILTER,
+        _REAL_HOME_TEST_DAYS, "evolve-anything",
     )
     _assert_stage_counts_plausible(c, expected_raw)
     assert c.parse_error_lines == 0
