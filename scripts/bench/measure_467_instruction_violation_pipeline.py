@@ -50,7 +50,8 @@ from measure_467_proposal_kinds import (  # noqa: E402
     _redact_home,
 )
 
-# 本番定数の写しではなく import する（値がずれたら分解も追随する）
+# 本番 lib の import 元。`--project-root` はストア・skills のスコープ決定にのみ使い、
+# コードの出所はここ（= 本スクリプトが置かれた checkout）である
 _PLUGIN_ROOT = _BENCH_DIR.parent.parent
 _LIB = _PLUGIN_ROOT / "scripts" / "lib"
 if str(_LIB) not in sys.path:
@@ -82,12 +83,15 @@ def guard_socket_record_subprocess(spawned: List[List[str]]):
                 "blocked socket.socket() during cross_check (outbound network attempted)"
             )
 
-    def _recording_popen_init(self, args, *a, **kw):
+    def _recording_popen_init(self, *a, **kw):
+        args = kw.get("args", a[0] if a else None)
         try:
-            spawned.append([str(x) for x in args] if isinstance(args, (list, tuple)) else [str(args)])
+            spawned.append(
+                [str(x) for x in args] if isinstance(args, (list, tuple)) else [str(args)]
+            )
         except Exception:  # noqa: BLE001
             spawned.append(["<unprintable>"])
-        return real_popen_init(self, args, *a, **kw)
+        return real_popen_init(self, *a, **kw)
 
     def _recording_system(command):
         spawned.append(["os.system", str(command)])
@@ -115,7 +119,13 @@ def decompose(project_root: Path) -> Dict[str, Any]:
     """`discover/runner.py:422-516` の instruction_violation 経路を段階ごとに数える。
 
     本番ループを転記して計測点を挟む方式のため、転記忠実性は `cross_check`
-    （`run_discover` の実結果との一致）で機械的に検証する。
+    （`run_discover` の実結果との一致）と `positive_control`（違反が在る入力で両経路が 1 を
+    返すこと）で機械的に検証する。**`cross_check` 単独では実測 S5=0 のため `0 == 0` で
+    恒真になり転記ズレを検出できない**ので、陽性対照が必須。
+
+    定数の出所: `_MAX_INSTRUCTIONS` は本番から import する（値がずれたら追随する）。
+    `_MAX_CORRECTION_CHECKS` は本番 `runner.py:444` の**写し**（try ブロック内ローカルで
+    import できない。本番が変わっても本スクリプトは追随しない）。
     """
     from discover.runner import _fetch_corrections_with_last_skill  # noqa: PLC0415
     from critical_instruction_extractor import (  # noqa: PLC0415
@@ -137,7 +147,7 @@ def decompose(project_root: Path) -> Dict[str, Any]:
     s1 = len(skill_corrections)
 
     # --- S2: 新しい順に 20 件へ切り詰め（runner.py:444-458） ---
-    _MAX_CORRECTION_CHECKS = 20
+    _MAX_CORRECTION_CHECKS = 20  # 写し: runner.py:444（import 不能）
     skill_corrections = sorted(
         skill_corrections, key=lambda c: c.get("timestamp", ""), reverse=True
     )
@@ -290,6 +300,69 @@ def cross_check(project_root: Path, decomposed: Dict[str, Any]) -> Dict[str, Any
     }
 
 
+def positive_control(project_root: Path, decomposed: Dict[str, Any]) -> Dict[str, Any]:
+    """陽性対照: 違反が**在る**入力を注入し、両経路が 1 を返すことを確かめる。
+
+    `cross_check` の一致判定は実測が S5=0 のため `0 == 0` で恒真になり、転記が壊れていても
+    通ってしまう（0件ゲートは永久に緑）。そこで、実測で S5 まで到達したスキルの SKILL.md から
+    **実際に抽出された critical 行**を1本取り、その本文をそのまま correction の message に
+    した合成 correction 1 件だけを `_fetch_corrections_with_last_skill` の戻り値として注入する。
+    注入は `discover.runner` のモジュール属性差し替えで、decompose 側（call-time import）と
+    `run_discover()` 側（`runner.py:435`）の両方に効く。実ストア・実ファイルは書き換えない。
+
+    期待: decompose の S5 = 1 かつ `run_discover()` の `instruction_violations` = 1。
+    どちらかが 0 なら転記か本番経路のどちらかが壊れている。
+    """
+    import discover.runner as _runner  # noqa: PLC0415
+    from critical_instruction_extractor import extract_critical_lines  # noqa: PLC0415
+
+    # 実測で S5 まで到達した（=解決でき critical 行もある）スキルを選ぶ
+    target = next(
+        (
+            e
+            for e in decomposed["per_correction"]
+            if e["stage_reached"].startswith("S5") and e.get("skill_mds_checked")
+        ),
+        None,
+    )
+    if target is None:
+        return {"skipped": True, "reason": "S5 まで到達した correction が実測に無い"}
+
+    skill_md = Path(target["skill_mds_checked"][0]["skill_md"].replace("~/", str(Path.home()) + "/"))
+    instructions = extract_critical_lines(skill_md.read_text(encoding="utf-8"))
+    if not instructions:
+        return {"skipped": True, "reason": f"critical 行が 0: {target['skill_mds_checked'][0]['skill_md']}"}
+
+    injected = [
+        {
+            "message": instructions[0].original,
+            "timestamp": "2026-01-01T00:00:00Z",
+            "session_id": "positive-control",
+            "last_skill": target["last_skill"],
+        }
+    ]
+
+    real_fetch = _runner._fetch_corrections_with_last_skill
+    _runner._fetch_corrections_with_last_skill = lambda _proj: [dict(c) for c in injected]
+    try:
+        injected_decomposed = decompose(project_root)
+        result = _runner.run_discover(project_root=project_root)
+    finally:
+        _runner._fetch_corrections_with_last_skill = real_fetch
+
+    dec_v = injected_decomposed["stages"]["S5_violations"]
+    prod_v = len(result.get("instruction_violations", []) or [])
+    return {
+        "injected_last_skill": target["last_skill"],
+        "injected_skill_md": target["skill_mds_checked"][0]["skill_md"],
+        "injected_instruction_source_line": instructions[0].source_line,
+        "decomposed_S5_violations": dec_v,
+        "run_discover_instruction_violations": prod_v,
+        "match_types": injected_decomposed["stages"]["S5_by_match_type"],
+        "both_detect_one": dec_v == 1 and prod_v == 1,
+    }
+
+
 def _git_sha(repo: Path) -> str:
     try:
         return subprocess.run(
@@ -346,6 +419,14 @@ def main() -> None:
         except NetworkGuardViolation as e:
             cc_network_guard = f"VIOLATED: {e}"
             checked = {"skipped": True, "reason": f"network_guard: {e}"}
+    positive: Dict[str, Any] = {"skipped": True, "reason": "--skip-cross-check"}
+    if not args.skip_cross_check and decomposed is not None:
+        try:
+            with guard_no_home_claude_writes(home_claude), guard_socket_record_subprocess(spawned):
+                positive = positive_control(project_root, decomposed)
+        except (WriteGuardViolation, NetworkGuardViolation) as e:
+            positive = {"skipped": True, "reason": str(e)}
+
     checked["write_guard"] = cc_write_guard
     checked["network_guard"] = cc_network_guard
     checked["subprocesses_spawned"] = spawned
@@ -365,6 +446,7 @@ def main() -> None:
         "measured_code_sha": _git_sha(project_root),
         "result": decomposed,
         "cross_check": checked,
+        "positive_control": positive,
         "safety_verification": {
             "write_guard": write_guard_result,
             "network_guard": network_guard_result,

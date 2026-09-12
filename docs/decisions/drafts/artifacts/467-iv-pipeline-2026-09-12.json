@@ -1,9 +1,9 @@
 {
-  "measured_at": "2026-09-12T02:50:30.830764Z",
+  "measured_at": "2026-09-12T02:56:48.127765Z",
   "purpose": "#467 rev6 の A 案（instruction_violation の復活）判断のための本番経路分解。467-measurements-2026-09-12.md が要求した分解を埋める。",
   "project_root": "~/matsukaze-utils/evolve-anything",
   "data_dir": "~/.claude/evolve-anything",
-  "plugin_root_sha": "aae5ec0538d51423bda9f7ccac3ed35262ba4c39",
+  "plugin_root_sha": "a6a2cc7655e2bebbfee6443771368bb58ed507cd",
   "measured_code_sha": "aae5ec0538d51423bda9f7ccac3ed35262ba4c39",
   "result": {
     "stages": {
@@ -171,8 +171,24 @@
         "git",
         "rev-parse",
         "--git-common-dir"
+      ],
+      [
+        "git",
+        "rev-parse",
+        "--git-common-dir"
       ]
     ]
+  },
+  "positive_control": {
+    "injected_last_skill": "skill-creator:skill-creator",
+    "injected_skill_md": "~/.claude/plugins/cache/claude-plugins-official/skill-creator/3deb821cb71c/skills/skill-creator/SKILL.md",
+    "injected_instruction_source_line": 26,
+    "decomposed_S5_violations": 1,
+    "run_discover_instruction_violations": 1,
+    "match_types": {
+      "keyword_overlap": 1
+    },
+    "both_detect_one": true
   },
   "safety_verification": {
     "write_guard": "passed",
@@ -180,11 +196,9 @@
     "home_claude_manifest_diff": {
       "added": [],
       "removed": [],
-      "changed": [
-        "projects/-Users-matsukaze-takashi-matsukaze-utils-zundamon-explainer/4af1ebf4-bf69-4467-9c95-5c71b49c0112.jsonl"
-      ]
+      "changed": []
     },
-    "home_claude_files_before": 60558,
+    "home_claude_files_before": 60563,
     "llm_calls": 0,
     "llm_free_basis": "detect_instruction_violation / extract_critical_lines はいずれも LLM・subprocess を呼ばない（critical_instruction_extractor.py の契約）。network_guard が実行時に socket を塞いで検証する。"
   }
