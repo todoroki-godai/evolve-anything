@@ -41,3 +41,6 @@ scripts/bench/a2_dispatch_replay_result.json
 .claude/hillclimb/**/traces/
 .claude/hillclimb/**/report.html
 .claude/hillclimb/**/trajectory/
+
+# claude plugin eval の実行結果（再現可能・1回で数百KB）。ケースと採点基準は commit する
+evals/results/
