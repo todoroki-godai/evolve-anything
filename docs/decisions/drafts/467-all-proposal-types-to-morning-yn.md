@@ -84,8 +84,18 @@ codex [Must]1 の指摘どおり、**実際に人間の目に出るかを決め�
 
 ### 1.5 実測（2026-08-16）— rev4 の前提を2つ崩した観測結果
 
-Stage 1 着手前に「§4.4 が MUST にしている実データ較正」を実行した結果、**較正どころか
-パイロット選定そのものが成り立たない**ことが判明した。
+> **⚠ 2026-09-12 に再計測した。本節の [実測] 値の多くは既に古い。**
+> 同じスクリプトを対象 commit `96281252` で再実行した結果、`last_skill` の欠落（#478）が解消され、
+> `corrections` 総数 175→323 / `last_skill` truthy **0→27**（いずれも全PJ合算）に変わった。
+> 産出件数（当PJ）も `pitfall_candidates` **0→7** / `rule_violation_observed` **25→3** /
+> `hook_candidates` **0→1** と動き、**`instruction_violation` だけは 0 のまま**である。
+> **ただし 0 の理由は再計測から導けない** — 計測スクリプトの SKILL.md 解決は本番
+> （`discover/runner.py:470-482`）の `resolve_plugin_skill_path` / `bare_skill_name` を再現しておらず、
+> read-time join も通していない。**rev6 で A 案を判断する前に本番経路での分解を実測すること。**
+> 差分・母集団の違い（§1.5.1 は全PJ合算 / §1.5.3 は当PJ）は
+> [`artifacts/467-measurements-2026-09-12.md`](artifacts/467-measurements-2026-09-12.md)
+> / [`.json`](artifacts/467-measurements-2026-09-12.json) を参照し、**rev6 はそちらを前提に書くこと**。
+> 本節は 2026-08-16 時点の断面として残す（訂正履歴を消さないため）。
 
 #### 1.5.0 証拠の等級（codex [Must]3 / tacchi [Nit]5 反映・rev5 レビュー後に追加）
 
@@ -716,7 +726,7 @@ Q0 を先に置くのは、Q1 の答えを出す作業そのものが Q0 の受�
 
 | 案 | 内容 | 前提になる工事 | 実測に基づく見込み |
 |---|---|---|---|
-| A | `instruction_violation` を復活させる | ①`last_skill` の運搬（#478）②**スキル名の名前空間正規化 + プラグインパス解決**（#577/#578 の再演）— **この2つだけ**（型フィルタは `pitfall_candidates` 側の工事なので A に不要・§1.5.1 の帰属表） | **0 が濃厚**。30件の直前スキルは**全件 SKILL.md 解決不能**（§1.5.1 訂正）。①だけでは動かない |
+| A | `instruction_violation` を復活させる | ①`last_skill` の運搬（#478）②**スキル名の名前空間正規化 + プラグインパス解決**（#577/#578 の再演）— **この2つだけ**（型フィルタは `pitfall_candidates` 側の工事なので A に不要・§1.5.1 の帰属表） | **0 が濃厚**。30件の直前スキルは**全件 SKILL.md 解決不能**（§1.5.1 訂正）。①だけでは動かない → **09-12 再計測で前提が変化（artifact 参照）** |
 | B | `rule_violation_observed` を `violated_command` で束ねて出す | ①enforcement hook の**実在チェック** ②観測の**時間窓を hook 導入後に限定** ③束ねの再利用（§10-Q3） | y/n **1件**。§5 は**原則不要**（hook 実在環境では op=modify。**hook 不在環境では create に戻り §5 に依存**・§1.5.4 の限定表）。①②なしでは「もう終わった対処」を聞くノイズになる |
 | C | 3種を一斉接続 | §5 の12点すべて + 独立 ADR | y/n 最大 12〜25件／日。上限設計（Q5）が必須 |
 | D | **scoped-C**: rules / hook ファイルの create に限定し、**revert = ファイル削除**で定義（tacchi 提案） | §5 の12点のうち削除で自明になる分を除いた最小契約 | 冪等 revert が自明（削除）なので ADR が薄く済む。C への段階的な入口になる |
@@ -789,10 +799,10 @@ evidence の無い前提を根拠に判断を書かない。
 
 tacchi の [Should]2 件と [Nit]2 件は本 commit で反映済み（§1.5.1 の帰属表 / §1.5.4 の限定表 /
 `exists()` 出現 0 件 / `partition_rule_violations` は def :214・reason 付与 :252-256）。
-codex [Must]C は §1.5 の実測を再現するスクリプトと出力 artifact の追加で解消する。
+codex [Must]C に対しては、スクリプト・単体テスト・artifact が追加されている（`scripts/bench/measure_467_proposal_kinds.py` / `scripts/lib/measure_467_join.py` / `scripts/lib/tests/test_measure_467_join.py` / `artifacts/467-measurements-2026-08-16.{md,json}`）。**ただし解消とは判定しない** — 2026-09-12 のレビューで、計測スクリプトの `instruction_violation` 経路が `discover/runner.py:470-482` と乖離していること（#478 修正後に本番が変わり計測が追随していない）が判明した。**本番経路への追随は別 commit で行う。**
 
 **両者が独立に否定した点**: 「積集合が空 → §5 は Stage 1 の前提」。
-**tacchi の追加実測が rev5 初版より状況を悪化させた点**: A 案は 30件全件 SKILL.md 解決不能で
+**tacchi の追加実測が rev5 初版より状況を悪化させた点**: A 案は 30件全件 SKILL.md 解決不能で（**09-12 再計測で前提が変化・artifact 参照**）
 「0 の可能性あり」ではなく「0 が濃厚」。
 **tacchi が追加した選択肢**: Q1-D（scoped-C）。
 
