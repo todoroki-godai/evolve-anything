@@ -84,6 +84,11 @@ PJ の帰属は session 経由の推定に依存している。
 本番経路（join → `resolve_plugin_skill_path`/`bare_skill_name` → `detect_instruction_violation`）で
 分解した実測を取ること。** 本 artifact はその分解を含まない。
 
+→ **分解は `467-iv-pipeline-2026-09-12.md` で実施した（2026-09-12）。**
+本番経路では `plugin:skill` の解決は機能しており（3/3 解決）、判定器に実際に掛かった
+correction は当PJ 75 件中 **3 件**だった（8 件のうち 4 件は廃止済みスキル `readable-report` で
+解決不能、1 件は critical 行 0）。上表の「解決 46」が旧規則の値である点は変わらない。
+
 ## Q1（パイロット再選定）に渡る観測値
 
 rev5 の4案それぞれが前提にしていた数字の、2026-09-12 時点の値だけを置く。**評価・見込みは rev6 の仕事。**
