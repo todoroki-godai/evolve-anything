@@ -1,0 +1,205 @@
+{
+  "measured_at": "2026-09-12T02:56:48.127765Z",
+  "purpose": "#467 rev6 の A 案（instruction_violation の復活）判断のための本番経路分解。467-measurements-2026-09-12.md が要求した分解を埋める。",
+  "project_root": "~/matsukaze-utils/evolve-anything",
+  "data_dir": "~/.claude/evolve-anything",
+  "plugin_root_sha": "a6a2cc7655e2bebbfee6443771368bb58ed507cd",
+  "measured_code_sha": "aae5ec0538d51423bda9f7ccac3ed35262ba4c39",
+  "result": {
+    "stages": {
+      "S0_corrections_after_join": 75,
+      "S1_last_skill_truthy": 8,
+      "S2_after_max_checks_slice": 8,
+      "S2_truncated": false,
+      "S2_max_correction_checks": 20,
+      "S3_resolved": 4,
+      "S3_unresolved": 4,
+      "S3_unresolved_by_reason": {
+        "not_found": 4
+      },
+      "S3_resolved_by_source": {
+        "home": 1,
+        "plugin": 3
+      },
+      "S4_skill_mds_with_zero_critical_lines": 1,
+      "S4_critical_lines_total": 31,
+      "S4_max_instructions_examined_per_skill": 15,
+      "S5_violations": 0,
+      "S5_by_match_type": {}
+    },
+    "violations": [],
+    "per_correction": [
+      {
+        "last_skill": "status-recap",
+        "bare": "status-recap",
+        "plugin_resolved": false,
+        "plugin_unresolved_reason": "not_found",
+        "home_skill_md_hits": 1,
+        "project_skill_md_hits": 0,
+        "skill_md_candidates": [
+          "~/.claude/skills/status-recap/SKILL.md"
+        ],
+        "stage_reached": "S4_instructions",
+        "skill_mds_checked": [
+          {
+            "skill_md": "~/.claude/skills/status-recap/SKILL.md",
+            "critical_lines": 0
+          }
+        ]
+      },
+      {
+        "last_skill": "readable-report",
+        "bare": "readable-report",
+        "plugin_resolved": false,
+        "plugin_unresolved_reason": "not_found",
+        "home_skill_md_hits": 0,
+        "project_skill_md_hits": 0,
+        "skill_md_candidates": [],
+        "stage_reached": "S3_unresolved"
+      },
+      {
+        "last_skill": "readable-report",
+        "bare": "readable-report",
+        "plugin_resolved": false,
+        "plugin_unresolved_reason": "not_found",
+        "home_skill_md_hits": 0,
+        "project_skill_md_hits": 0,
+        "skill_md_candidates": [],
+        "stage_reached": "S3_unresolved"
+      },
+      {
+        "last_skill": "readable-report",
+        "bare": "readable-report",
+        "plugin_resolved": false,
+        "plugin_unresolved_reason": "not_found",
+        "home_skill_md_hits": 0,
+        "project_skill_md_hits": 0,
+        "skill_md_candidates": [],
+        "stage_reached": "S3_unresolved"
+      },
+      {
+        "last_skill": "readable-report",
+        "bare": "readable-report",
+        "plugin_resolved": false,
+        "plugin_unresolved_reason": "not_found",
+        "home_skill_md_hits": 0,
+        "project_skill_md_hits": 0,
+        "skill_md_candidates": [],
+        "stage_reached": "S3_unresolved"
+      },
+      {
+        "last_skill": "skill-creator:skill-creator",
+        "bare": "skill-creator",
+        "plugin_resolved": true,
+        "plugin_unresolved_reason": null,
+        "home_skill_md_hits": 0,
+        "project_skill_md_hits": 0,
+        "skill_md_candidates": [
+          "~/.claude/plugins/cache/claude-plugins-official/skill-creator/3deb821cb71c/skills/skill-creator/SKILL.md"
+        ],
+        "stage_reached": "S5_no_violation",
+        "skill_mds_checked": [
+          {
+            "skill_md": "~/.claude/plugins/cache/claude-plugins-official/skill-creator/3deb821cb71c/skills/skill-creator/SKILL.md",
+            "critical_lines": 15,
+            "critical_lines_examined": 15,
+            "violation": null
+          }
+        ]
+      },
+      {
+        "last_skill": "evolve-anything:docs-refresh",
+        "bare": "docs-refresh",
+        "plugin_resolved": true,
+        "plugin_unresolved_reason": null,
+        "home_skill_md_hits": 0,
+        "project_skill_md_hits": 0,
+        "skill_md_candidates": [
+          "~/.claude/plugins/cache/evolve-anything/evolve-anything/1.125.0/skills/docs-refresh/SKILL.md"
+        ],
+        "stage_reached": "S5_no_violation",
+        "skill_mds_checked": [
+          {
+            "skill_md": "~/.claude/plugins/cache/evolve-anything/evolve-anything/1.125.0/skills/docs-refresh/SKILL.md",
+            "critical_lines": 5,
+            "critical_lines_examined": 5,
+            "violation": null
+          }
+        ]
+      },
+      {
+        "last_skill": "evolve-anything:report-feedback",
+        "bare": "report-feedback",
+        "plugin_resolved": true,
+        "plugin_unresolved_reason": null,
+        "home_skill_md_hits": 0,
+        "project_skill_md_hits": 0,
+        "skill_md_candidates": [
+          "~/.claude/plugins/cache/evolve-anything/evolve-anything/1.125.0/skills/report-feedback/SKILL.md"
+        ],
+        "stage_reached": "S5_no_violation",
+        "skill_mds_checked": [
+          {
+            "skill_md": "~/.claude/plugins/cache/evolve-anything/evolve-anything/1.125.0/skills/report-feedback/SKILL.md",
+            "critical_lines": 11,
+            "critical_lines_examined": 11,
+            "violation": null
+          }
+        ]
+      }
+    ],
+    "last_skill_histogram": {
+      "status-recap": 1,
+      "readable-report": 4,
+      "skill-creator:skill-creator": 1,
+      "evolve-anything:docs-refresh": 1,
+      "evolve-anything:report-feedback": 1
+    }
+  },
+  "cross_check": {
+    "run_discover_instruction_violations": 0,
+    "run_discover_instruction_violations_unresolved": 4,
+    "run_discover_instruction_violations_error": null,
+    "decomposed_S5_violations": 0,
+    "decomposed_S3_unresolved": 4,
+    "matches_production": true,
+    "run_discover_seconds": 2.6,
+    "write_guard": "passed",
+    "network_guard": "passed",
+    "subprocesses_spawned": [
+      [
+        "git",
+        "rev-parse",
+        "--git-common-dir"
+      ],
+      [
+        "git",
+        "rev-parse",
+        "--git-common-dir"
+      ]
+    ]
+  },
+  "positive_control": {
+    "injected_last_skill": "skill-creator:skill-creator",
+    "injected_skill_md": "~/.claude/plugins/cache/claude-plugins-official/skill-creator/3deb821cb71c/skills/skill-creator/SKILL.md",
+    "injected_instruction_source_line": 26,
+    "decomposed_S5_violations": 1,
+    "run_discover_instruction_violations": 1,
+    "match_types": {
+      "keyword_overlap": 1
+    },
+    "both_detect_one": true
+  },
+  "safety_verification": {
+    "write_guard": "passed",
+    "network_guard": "passed",
+    "home_claude_manifest_diff": {
+      "added": [],
+      "removed": [],
+      "changed": []
+    },
+    "home_claude_files_before": 60563,
+    "llm_calls": 0,
+    "llm_free_basis": "detect_instruction_violation / extract_critical_lines はいずれも LLM・subprocess を呼ばない（critical_instruction_extractor.py の契約）。network_guard が実行時に socket を塞いで検証する。"
+  }
+}
