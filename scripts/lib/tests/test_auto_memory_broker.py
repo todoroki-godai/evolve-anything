@@ -1071,7 +1071,8 @@ def test_drain_report_template_prints_every_counter(tmp_memory_dir, tmp_data_dir
 
     既知の限界: LLM が出力を Report へ転記するかは検査しない。
     件数を一覧（`[n]`）や辞書に包む戻り値の変更は件数検査の対象外になる。
-    スタブ化した emit/ingest の実動作と、probe 以外の入力分岐も保証しない。
+    スタブ化した emit/ingest の実動作は保証しない。固定 probe は既知の種別のみ
+    検出し、迂回可能: probe 件数を超える上限切り詰めや散文の書き換えは検出しない。
     """
     summary = amb.ingest_memory_results(
         [], [], {}, tmp_memory_dir, tmp_memory_dir / "MEMORY.md", tmp_data_dir,
@@ -1088,17 +1089,20 @@ def test_drain_report_template_prints_every_counter(tmp_memory_dir, tmp_data_dir
     probe = dict(summary)
     expected = {k: 0 if all_zero else i + 1 for i, k in enumerate(counters)}
     probe.update(expected)
-    expected_hits = ["probe_pattern_a", "probe_pattern_b"]
+    expected_hits = [] if all_zero else ["probe_pattern_a", "probe_pattern_a", "probe_pattern_b"]
     probe["contamination_hits"] = [
         {"pattern_id": pattern, "category": "x", "line": i + 1}
         for i, pattern in enumerate(expected_hits)
     ]
     broker = mock.Mock(spec=["emit_memory_requests", "ingest_memory_results"])
-    broker.emit_memory_requests.return_value = {"requests": []}
+    records = [{"id": "c1"}]
+    requests = [{"id": "r1", "prompt": "p"}]
+    responses, slug = {"r1": _llm_output()}, "probe-project"
+    broker.emit_memory_requests.return_value = {"requests": requests}
     broker.ingest_memory_results.return_value = probe
-    records, responses, slug = [], {}, "probe-project"
     printed: list = []
-    exec(compile(blocks[0]["code"], str(_DRAIN_DOC), "exec"), {  # noqa: S102
+    code = "\n" * blocks[0]["line"] + blocks[0]["code"]
+    exec(compile(code, str(_DRAIN_DOC), "exec"), {  # noqa: S102
         "auto_memory_broker": broker,
         "rl_common": mock.Mock(DATA_DIR=tmp_data_dir),
         "Path": mock.Mock(home=mock.Mock(return_value=tmp_memory_dir)),
@@ -1108,13 +1112,17 @@ def test_drain_report_template_prints_every_counter(tmp_memory_dir, tmp_data_dir
     broker.emit_memory_requests.assert_called_once_with(records)
     memory_dir = tmp_memory_dir / ".claude" / "projects" / slug / "memory"
     broker.ingest_memory_results.assert_called_once_with(
-        records, [], responses, memory_dir, memory_dir / "MEMORY.md", tmp_data_dir,
+        records, requests, responses, memory_dir, memory_dir / "MEMORY.md", tmp_data_dir,
     )
     assert len(printed) == 1, f"集計行が1行出ていない（出力: {printed}）"
     line = printed[0]
+    assert line.startswith("auto-memory: ")
+    assert len(line.splitlines()) == 1, f"集計に改行がある（出力: {line!r}）"
     counts, separator, hits = line.partition(" hits=")
     assert separator, f"止めた理由が出ていない（出力: {line}）"
-    parsed = dict(tok.split("=", 1) for tok in counts.split() if "=" in tok)
+    tokens = counts.removeprefix("auto-memory: ").split()
+    parsed = dict(tok.split("=", 1) for tok in tokens)
+    assert len(tokens) == len(parsed) == len(expected), f"件数キーの重複・過不足（出力: {line}）"
     for k, v in expected.items():
         assert parsed.get(k) == str(v), f"件数 {k} が出力と一致しない（出力: {line}）"
     assert ast.literal_eval(hits) == expected_hits, f"止めた理由の一覧が一致しない（出力: {line}）"
