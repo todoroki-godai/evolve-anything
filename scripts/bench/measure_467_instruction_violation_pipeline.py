@@ -328,10 +328,11 @@ def positive_control(project_root: Path, decomposed: Dict[str, Any]) -> Dict[str
     if target is None:
         return {"skipped": True, "reason": "S5 まで到達した correction が実測に無い"}
 
-    skill_md = Path(target["skill_mds_checked"][0]["skill_md"].replace("~/", str(Path.home()) + "/"))
+    candidate = next(c for c in target["skill_mds_checked"] if c["critical_lines"] > 0)
+    skill_md = Path(candidate["skill_md"].replace("~/", str(Path.home()) + "/"))
     instructions = extract_critical_lines(skill_md.read_text(encoding="utf-8"))
     if not instructions:
-        return {"skipped": True, "reason": f"critical 行が 0: {target['skill_mds_checked'][0]['skill_md']}"}
+        return {"skipped": True, "reason": f"critical 行が 0: {candidate['skill_md']}"}
 
     injected = [
         {
@@ -464,8 +465,10 @@ def main() -> None:
     text = json.dumps(payload, ensure_ascii=False, indent=2)
     if args.output:
         out = args.output if args.output.is_absolute() else Path.cwd() / args.output
-        out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(text + "\n", encoding="utf-8")
+        # 出力も同じ書込み境界で保護する。違反は伝播させ CLI を非0終了させる。
+        with guard_no_home_claude_writes(home_claude):
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(text + "\n", encoding="utf-8")
         print(f"[467-iv] wrote {out}")
     print(text)
 
