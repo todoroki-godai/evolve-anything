@@ -47,12 +47,12 @@ def pipeline(monkeypatch, tmp_path):
         yield runner, project, skill
 
 
-@pytest.mark.parametrize("violation_index, expected", [(20, 1), (0, 0)])
+@pytest.mark.parametrize("violation_index, expected", [(20, 1), (1, 1), (0, 0)])
 def test_latest_twenty_matches_production(pipeline, monkeypatch, violation_index, expected):
     runner, project, skill = pipeline
     corrections = [
         {"last_skill": "fixture", "timestamp": f"2026-01-{i + 1:02d}T00:00:00Z",
-         "session_id": f"synthetic-{i}",
+         "session_id": f"synthetic-{(i * 11 + 5) % 21:02d}",
          "message": skill.read_text() if i == violation_index else "unrelated weather"}
         for i in range(21)
     ]
@@ -85,6 +85,7 @@ def test_positive_control_uses_critical_candidate(pipeline, monkeypatch, empty_f
     checked = decomposed["per_correction"][0]["skill_mds_checked"]
     assert [c["critical_lines"] for c in checked] == ([0, 1] if empty_first else [1])
     result = m.positive_control(project, decomposed)
+    assert result["injected_skill_md"] == m._home_rel(local if empty_first else skill)
     assert result.get("both_detect_one") is True, result
     assert result["decomposed_S5_violations"] == 1
     assert result["run_discover_instruction_violations"] == 1
@@ -103,8 +104,9 @@ def output_cli(monkeypatch, tmp_path):
     return invoke
 
 
-@pytest.mark.parametrize("route", ["direct", "directory_link", "file_link", "relative_parent"])
+@pytest.mark.parametrize("route", ["direct", "directory_link", "file_link", "relative_parent", "missing_parent"])
 def test_output_rejects_home_claude(output_cli, tmp_path, monkeypatch, route):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
     protected = Path.home() / ".claude/store.json"
     protected.parent.mkdir(parents=True, exist_ok=True)
     protected.write_text("preserve existing store\n", encoding="utf-8")
@@ -121,9 +123,14 @@ def test_output_rejects_home_claude(output_cli, tmp_path, monkeypatch, route):
         work.mkdir()
         monkeypatch.chdir(work)
         output = Path("../.claude/store.json")
+    elif route == "missing_parent":
+        output = protected.parent / "not-created/x.json"
+        assert not output.parent.exists()
     # 未処理例外は CLI の非0終了になる。通常 return を認めない。
     with pytest.raises(m.WriteGuardViolation, match="blocked"):
         output_cli(output)
+    if route == "missing_parent":
+        assert not output.parent.exists()
     assert protected.read_text() == "preserve existing store\n"
 
 

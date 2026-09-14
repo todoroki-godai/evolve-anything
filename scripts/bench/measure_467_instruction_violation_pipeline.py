@@ -355,7 +355,7 @@ def positive_control(project_root: Path, decomposed: Dict[str, Any]) -> Dict[str
     prod_v = len(result.get("instruction_violations", []) or [])
     return {
         "injected_last_skill": target["last_skill"],
-        "injected_skill_md": target["skill_mds_checked"][0]["skill_md"],
+        "injected_skill_md": candidate["skill_md"],
         "injected_instruction_source_line": instructions[0].source_line,
         "decomposed_S5_violations": dec_v,
         "run_discover_instruction_violations": prod_v,
@@ -465,7 +465,8 @@ def main() -> None:
     text = json.dumps(payload, ensure_ascii=False, indent=2)
     if args.output:
         out = args.output if args.output.is_absolute() else Path.cwd() / args.output
-        # 出力も同じ書込み境界で保護する。違反は伝播させ CLI を非0終了させる。
+        # 出力も同じガードで既知の種別（symlink・相対パス）のみ検出する。
+        # 解決後のパス名で判定するため hard link は迂回可能。違反は CLI 非0終了へ伝播。
         with guard_no_home_claude_writes(home_claude):
             out.parent.mkdir(parents=True, exist_ok=True)
             out.write_text(text + "\n", encoding="utf-8")
