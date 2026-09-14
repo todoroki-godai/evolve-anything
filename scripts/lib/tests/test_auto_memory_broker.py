@@ -2,6 +2,7 @@
 
 すべて LLM-free。ingest は responses dict を直接渡すため claude subprocess を呼ばない。
 """
+import ast
 import json
 import re
 import sys
@@ -16,6 +17,7 @@ sys.path.insert(0, str(_LIB))
 import auto_memory_broker as amb
 import memory_temporal as mt
 from frontmatter import parse_frontmatter
+from dogfood.skill_blocks import extract_code_blocks
 
 
 # ─── fixtures ──────────────────────────────────────────────────────────────
@@ -1058,18 +1060,18 @@ _DRAIN_DOC = (
 )
 
 
-def test_drain_report_template_prints_every_counter(tmp_memory_dir, tmp_data_dir):
-    """drain 報告テンプレの print を実行すると、ingest が返す件数が全部出る。
+@pytest.mark.parametrize("all_zero", [False, True], ids=["nonzero", "zero"])
+def test_drain_report_template_prints_every_counter(tmp_memory_dir, tmp_data_dir, all_zero):
+    """drain のコードブロック全体を実行し、全件数と理由一覧の出力を検査する。
 
     出ない件数があると「起きていない」と「記録していない」を区別できなくなる（#550）。
     キーの一覧はテスト側に書き写さず、実際の戻り値から取る（写した一覧は腐る）。
     件数の判定は「一覧（list/dict）でない値」（int 限定だと型が変わった瞬間に
     静かに検査の外へ落ちる。実測で緑になった）。
 
-    **検出できる種別は限られる**（既知の種別のみ検出・迂回可能）: テンプレの print 自体を
-    条件分岐で包む・別の場所へ移す・Report への転記をやめる、といった変更はこの検査を
-    素通りする（2026-09-12 実測）。件数を一覧（`[n]`）や辞書に包む変更も素通りする。
-    守れるのは「戻り値にキーが増えた／改名されたのにテンプレが追随していない」場合だけ。
+    既知の限界: LLM が出力を Report へ転記するかは検査しない。
+    件数を一覧（`[n]`）や辞書に包む戻り値の変更は件数検査の対象外になる。
+    スタブ化した emit/ingest の実動作と、probe 以外の入力分岐も保証しない。
     """
     summary = amb.ingest_memory_results(
         [], [], {}, tmp_memory_dir, tmp_memory_dir / "MEMORY.md", tmp_data_dir,
@@ -1077,18 +1079,42 @@ def test_drain_report_template_prints_every_counter(tmp_memory_dir, tmp_data_dir
     counters = sorted(k for k, v in summary.items() if not isinstance(v, (list, dict)))
     assert counters, "件数キーが1つも無い（戻り値の形が変わった）"
 
-    doc = _DRAIN_DOC.read_text(encoding="utf-8")
-    start = doc.index('print("auto-memory: "')
-    snippet = doc[start:doc.index("\n```", start)]
-    # 値も見る。全部 0 の戻り値で検査すると「常に 0 を印字するテンプレ」と区別できない
+    blocks = [
+        block for block in extract_code_blocks(_DRAIN_DOC)
+        if block["lang"] == "python" and "ingest_memory_results" in block["code"]
+    ]
+    assert len(blocks) == 1, "drain の ingest ブロックを一意に特定できない"
+    # 非ゼロ値で固定 0 出力を検出し、全件 0 でも項目が省略されないことを別に検査する。
     probe = dict(summary)
-    expected = {k: i + 1 for i, k in enumerate(counters)}
+    expected = {k: 0 if all_zero else i + 1 for i, k in enumerate(counters)}
     probe.update(expected)
-    probe["contamination_hits"] = [{"pattern_id": "probe_pattern", "category": "x", "line": 1}]
+    expected_hits = ["probe_pattern_a", "probe_pattern_b"]
+    probe["contamination_hits"] = [
+        {"pattern_id": pattern, "category": "x", "line": i + 1}
+        for i, pattern in enumerate(expected_hits)
+    ]
+    broker = mock.Mock(spec=["emit_memory_requests", "ingest_memory_results"])
+    broker.emit_memory_requests.return_value = {"requests": []}
+    broker.ingest_memory_results.return_value = probe
+    records, responses, slug = [], {}, "probe-project"
     printed: list = []
-    exec(snippet, {"print": printed.append, "summary": probe})  # noqa: S102
+    exec(compile(blocks[0]["code"], str(_DRAIN_DOC), "exec"), {  # noqa: S102
+        "auto_memory_broker": broker,
+        "rl_common": mock.Mock(DATA_DIR=tmp_data_dir),
+        "Path": mock.Mock(home=mock.Mock(return_value=tmp_memory_dir)),
+        "records": records, "responses": responses, "slug": slug,
+        "print": printed.append,
+    })
+    broker.emit_memory_requests.assert_called_once_with(records)
+    memory_dir = tmp_memory_dir / ".claude" / "projects" / slug / "memory"
+    broker.ingest_memory_results.assert_called_once_with(
+        records, [], responses, memory_dir, memory_dir / "MEMORY.md", tmp_data_dir,
+    )
+    assert len(printed) == 1, f"集計行が1行出ていない（出力: {printed}）"
     line = printed[0]
-    parsed = dict(tok.split("=", 1) for tok in line.split() if "=" in tok)
+    counts, separator, hits = line.partition(" hits=")
+    assert separator, f"止めた理由が出ていない（出力: {line}）"
+    parsed = dict(tok.split("=", 1) for tok in counts.split() if "=" in tok)
     for k, v in expected.items():
         assert parsed.get(k) == str(v), f"件数 {k} が出力と一致しない（出力: {line}）"
-    assert "probe_pattern" in parsed.get("hits", ""), f"止めた理由が出ていない（出力: {line}）"
+    assert ast.literal_eval(hits) == expected_hits, f"止めた理由の一覧が一致しない（出力: {line}）"
