@@ -137,5 +137,33 @@ def test_bare_skill_name_still_resolves_via_global_skills_dir(tmp_path):
     assert str(home) not in result["instruction_violations"][0]["file"]
 
 
+def test_no_critical_lines_is_counted_not_silently_dropped(tmp_path):
+    """#661-1: SKILL.md は解決できたが critical 行が空の correction は無音で消えず件数に残る。"""
+    home = tmp_path / "home"
+    plugins_dir = home / ".claude" / "plugins"
+    ip_path = _write_installed_plugins(plugins_dir, "unrelated@marketplace", tmp_path / "unused")
+
+    # キーワード・見出し・条件節のいずれにも一致しない平文 → extract_critical_lines が空を返す
+    skill_md = home / ".claude" / "skills" / "plain-skill" / "SKILL.md"
+    skill_md.parent.mkdir(parents=True)
+    skill_md.write_text("# Plain Skill\n\nこれはただの説明文です。\n", encoding="utf-8")
+
+    corr = _correction("plain-skill")
+
+    project_root = tmp_path / "project"
+    project_root.mkdir(parents=True)
+
+    with mock.patch.object(skill_origin, "_installed_plugins_path", return_value=ip_path), \
+         mock.patch.object(telemetry_query, "query_corrections", return_value=[corr]), \
+         mock.patch("discover.runner.Path.home", return_value=home):
+        result = discover.run_discover(project_root=project_root)
+
+    assert "instruction_violations_error" not in result
+    assert "instruction_violations" not in result
+    # 既存キーの意味を壊さない: SKILL.md は解決できているので unresolved には数えない
+    assert "instruction_violations_unresolved" not in result
+    assert result.get("instruction_violations_no_critical_lines") == 1
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))
