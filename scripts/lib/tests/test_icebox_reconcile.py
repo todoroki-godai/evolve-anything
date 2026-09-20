@@ -17,7 +17,11 @@ if str(_lib_dir) not in sys.path:
 
 import icebox_reconcile as ir  # noqa: E402
 
+# classify_issue / _edited_after_close 系のテストは now=NOW を明示注入するので固定値のままでよい。
+# ただし weak_signals TTL（45日）評価器は `now` を受け取らず実時刻を基準に判定するため、
+# TTL 判定を跨ぐレコード（detected_at）は実時刻起点の相対値で組む（#667）。
 NOW = datetime(2026, 8, 1, tzinfo=timezone.utc)
+TTL_ANCHOR = datetime.now(timezone.utc)
 
 
 def _body(block_yaml: str, heading: str = ir.REOPEN_HEADING) -> str:
@@ -162,25 +166,25 @@ class TestWeakSignalsEvaluator:
         recs = [
             {
                 "promoted": False,
-                "detected_at": NOW.isoformat(),
+                "detected_at": (TTL_ANCHOR - timedelta(days=1)).isoformat(),
                 "channel": "llm_judge",
                 "pj_slug": ir.SELF_PJ_SLUG,
             },
             {
                 "promoted": True,
-                "detected_at": NOW.isoformat(),
+                "detected_at": (TTL_ANCHOR - timedelta(days=1)).isoformat(),
                 "channel": "llm_judge",
                 "pj_slug": ir.SELF_PJ_SLUG,
             },
             {
                 "promoted": False,
-                "detected_at": (NOW - timedelta(days=200)).isoformat(),
+                "detected_at": (TTL_ANCHOR - timedelta(days=200)).isoformat(),
                 "channel": "llm_judge",
                 "pj_slug": ir.SELF_PJ_SLUG,
             },  # expired (TTL 45日)
             {
                 "promoted": False,
-                "detected_at": NOW.isoformat(),
+                "detected_at": (TTL_ANCHOR - timedelta(days=1)).isoformat(),
                 "channel": "llm_judge",
                 "pj_slug": "some-other-pj",
             },  # 別 PJ はスコープ外
@@ -304,7 +308,7 @@ class TestWeakSignalsEvaluatorUnionRead:
                 json.dumps(
                     {
                         "promoted": False,
-                        "detected_at": NOW.isoformat(),
+                        "detected_at": (TTL_ANCHOR - timedelta(days=1)).isoformat(),
                         "channel": "llm_judge",
                         "pj_slug": ir.SELF_PJ_SLUG,
                         "signal_key": "legacy-1",
@@ -340,7 +344,7 @@ class TestWeakSignalsEvaluatorUnionRead:
                 json.dumps(
                     {
                         "promoted": False,
-                        "detected_at": NOW.isoformat(),
+                        "detected_at": (TTL_ANCHOR - timedelta(days=1)).isoformat(),
                         "channel": "llm_judge",
                         "pj_slug": ir.SELF_PJ_SLUG,
                         "signal_key": signal_key,
@@ -352,7 +356,7 @@ class TestWeakSignalsEvaluatorUnionRead:
             f.write(
                 json.dumps({
                     "key": signal_key, "pj_slug": ir.SELF_PJ_SLUG,
-                    "decision": "rejected", "reviewed_at": NOW.isoformat(),
+                    "decision": "rejected", "reviewed_at": (TTL_ANCHOR - timedelta(days=1)).isoformat(),
                 })
                 + "\n"
             )
