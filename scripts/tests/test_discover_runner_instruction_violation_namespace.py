@@ -89,6 +89,8 @@ def test_namespaced_plugin_skill_resolves_and_detects_violation(tmp_path):
     assert violations[0]["file"] == "~/.claude/plugins/cache/evolve-anything/1.125.0/skills/report-feedback/SKILL.md"
     assert str(home) not in violations[0]["file"]
     assert "instruction_violations_unresolved" not in result
+    # #661-1 陽性対照1: critical行がある SKILL.md で候補が作られたら新キーは出ない
+    assert "instruction_violations_no_critical_lines" not in result
 
 
 def test_unresolvable_skill_is_counted_not_silently_zero(tmp_path):
@@ -109,6 +111,8 @@ def test_unresolvable_skill_is_counted_not_silently_zero(tmp_path):
     assert "instruction_violations_error" not in result
     assert "instruction_violations" not in result
     assert result.get("instruction_violations_unresolved") == 1
+    # #661-1 陽性対照2: 解決できないケースは従来どおり unresolved のみで新キーは出ない
+    assert "instruction_violations_no_critical_lines" not in result
 
 
 def test_bare_skill_name_still_resolves_via_global_skills_dir(tmp_path):
@@ -163,6 +167,71 @@ def test_no_critical_lines_is_counted_not_silently_dropped(tmp_path):
     # 既存キーの意味を壊さない: SKILL.md は解決できているので unresolved には数えない
     assert "instruction_violations_unresolved" not in result
     assert result.get("instruction_violations_no_critical_lines") == 1
+
+
+def test_no_critical_lines_count_is_per_correction_not_leaked_across_loop(tmp_path):
+    """#661-1: 1件目に critical 行があっても 2件目が空なら独立に加算する（状態リーク防止）。
+
+    ``had_instructions`` を correction ループの外で初期化する変異を入れると、1件目で
+    True になった後 2件目でリセットされず、2件目の critical 行 0 件が無音で消える。
+    """
+    home = tmp_path / "home"
+    plugins_dir = home / ".claude" / "plugins"
+    ip_path = _write_installed_plugins(plugins_dir, "unrelated@marketplace", tmp_path / "unused")
+
+    rich_skill_md = home / ".claude" / "skills" / "rich-skill" / "SKILL.md"
+    rich_skill_md.parent.mkdir(parents=True)
+    rich_skill_md.write_text(_SKILL_MD_CONTENT, encoding="utf-8")
+
+    plain_skill_md = home / ".claude" / "skills" / "plain-skill" / "SKILL.md"
+    plain_skill_md.parent.mkdir(parents=True)
+    plain_skill_md.write_text("# Plain Skill\n\nこれはただの説明文です。\n", encoding="utf-8")
+
+    corrections = [
+        {**_correction("rich-skill"), "timestamp": "2026-08-19T00:00:01Z"},
+        {**_correction("plain-skill"), "timestamp": "2026-08-19T00:00:00Z"},
+    ]
+
+    project_root = tmp_path / "project"
+    project_root.mkdir(parents=True)
+
+    with mock.patch.object(skill_origin, "_installed_plugins_path", return_value=ip_path), \
+         mock.patch.object(telemetry_query, "query_corrections", return_value=corrections), \
+         mock.patch("discover.runner.Path.home", return_value=home):
+        result = discover.run_discover(project_root=project_root)
+
+    assert "instruction_violations_error" not in result
+    assert result.get("instruction_violations_no_critical_lines") == 1
+
+
+def test_no_critical_lines_not_double_counted_when_a_later_candidate_matches(tmp_path):
+    """#661-1: 同一 correction が複数 SKILL.md 候補を持ち、後続候補に critical 行があれば
+    先行候補が空でも加算しない（候補単位でなく correction 単位で判定する）。"""
+    home = tmp_path / "home"
+    plugins_dir = home / ".claude" / "plugins"
+    ip_path = _write_installed_plugins(plugins_dir, "unrelated@marketplace", tmp_path / "unused")
+
+    # global 側は critical 行なし、project ローカル側に critical 行あり
+    # （同じ bare 名で両方に SKILL.md を置き、all_skill_mds に2件並ばせる）
+    global_skill_md = home / ".claude" / "skills" / "dup-skill" / "SKILL.md"
+    global_skill_md.parent.mkdir(parents=True)
+    global_skill_md.write_text("# Dup Skill\n\nこれはただの説明文です。\n", encoding="utf-8")
+
+    project_root = tmp_path / "project"
+    pj_skill_md = project_root / ".claude" / "skills" / "dup-skill" / "SKILL.md"
+    pj_skill_md.parent.mkdir(parents=True)
+    pj_skill_md.write_text(_SKILL_MD_CONTENT, encoding="utf-8")
+
+    corr = _correction("dup-skill")
+
+    with mock.patch.object(skill_origin, "_installed_plugins_path", return_value=ip_path), \
+         mock.patch.object(telemetry_query, "query_corrections", return_value=[corr]), \
+         mock.patch("discover.runner.Path.home", return_value=home):
+        result = discover.run_discover(project_root=project_root)
+
+    assert "instruction_violations_error" not in result
+    assert "instruction_violations" in result
+    assert "instruction_violations_no_critical_lines" not in result
 
 
 if __name__ == "__main__":
