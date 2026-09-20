@@ -458,6 +458,7 @@ def run_discover(
 
         violations = []
         unresolved_count = 0
+        no_critical_lines_count = 0
         for corr in skill_corrections:
             skill_name = corr["last_skill"]
 
@@ -485,11 +486,13 @@ def run_discover(
                 unresolved_count += 1
                 continue
 
+            had_instructions = False
             for skill_md in all_skill_mds:
                 content = skill_md.read_text(encoding="utf-8")
                 instructions = extract_critical_lines(content)
                 if not instructions:
                     continue
+                had_instructions = True
                 violation = detect_instruction_violation(corr, instructions)
                 if violation:
                     violations.append(
@@ -508,11 +511,17 @@ def run_discover(
                         )
                     )
                 break  # 最初にマッチしたスキルのみ
+            if not had_instructions:
+                # silence != evaluated: SKILL.md は解決できたが critical 行が空で
+                # 候補にならなかった件数を無音で捨てない（#661-1）
+                no_critical_lines_count += 1
 
         if violations:
             result["instruction_violations"] = violations
         if unresolved_count:
             result["instruction_violations_unresolved"] = unresolved_count
+        if no_critical_lines_count:
+            result["instruction_violations_no_critical_lines"] = no_critical_lines_count
     except Exception as e:
         result["instruction_violations_error"] = str(e)
 
