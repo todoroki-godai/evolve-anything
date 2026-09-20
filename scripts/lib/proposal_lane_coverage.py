@@ -352,8 +352,11 @@ _RUNNER_NON_CANDIDATE_RESULT_KEYS: FrozenSet[str] = frozenset(
         # silence != evaluated のため runner.py が明示的に書く可観測性フィールドで、
         # リストでなく個別レビュー対象になり得ない（#467 plugin:skill 名前空間解決）
         "instruction_violations_no_critical_lines",  # 基準2: SKILL.md は解決できたが
-        # extract_critical_lines が空で候補化されなかった件数（int）。個別レビュー対象になり
-        # 得ない（#661-1 silence != evaluated）
+        # extract_critical_lines が空で候補化されなかった **correction 単位** の件数（int。
+        # 候補 SKILL.md がすべて空のときに 1）。SKILL.md 単位で数える
+        # scripts/bench/measure_467_instruction_violation_pipeline.py の
+        # zero_instruction_skill_mds とは単位が違うので取り違えないこと。
+        # 個別レビュー対象になり得ない（#661-1 silence != evaluated）
         "constraint_decay_error",  # 基準1: *_error
         "stall_recovery_error",  # 基準1: *_error
         "workflow_checkpoint_gaps_error",  # 基準1: *_error
