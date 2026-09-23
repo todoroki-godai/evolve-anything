@@ -14,7 +14,7 @@ description: |
   - 会話の文脈を踏まえた技術相談は senpai / senior-engineer に振る。
     このエージェントは会話履歴を持たず、渡されたコンテキストだけで判断する cold-read 専用。
   - 実装の是非を指摘してほしい場合は tacchi（実態突合・過剰約束の検出）に振る。
-model: fable
+model: opus
 tier: REVIEW
 effort: high
 tools: Read, Grep, Glob, WebSearch, WebFetch
