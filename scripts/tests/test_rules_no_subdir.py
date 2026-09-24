@@ -6,7 +6,16 @@
 移設される前、常時ロードされ続けていた）。判定はパスの深さのみで行い、
 ファイル名・拡張子には依存しない（`refs` という名前で判定すると
 別名のサブディレクトリに改名するだけで破れる）。
+
+**この検査で守れない範囲（2026-09-24 codex レビュー 巡2 [Must]・実測済み）**:
+`test_rules_dir_has_no_subdirectories` の判定文を `assert True` に書き換えると、
+ヘルパーの回帰テストを全部残したまま実配置の判定だけを無効化できる。
+**テストは自分の判定文の無効化を検出できない**ので、ここは機械では守れない。
+構文を検査して塞ぐ手は採らない（名前・構文形で同一性を判定する検査は blocking に
+使わない＝`.claude/rules/no-denylist-checks.md`）。代わりの受け皿は、
+このファイルへの差分がレビューに必ず出ること。
 """
+import stat
 from pathlib import Path
 
 import pytest
@@ -29,15 +38,27 @@ def find_rules_subdir_violations(rules_dir: Path) -> list[Path]:
     # 読めないのに「違反なし」と判定すると検査が黙って無力化するため、
     # 送出する `iterdir()` を使い、検査不能は赤にする（2026-09-24 codex レビュー [Must]）。
     for path in sorted(rules_dir.iterdir()):
-        if path.is_dir():
+        if _is_dir_or_raise(path):
             violations.extend(_walk_files(path))
     return violations
+
+
+def _is_dir_or_raise(path: Path) -> bool:
+    """ディレクトリか否かを、判定不能を隠さずに返す。
+
+    `Path.is_dir()` は stat の失敗を False に丸める（循環 symlink では ELOOP を
+    飲み込んで False を返すことを Python 3.14 で実測）。ディレクトリなのに
+    「違反なし」と扱われる経路を残さないため、`stat()` で判定して例外は送出する
+    （2026-09-24 codex レビュー 巡2 [Must]）。壊れた symlink も判定不能として赤にする
+    — 直下に壊れた symlink を置く理由が無く、黙って通すより気づけるほうがよい。
+    """
+    return stat.S_ISDIR(path.stat().st_mode)
 
 
 def _walk_files(directory: Path) -> list[Path]:
     files: list[Path] = []
     for entry in sorted(directory.iterdir()):
-        if entry.is_dir():
+        if _is_dir_or_raise(entry):
             files.extend(_walk_files(entry))
         else:
             files.append(entry)
@@ -122,3 +143,40 @@ def test_missing_rules_dir_is_not_silently_clean(tmp_path: Path) -> None:
     """起点が存在しないなら「違反なし」にせず送出する。"""
     with pytest.raises(FileNotFoundError):
         find_rules_subdir_violations(tmp_path / "does-not-exist")
+
+
+def test_circular_symlink_is_not_silently_clean(tmp_path: Path) -> None:
+    """循環 symlink は判定不能として送出する（`is_dir()` は ELOOP を False に丸める）。"""
+    rules = tmp_path / "rules"
+    rules.mkdir()
+    loop = rules / "loop"
+    loop.symlink_to(loop)
+    assert loop.is_dir() is False, "前提: is_dir() は ELOOP を False に丸める"
+    with pytest.raises(OSError):
+        find_rules_subdir_violations(rules)
+
+
+def test_broken_symlink_is_not_silently_clean(tmp_path: Path) -> None:
+    """壊れた symlink も判定不能として送出する。"""
+    rules = tmp_path / "rules"
+    rules.mkdir()
+    (rules / "broken").symlink_to(tmp_path / "does-not-exist")
+    with pytest.raises(FileNotFoundError):
+        find_rules_subdir_violations(rules)
+
+
+def test_unreadable_symlinked_subdirectory_is_not_silently_clean(tmp_path: Path) -> None:
+    """symlink 先のディレクトリが読めない場合も「違反なし」にしない。"""
+    rules = tmp_path / "rules"
+    rules.mkdir()
+    real = tmp_path / "real"
+    real.mkdir()
+    (real / "x.md").write_text("x")
+    (rules / "link").symlink_to(real)
+    assert find_rules_subdir_violations(rules) == [rules / "link" / "x.md"]
+    real.chmod(0o000)
+    try:
+        with pytest.raises(PermissionError):
+            find_rules_subdir_violations(rules)
+    finally:
+        real.chmod(0o755)
