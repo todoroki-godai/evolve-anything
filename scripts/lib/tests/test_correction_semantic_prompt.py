@@ -53,8 +53,7 @@ def _assert_advisory_boundary_contract(prompt: str) -> None:
         "発話が既存の成果物や作業の特定の不備・未完了を指し示している疑問形は修正に含める。状態・進捗・可否を尋ねるだけの質問は含めない。",
         "特定の欠落・不足を指し示す婉曲な発話も修正に含める。",
         "Claude の誤りの指摘に加え、既に出した成果物・方針・進め方を変えさせる要求も修正に含める。",
-        "新しい作業の依頼に付けた、その作業1回に限る条件は含めない。以後の作業にも続けて適用させる約束事は、Claude が既に示した成果物・方針・進め方を変更する要求がある場合に含める。",
-        "新しい作業の依頼や、これから作る成果物への希望だけでは、既存の成果物・方針・進め方を変えさせる要求とみなさない。",
+        "その作業1回に限る条件は含めない。以後の作業にも続けて適用させる約束事は含める。",
         "新しい情報を求める質問は修正に含めない。",
         "既存の成果物・方針に向かわない相談・提案は修正に含めない。",
         "新しい作業の依頼（「次これやって」）と、その作業の初期条件の指定は修正に含めない。",
@@ -72,8 +71,7 @@ def test_advisory_known_wording_only_boundary_rules_and_order() -> None:
 
 
 _M1_CLAUSE = "発話が既存の成果物や作業の特定の不備・未完了を指し示している疑問形は修正に含める。状態・進捗・可否を尋ねるだけの質問は含めない。"
-_SHOULD_CLAUSE = "新しい作業の依頼に付けた、その作業1回に限る条件は含めない。以後の作業にも続けて適用させる約束事は、Claude が既に示した成果物・方針・進め方を変更する要求がある場合に含める。"
-_NEW_TASK_CLAUSE = "新しい作業の依頼や、これから作る成果物への希望だけでは、既存の成果物・方針・進め方を変えさせる要求とみなさない。"
+_SHOULD_CLAUSE = "その作業1回に限る条件は含めない。以後の作業にも続けて適用させる約束事は含める。"
 
 
 @pytest.mark.parametrize(
@@ -82,8 +80,7 @@ _NEW_TASK_CLAUSE = "新しい作業の依頼や、これから作る成果物へ
         _M1_CLAUSE,
         "状態・進捗・可否を尋ねるだけの質問は含めない。",
         _SHOULD_CLAUSE,
-        "以後の作業にも続けて適用させる約束事は、Claude が既に示した成果物・方針・進め方を変更する要求がある場合に含める。",
-        _NEW_TASK_CLAUSE,
+        "以後の作業にも続けて適用させる約束事は含める。",
     ],
 )
 def test_advisory_new_boundary_deletion_is_rejected(clause: str) -> None:
@@ -97,8 +94,7 @@ def test_advisory_new_boundary_deletion_is_rejected(clause: str) -> None:
     ("before", "after"),
     [
         ("状態・進捗・可否を尋ねるだけの質問は含めない。", "状態・進捗・可否を尋ねるだけの質問は含める。"),
-        ("変更する要求がある場合に含める。", "変更する要求がある場合に含めない。"),
-        (_NEW_TASK_CLAUSE, "新しい作業の依頼や、これから作る成果物への希望だけでも、既存の成果物・方針・進め方を変えさせる要求とみなす。"),
+        ("以後の作業にも続けて適用させる約束事は含める。", "以後の作業にも続けて適用させる約束事は含めない。"),
     ],
 )
 def test_advisory_new_boundary_inversion_is_rejected(before: str, after: str) -> None:
@@ -113,7 +109,6 @@ def test_advisory_new_boundary_inversion_is_rejected(before: str, after: str) ->
     [
         (_M1_CLAUSE, "特定の欠落・不足を指し示す婉曲な発話も修正に含める。"),
         (_SHOULD_CLAUSE, "- 新しい情報を求める質問は修正に含めない。"),
-        (_NEW_TASK_CLAUSE, "- 新しい情報を求める質問は修正に含めない。"),
     ],
 )
 def test_advisory_new_boundary_order_swap_is_rejected(first: str, second: str) -> None:
@@ -133,8 +128,6 @@ def test_advisory_exclusion_deletion_is_rejected() -> None:
         _assert_advisory_boundary_contract(
             prompt.replace("- 新しい情報を求める質問は修正に含めない。", "", 1)
         )
-    with pytest.raises(AssertionError):
-        _assert_advisory_boundary_contract(prompt.replace(_NEW_TASK_CLAUSE, "", 1))
 
 
 def test_advisory_format_only_change_is_accepted() -> None:
@@ -193,10 +186,10 @@ def test_prompt_fingerprint_changes_with_template() -> None:
     assert cs_prompt.prompt_fingerprint() == fp1
 
 
-def test_prompt_contract_version_and_fingerprint_for_schema_v5() -> None:
+def test_prompt_contract_version_and_fingerprint_for_schema_v4() -> None:
     """#682: 判定境界の変更後の系列識別値を固定する。"""
-    assert cs_prompt.CATEGORY_SCHEMA_VERSION == 5
-    assert cs_prompt.prompt_fingerprint() == "9fbbca99e6d8"
+    assert cs_prompt.CATEGORY_SCHEMA_VERSION == 4
+    assert cs_prompt.prompt_fingerprint() == "e6a3814e11e7"
 
 
 @pytest.mark.parametrize(
