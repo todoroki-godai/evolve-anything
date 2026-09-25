@@ -52,18 +52,18 @@ def test_find_skill_mds_empty_when_no_skills(tmp_path):
     assert layer3.find_skill_mds(tmp_path) == []
 
 
-# --- #674: references/*.md の走査漏れ回帰 --------------------------------------------
+# --- references/*.md の走査漏れ回帰 --------------------------------------------
 
 
 def _make_repo_with_references(tmp_path: Path) -> Path:
-    """SKILL.md + references/*.md を持つ合成 repo（#674: 見逃した prune-merge.md の型）。"""
+    """SKILL.md + references/*.md を持つ合成 repo（見逃していた prune-merge.md の型）。"""
     repo = tmp_path / "repo"
     (repo / "skills" / "foo" / "references").mkdir(parents=True)
     (repo / "scripts" / "lib").mkdir(parents=True)
     (repo / "skills" / "foo" / "SKILL.md").write_text(
         "```python\nimport os\n```\n", encoding="utf-8"
     )
-    # references/bar.md: #674 と同型のバグ（sys.path 設定が欠落した python3 -c "..."）
+    # references/bar.md: 同型のバグ（sys.path 設定が欠落した python3 -c "..."）
     (repo / "skills" / "foo" / "references" / "bar.md").write_text(
         '```bash\npython3 -c "\n'
         "from this_module_does_not_exist_xyz import foo\n"
@@ -93,7 +93,7 @@ def test_skill_name_for_references_resolves_to_parent_skill():
 
 
 def test_run_layer3_scans_references_and_catches_missing_syspath(tmp_path):
-    """#674 の回帰確認: references/*.md 内の埋め込み python import 欠落を layer3 が拾う。
+    """回帰確認: references/*.md 内の埋め込み python import 欠落を layer3 が拾う。
 
     走査対象に含める（find_skill_mds）＋ import_check への昇格（skill_blocks の修正）の
     両方が揃って初めて赤くなる。skill 名は ``references`` でなく親スキル名 ``foo`` に

@@ -123,9 +123,10 @@ def test_bash_with_single_quoted_inline_python_excludes_python_body():
 def test_bash_single_quoted_inline_python_no_existence_failure(tmp_path: Path):
     """``python3 -c '...'`` を含む bash ブロックが existence_only で fail しない（#31 受け入れ）。
 
-    #674 の見逃し修正後は、この埋め込み python の import 自体も検証対象になる
-    （``PYTHONPATH=`` 前置を setup として解決する）。既存 fixture には実モジュールが
-    無かったため、ここで最小スタブを用意して実 import まで緑になることを確認する。
+    埋め込み python の import 見逃しを直した後は、この埋め込み python の import 自体も
+    検証対象になる（``PYTHONPATH=`` 前置を setup として解決する）。既存 fixture には
+    実モジュールが無かったため、ここで最小スタブを用意して実 import まで緑になることを
+    確認する。
     """
     (tmp_path / "scripts" / "lib").mkdir(parents=True)
     (tmp_path / "scripts" / "lib" / "evolve_introspect.py").write_text(
@@ -141,7 +142,7 @@ def test_bash_single_quoted_inline_python_no_existence_failure(tmp_path: Path):
     )
     block = {"lang": "bash", "code": code, "line": 1}
     res = sb.run_block(block, repo_root=tmp_path, sys_path_dirs=[])
-    # 埋め込み python の from/cand/import 等で missing fail を出さない。#674 修正後は
+    # 埋め込み python の from/cand/import 等で missing fail を出さない。修正後は
     # import_check モードで実 import が通ることまで確認する（existence_only への
     # 後退でごまかさない）。
     assert res["status"] == "pass", res.get("detail")
@@ -163,6 +164,22 @@ def test_run_import_check_fails_for_missing_module(tmp_path: Path):
     res = sb.run_block(block, repo_root=repo_root, sys_path_dirs=[])
     assert res["status"] == "fail"
     assert "this_module_does_not_exist_xyz" in res["detail"]
+
+
+def test_run_import_check_preserves_original_order_import_then_use(tmp_path: Path):
+    """陽性対照（telemetry.md 型の回帰）: ``import X`` の後で ``X.attr`` を使う代入行があっても
+    NameError にならない。setup 行と import 文を「先に setup・後に import」の固定順で
+    連結すると、この代入行が setup と誤認識されて import より前に置かれ NameError になる
+    （skills/implement/references/telemetry.md で実測した偽陽性）。元の出現順を保つことを確認する。
+    """
+    code = (
+        "import datetime, os, pathlib, sys\n"
+        "plugin_root = pathlib.Path(os.environ.get('CLAUDE_PLUGIN_ROOT', '.'))\n"
+        "sys.path.insert(0, str(plugin_root / 'scripts' / 'lib'))\n"
+    )
+    block = {"lang": "python", "code": code, "line": 1}
+    res = sb.run_block(block, repo_root=tmp_path, sys_path_dirs=[])
+    assert res["status"] == "pass", res.get("detail")
 
 
 # --- 存在検証実行 --------------------------------------------------------------
@@ -190,11 +207,11 @@ def test_placeholder_block_skipped_not_failed(tmp_path: Path):
     assert res["status"] in ("pass", "fail", "skip")
 
 
-# --- 埋め込み python import（#674: bash 内 python3 -c の import 見逃し回帰） --------------------
+# --- 埋め込み python import（bash 内 python3 -c の import 見逃し回帰） --------------------
 
 
 def _merge_suppression_block(with_syspath: bool) -> str:
-    """``skills/evolve/references/prune-merge.md`` の却下手順ブロックを再現する（#674 の実例）。"""
+    """``skills/evolve/references/prune-merge.md`` の却下手順ブロックを再現する。"""
     setup = (
         "import os, sys\n"
         "_root = os.environ.get('CLAUDE_PLUGIN_ROOT') or os.getcwd()\n"
@@ -212,7 +229,7 @@ def _merge_suppression_block(with_syspath: bool) -> str:
 
 
 def test_classify_bash_embedded_python_with_placeholder_is_import_checked():
-    """#674 の実例: プレースホルダが import 行と無関係な引数にだけあっても import_check になる。
+    """placeholder が import 行と無関係な引数にだけあっても import_check になる。
 
     修正前は bash ブロック全体の ``_has_placeholder`` 判定で existence_only に落ち、
     ``discover`` の import 自体が一度も検証されなかった。
@@ -224,7 +241,7 @@ def test_classify_bash_embedded_python_with_placeholder_is_import_checked():
 
 
 def test_run_block_missing_syspath_setup_fails(tmp_path: Path):
-    """陰性試験①: sys.path 設定の欠落（#674 の実例そのもの）→ 赤。"""
+    """陰性試験①: sys.path 設定の欠落（見逃していた実例そのもの）→ 赤。"""
     code = _merge_suppression_block(with_syspath=False)
     block = {"lang": "bash", "code": code, "line": 70}
     res = sb.run_block(block, repo_root=tmp_path, sys_path_dirs=[])
@@ -286,12 +303,13 @@ def test_run_block_missing_module_fails(tmp_path: Path):
     assert res["status"] == "fail", res.get("detail")
 
 
-def test_run_block_missing_function_name_not_caught_by_design(tmp_path: Path):
-    """陰性試験③（既知の設計限界・green のまま）: 存在しない関数名は検出対象外。
+def test_run_block_missing_function_name_is_caught(tmp_path: Path):
+    """陰性試験③: 単一行で完結する ``from X import Y`` の Y typo → 赤。
 
-    ``_extract_imports`` は ``from X import Y`` を ``import X`` に正規化する（#496 の割り切り。
-    複数行括弧 import の SyntaxError 偽陽性を避けるため）。モジュールは実在するので import は
-    成功し、``Y`` が実在しない typo は #674 の対象外＝既存の意図した設計のまま検出できない。
+    単一行で閉じている ``from X import Y`` は verbatim 実行するため（複数行 bracket
+    import の開き行だけは従来どおり ``import X`` に正規化し、#496 の SyntaxError 回避を
+    維持する）、モジュールは実在していても ``Y`` が実在しない typo は
+    ``ImportError: cannot import name ...`` で検出できる。
     """
     (tmp_path / "scripts" / "lib").mkdir(parents=True)
     (tmp_path / "scripts" / "lib" / "discover.py").write_text(
@@ -308,22 +326,28 @@ def test_run_block_missing_function_name_not_caught_by_design(tmp_path: Path):
     )
     block = {"lang": "bash", "code": code, "line": 1}
     res = sb.run_block(block, repo_root=tmp_path, sys_path_dirs=[])
-    # 既知の限界（advisory）: モジュール import 自体は成功するため pass のまま。
-    assert res["status"] == "pass", res.get("detail")
+    assert res["mode"] == "import_check"
+    assert res["status"] == "fail", res.get("detail")
+    assert "no_such_function_xyz" in res["detail"]
 
 
-def test_run_block_heredoc_style_not_caught_by_design(tmp_path: Path):
-    """陰性試験④（既知の限界・green のまま）: heredoc（``python3 - <<'EOF'``）形は検出対象外。
+def test_classify_bracketed_multiline_import_still_normalized():
+    """陽性対照（#496 の割り切りを維持）: 複数行 bracket import は verbatim 実行しない。
 
-    isolate は python 用の引用符（``"``/``'``）の parity 追跡のみを見るため、heredoc 区切り
-    （``<<'EOF'``）による本文は「引用符の中」と判定されない＝bash の書き方を変えるだけで
-    迂回できる（`no-denylist-checks.md` に従い non-blocking と明記。実例は現時点の skills/ に
-    heredoc 形が無いことを 2026-09-25 に grep で確認済み）。
+    ``from X import (`` で終わる開き行は、単一行完結の from-import と違い
+    ``import X`` に正規化されたまま（そうしないと欠けた括弧で SyntaxError になる）。
+    """
+    code = "from agent_quality import (\n    scan_agents,\n    score_agent,\n)\n"
+    cls = sb.classify_block("python", code)
+    assert cls["mode"] == "import_check"
+    assert cls["imports"][0]["stmt"] == "import agent_quality"
 
-    **範囲外の発見（#674 の対象外・未修正）**: heredoc 本文の1行目 ``from discover import ...``
-    の先頭トークン ``from`` が、既存の ``_extract_bash_commands``（#674 以前から存在）に
-    裸コマンドとして拾われ、存在検証で fail する（import_check への昇格とは無関係の理由で
-    たまたま赤になる）。mode で判定し、status には依存しない。
+
+def test_run_block_heredoc_style_missing_syspath_fails(tmp_path: Path):
+    """陰性試験④: heredoc（``python3 - <<'EOF'``）形の埋め込み python も import_check に乗る。
+
+    heredoc 本文を isolate 経路に追加した。sys.path 設定が無いままだと import に失敗し赤になる
+    （引用符ベースの isolate とは別の検出経路として heredoc 開始行の delimiter を追跡する）。
     """
     code = (
         "python3 - <<'EOF'\n"
@@ -333,31 +357,71 @@ def test_run_block_heredoc_style_not_caught_by_design(tmp_path: Path):
     )
     block = {"lang": "bash", "code": code, "line": 1}
     res = sb.run_block(block, repo_root=tmp_path, sys_path_dirs=[])
-    assert res["mode"] != "import_check"
+    assert res["mode"] == "import_check"
+    assert res["status"] == "fail", res.get("detail")
 
 
-def test_run_block_semicolon_joined_line_not_caught_by_design(tmp_path: Path):
-    """自分で考えた回避手段①（既知の限界・green のまま）: import と setup を同一行にセミコロン連結。
+def test_run_block_heredoc_style_with_syspath_passes(tmp_path: Path):
+    """陽性対照: heredoc 形でも sys.path.insert があり実モジュールがあれば緑になる。"""
+    (tmp_path / "scripts" / "lib").mkdir(parents=True)
+    (tmp_path / "scripts" / "lib" / "discover.py").write_text(
+        "def add_merge_suppression(a, b):\n    pass\n", encoding="utf-8"
+    )
+    code = (
+        "python3 - <<'EOF'\n"
+        "import os, sys\n"
+        "_root = os.environ.get('CLAUDE_PLUGIN_ROOT') or os.getcwd()\n"
+        "sys.path.insert(0, os.path.join(_root, 'scripts', 'lib'))\n"
+        "from discover import add_merge_suppression\n"
+        "add_merge_suppression('<primary_skill_name>', '<secondary_skill_name>')\n"
+        "EOF\n"
+    )
+    block = {"lang": "bash", "code": code, "line": 1}
+    res = sb.run_block(block, repo_root=tmp_path, sys_path_dirs=[])
+    assert res["mode"] == "import_check"
+    assert res["status"] == "pass", res.get("detail")
 
-    ``_IMPORT_RE`` は行全体が import 文であることを要求する（anchored ``^...$``）ため、
-    セミコロン連結の一行（実際に evolve/SKILL.md 等で使われている書き方）は import 文として
-    抽出されない＝#674 の修正では拾えない（heredoc とは異なる種類の回避。non-blocking と明記）。
+
+def test_run_block_semicolon_joined_line_missing_syspath_fails(tmp_path: Path):
+    """自分で考えた回避手段①: import と setup を同一行にセミコロン連結（一行完結の
+    ``python3 -c "..."``、実際に evolve/SKILL.md 等で使われている書き方）も、中身を ``;``
+    区切りで疑似行化して同じ経路に通す。sys.path が実際に無効な宛先なら赤になる。
     """
     code = (
-        "SLUG=\"$(python3 -c \\\"import os, sys; sys.path.insert(0,'/nonexistent/x'); "
-        "from this_module_does_not_exist_xyz import foo; print(foo())\\\" "
+        "SLUG=\"$(python3 -c \"import os, sys; sys.path.insert(0,'/nonexistent/x'); "
+        "from this_module_does_not_exist_xyz import foo; print(foo())\" "
         "2>/dev/null || echo unknown)\"\n"
     )
     block = {"lang": "bash", "code": code, "line": 1}
     res = sb.run_block(block, repo_root=tmp_path, sys_path_dirs=[])
-    assert res["mode"] != "import_check"
+    assert res["mode"] == "import_check"
+    assert res["status"] == "fail", res.get("detail")
+
+
+def test_run_block_semicolon_joined_line_with_real_syspath_passes(tmp_path: Path):
+    """陽性対照: セミコロン連結の一行完結形でも、実際に解決できる sys.path なら緑になる
+    （evolve/SKILL.md 等の実パターンを壊していないことの確認）。"""
+    (tmp_path / "scripts" / "lib").mkdir(parents=True)
+    (tmp_path / "scripts" / "lib" / "optimize_history_store.py").write_text(
+        "def resolve_slug(cwd):\n    return 'x'\n", encoding="utf-8"
+    )
+    libdir = str(tmp_path / "scripts" / "lib").replace("\\", "\\\\").replace("'", "\\'")
+    code = (
+        "SLUG=\"$(PJ=\"$PJ\" python3 -c \"import os, sys; sys.path.insert(0,'" + libdir + "'); "
+        "from optimize_history_store import resolve_slug; "
+        "print(resolve_slug(cwd=os.environ['PJ']))\" 2>/dev/null || echo unknown)\"\n"
+    )
+    block = {"lang": "bash", "code": code, "line": 1}
+    res = sb.run_block(block, repo_root=tmp_path, sys_path_dirs=[])
+    assert res["mode"] == "import_check"
+    assert res["status"] == "pass", res.get("detail")
 
 
 def test_classify_bash_submodule_typo_is_caught():
     """自分で考えた回避手段②とは別の陽性: サブモジュール名の誤りは import_check で検出できる。
 
     ``from discover.typo_submodule import x`` は ``import discover.typo_submodule`` に
-    正規化され、属性 typo と異なりモジュール解決自体が失敗するため #674 の修正で拾える。
+    正規化され、属性 typo と異なりモジュール解決自体が失敗するため import_check で拾える。
     """
     code = (
         'python3 -c "\n'

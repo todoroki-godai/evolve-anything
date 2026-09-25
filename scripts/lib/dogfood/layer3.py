@@ -27,7 +27,7 @@ def _layer3_sys_path_dirs(repo_root: Path) -> List[Path]:
 def find_skill_mds(repo_root: Path) -> List[Path]:
     """``skills/*/SKILL.md`` と ``skills/*/references/*.md`` を列挙する（ソート済み）。
 
-    ``references/*.md`` は #674 まで走査対象外だった（見逃しの根本原因の1つ）。
+    ``references/*.md`` は従来走査対象外だった（prune-merge.md 等の見逃しの根本原因の1つ）。
     SKILL.md から参照される補助手順書であり、同じコードブロック規約（fenced python/bash）
     を使うため、SKILL.md と同じ検証対象にする。
     """

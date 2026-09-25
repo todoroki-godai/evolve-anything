@@ -1,8 +1,8 @@
-"""Layer 3: SKILL.md コードブロック抽出 + 安全分類実行（#496）。
+"""Layer 3: SKILL.md / references/*.md コードブロック抽出 + 安全分類実行（#496）。
 
-全 ``skills/*/SKILL.md`` から fenced code block（python/bash）を抽出し、ユーザーと
-同じ素の起動経路（conftest の sys.path 補完 / HOME 隔離の下駄なし）で検証する。
-配線の死・sys.path 不足・削除済み CLI 参照（#479 #486 #487 #488 #495）を捕捉する。
+全 ``skills/*/SKILL.md`` と ``skills/*/references/*.md`` から fenced code block
+（python/bash）を抽出し、ユーザーと同じ素の起動経路（conftest の sys.path 補完 /
+HOME 隔離の下駄なし）で検証する。配線の死・sys.path 不足・削除済み CLI 参照を捕捉する。
 
 **安全分類が最重要**: 書込・破壊系を実行しない。分類ルール:
   - python: import 文を抽出し import 検証に変換（import 以外の副作用行は実行しない）。
@@ -88,59 +88,84 @@ def _has_placeholder(code: str) -> bool:
     return bool(_PLACEHOLDER_RE.search(code))
 
 
-def _extract_imports(code: str) -> List[Dict[str, str]]:
-    """python コードから import 文を抽出し ``[{"module": str, "stmt": str}]`` を返す。
+def _import_entries_for_line(raw: str) -> List[Dict[str, str]]:
+    """1行が import 文なら ``[{"module": str, "stmt": str}]`` を返す（複数行 import 対応）。
 
-    割り切り（#496）: ``from X import Y`` は ``import X`` に正規化してモジュール解決のみを
-    検証する。``Y`` がモジュール属性として実在しない（誤名・削除済みシンボル）ケースは
-    見逃す。代わりに複数行括弧 import（``from X import (\\n a,\\n b,\\n)``）を verbatim 実行した
-    ときの構文不完全 SyntaxError 偽陽性を構造的に防ぐ。sys.path 不足・モジュール不在
-    （#487/#488 型）は ``import X`` で十分捕捉できる。
+    ``from X import Y``: 同一行で閉じている（括弧が不均衡でない）かつ placeholder を
+    含まなければ ``stmt`` を **verbatim**（元の行そのまま）にする＝``Y`` が実在しない
+    typo も import 実行時に検出できる。複数行 bracket import の開き行（``from X import (``）
+    と placeholder を含む行は、従来どおり ``import X`` に正規化してモジュール解決のみを
+    検証する（#496 の割り切りを維持: verbatim 実行すると構文不完全 SyntaxError になる）。
     """
+    m = _IMPORT_RE.match(raw)
+    if not m:
+        return []
+    if m.group(1):  # from X import ...
+        mod = m.group(1)
+        stripped = raw.strip()
+        unbalanced = stripped.count("(") > stripped.count(")")
+        if unbalanced or _has_placeholder(stripped):
+            return [{"module": mod, "stmt": f"import {mod}"}]
+        return [{"module": mod, "stmt": stripped}]
+    # import a, b
+    entries: List[Dict[str, str]] = []
+    for mod in m.group(2).split(","):
+        mod = mod.strip().split(" as ")[0].strip()
+        if mod:
+            entries.append({"module": mod, "stmt": f"import {mod}"})
+    return entries
+
+
+def _extract_imports(code: str) -> List[Dict[str, str]]:
+    """python コードから import 文を抽出し ``[{"module": str, "stmt": str}]`` を返す（表示/検証用）。"""
     imports: List[Dict[str, str]] = []
     for raw in code.splitlines():
-        m = _IMPORT_RE.match(raw)
-        if not m:
-            continue
-        if m.group(1):  # from X import ...
-            mod = m.group(1)
-            imports.append({"module": mod, "stmt": f"import {mod}"})
-        else:  # import a, b
-            for mod in m.group(2).split(","):
-                mod = mod.strip().split(" as ")[0].strip()
-                if mod:
-                    imports.append({"module": mod, "stmt": f"import {mod}"})
+        imports.extend(_import_entries_for_line(raw))
     return imports
 
 
-def _extract_syspath_setup(code: str) -> List[str]:
-    """ブロックが自前で行う sys.path 設定 + その前提行（import os/sys, _root 代入）を返す。
+_SETUP_LINE_RE_LIST = (
+    re.compile(r"^import\s+(os|sys)(\s|,|$)"),
+    re.compile(r"^(import os, sys|import sys, os)"),
+    re.compile(r"^_?\w*root\w*\s*=", re.IGNORECASE),
+)
 
-    ``sys.path.insert`` を含む行と、その行が依存する ``import os/sys`` / ``_root = ...`` /
-    ``${CLAUDE_PLUGIN_ROOT}`` 解決行を verbatim で集める。これを import 検証の ``-c`` に
-    前置することで「ブロックが宣言したパスだけ」で import を試す（ゲートは scripts/lib を
-    勝手に足さない）。sys.path を一切足さないブロック（#487 agent-brushup 型）は import 失敗。
+
+def _is_setup_line(stripped: str) -> bool:
+    """sys.path 設定行（``sys.path.insert`` / ``import os,sys`` / ``_root = ...``）か判定する。"""
+    if "sys.path" in stripped:
+        return True
+    return any(p.match(stripped) for p in _SETUP_LINE_RE_LIST)
+
+
+def _extract_exec_lines(code: str) -> List[str]:
+    """import 文と sys.path 設定行を、元のソース内の相対順序を保ったまま抽出する。
+
+    setup 行を先に・import 文を後に固定順で連結すると、setup 行が import 対象の
+    モジュールを参照する書き方（例: ``import pathlib`` の後で
+    ``plugin_root = pathlib.Path(...)`` を setup として拾ってしまうケース）で
+    import 未実行のうちに参照して ``NameError`` になる偽陽性を生む
+    （skills/implement/references/telemetry.md で実測）。1行ずつ走査し、import 文は
+    ``_import_entries_for_line`` と同じ変換規則（#496 の複数行 bracket 正規化を含む）を、
+    setup 行はそのまま採用し、元の出現順を維持したリストを返す。
     """
-    setup: List[str] = []
+    lines: List[str] = []
     for raw in code.splitlines():
-        stripped = raw.strip()
-        if not stripped:
+        entries = _import_entries_for_line(raw)
+        if entries:
+            lines.extend(e["stmt"] for e in entries)
             continue
-        if (
-            "sys.path" in stripped
-            or re.match(r"^import\s+(os|sys)(\s|,|$)", stripped)
-            or re.match(r"^(import os, sys|import sys, os)", stripped)
-            or re.match(r"^_?\w*root\w*\s*=", stripped, re.IGNORECASE)
-        ):
-            setup.append(stripped)
-    return setup
+        stripped = raw.strip()
+        if stripped and _is_setup_line(stripped):
+            lines.append(stripped)
+    return lines
 
 
 def classify_block(lang: str, code: str) -> Dict[str, Any]:
     """コードブロックを安全分類する。
 
     返り値: ``{"mode": "import_check"|"run"|"existence_only", ...}``
-      - import_check: python の import 文を import 検証に変換
+      - import_check: python の import 文（+ sys.path 設定行）を元の順序のまま検証
       - run: bash の --help/--dry-run 付き安全コマンドを実行
       - existence_only: 実行せず存在検証のみ
     """
@@ -153,10 +178,7 @@ def classify_block(lang: str, code: str) -> Dict[str, Any]:
         if imports:
             cls["mode"] = "import_check"
             cls["imports"] = imports
-            # ブロックが自前で設定する sys.path 行を保存する。import 検証時は
-            # この setup だけを前置し、ゲート側から scripts/lib を勝手に注入しない
-            # ＝ユーザーと同じ素の起動経路を再現する（sys.path 不足 #487 を捕捉する核）。
-            cls["setup"] = _extract_syspath_setup(code)
+            cls["exec_lines"] = _extract_exec_lines(code)
         else:
             cls["mode"] = "existence_only"
         return cls
@@ -164,21 +186,17 @@ def classify_block(lang: str, code: str) -> Dict[str, Any]:
     # bash
     commands = _extract_bash_commands(code)
     cls["commands"] = commands
-    # 埋め込み python（``python3 -c "..."`` / ``'...'`` の複数行本文）の import 文も
-    # python fence と同じ import_check 経路に通す（#674: 見逃した回帰の再発防止）。
-    # 引用符の「中身」の行だけを isolate してから抽出するため、bash 構文（例:
-    # ``SLUG="$(... python3 -c "..." ...)"`` の一行完結形）を python として誤解釈しない
-    # （単一行で開閉する形は isolate 対象外＝既存の import_check 検出条件が anchored
-    # regex のため自然に除外される。#655 のこの制限は意図的で、テスト側に明記する）。
+    # 埋め込み python（``python3 -c "..."``/``'...'``/heredoc 本文/セミコロン連結の
+    # 単一行含む）の import 文も python fence と同じ import_check 経路に通す。
     py_source = _extract_embedded_python_source(code)
     embedded_imports = _extract_imports(py_source) if py_source else []
     if embedded_imports:
         cls["mode"] = "import_check"
         cls["imports"] = embedded_imports
-        # setup は「引用符内の sys.path 設定」＋「``PYTHONPATH=`` 前置」の両方を拾う。
+        # ``PYTHONPATH=`` 前置は bash レベルの設定なので python 本体より前に置く。
         # プレースホルダは import 文自体に含まれない限り無視する（python fence と同じ
-        # 割り切り。#674 の実例は import 行と無関係な引数にだけ placeholder があった）。
-        cls["setup"] = _extract_syspath_setup(py_source) + _extract_env_pythonpath_setup(code)
+        # 割り切り: 実例は import 行と無関係な引数にだけ placeholder があった）。
+        cls["exec_lines"] = _extract_env_pythonpath_setup(code) + _extract_exec_lines(py_source)
         return cls
     if cls.get("has_placeholder"):
         cls["mode"] = "existence_only"
@@ -276,15 +294,63 @@ def _extract_bash_commands(code: str) -> List[str]:
     return cmds
 
 
-def _extract_embedded_python_source(code: str) -> str:
-    """bash ブロック中で python 用の引用符が「開いたまま」の行だけを連結して返す。
+# python3 -c "..." / python -c '...' の「単一行で開いて閉じる」形（セミコロン連結）を検出する。
+_SINGLE_LINE_PY_C_RE = re.compile(r"python3?\s+-c\s+(?:\"([^\"]*)\"|'([^']*)')")
 
-    ``python3 -c "..."`` / ``'...'`` の複数行本文（ヒアドキュメント風の書き方）を対象にする。
-    ``_extract_bash_commands`` と同じ per-line クォート parity 追跡を再利用し、bash 構文の
-    行（例: ``SLUG="$(... python3 -c "..." ...)"`` の一行完結形）は「開始時点で引用符内」に
-    ならないため自然に除外される。**既知の限界**: 単一行で開いて閉じる形
-    （``python3 -c "import json; ..."``）とヒアドキュメント形（``python3 - <<'EOF' ... EOF``）
-    は対象外＝迂回可能（bash 構文形で判定しているため。`no-denylist-checks.md`）。
+# ``python3 - <<'EOF' ... EOF`` / ``python3 <<EOF ... EOF`` 形の heredoc 開始行を検出する。
+_HEREDOC_OPEN_RE = re.compile(r"^\s*.*\bpython3?\b.*<<-?\s*['\"]?(\w+)['\"]?\s*$")
+
+
+def _extract_heredoc_python_lines(code: str) -> List[str]:
+    """``python3 - <<'EOF' ... EOF`` 形の heredoc 本文を python ソース行として返す。"""
+    lines_out: List[str] = []
+    all_lines = code.splitlines()
+    i, n = 0, len(all_lines)
+    while i < n:
+        m = _HEREDOC_OPEN_RE.match(all_lines[i])
+        if not m:
+            i += 1
+            continue
+        delim = m.group(1)
+        i += 1
+        while i < n and all_lines[i].strip() != delim:
+            lines_out.append(all_lines[i])
+            i += 1
+        i += 1  # 終端行（delim 単独行）をスキップ
+    return lines_out
+
+
+def _extract_single_line_py_c_pseudo_lines(code: str) -> List[str]:
+    """単一行で開閉する ``python3 -c "..."`` の中身を ``;`` で分割し疑似行として返す。
+
+    ``import os, sys; sys.path.insert(0, X); from Y import z`` のようにセミコロン連結
+    された一行は、複数行の埋め込み python とは異なり anchored な import 検出（1行=1文）
+    に自然には乗らない。中身を ``;`` で分割して1文1行相当に正規化することで、既存の
+    import/setup 検出をそのまま再利用する。**既知の限界**: 文字列リテラル内の ``;`` は
+    区切りと誤認しうる（この分割は構文木でなく単純な文字列分割のため）。
+    """
+    pseudo: List[str] = []
+    for line in code.splitlines():
+        for m in _SINGLE_LINE_PY_C_RE.finditer(line):
+            content = m.group(1) if m.group(1) is not None else m.group(2)
+            if content is None:
+                continue
+            for stmt in content.split(";"):
+                stmt = stmt.strip()
+                if stmt:
+                    pseudo.append(stmt)
+    return pseudo
+
+
+def _extract_embedded_python_source(code: str) -> str:
+    """bash ブロック中に埋め込まれた python ソースを3経路から isolate して連結する。
+
+    ①``python3 -c "..."``/``'...'`` の複数行本文（引用符が「開いたまま」の行。
+    ``_extract_bash_commands`` と同じ per-line クォート parity 追跡を再利用）
+    ②``python3 - <<'EOF' ... EOF`` 形の heredoc 本文
+    ③単一行で開閉する ``python3 -c "..."`` の中身（``;`` 区切りで疑似行化）
+    bash 構文の行（例: ``SLUG="$(... python3 -c "..." ...)"`` の一行完結形そのもの）は
+    ①の「開始時点で引用符内」判定では対象にならないが、③で中身だけを別途拾う。
     """
     collected: List[str] = []
     in_dquote = False
@@ -297,6 +363,8 @@ def _extract_embedded_python_source(code: str) -> str:
             in_squote = not in_squote
         if started_in_quote:
             collected.append(line)
+    collected.extend(_extract_heredoc_python_lines(code))
+    collected.extend(_extract_single_line_py_c_pseudo_lines(code))
     return "\n".join(collected)
 
 
@@ -309,7 +377,7 @@ _ENV_PYTHONPATH_PREFIX_RE = re.compile(
 def _extract_env_pythonpath_setup(code: str) -> List[str]:
     """``PYTHONPATH=<path> python3 -c`` 前置を ``sys.path.insert`` 相当の setup 行に変換する。
 
-    シェル環境変数で解決パスを渡す書き方は ``_extract_syspath_setup`` の
+    シェル環境変数で解決パスを渡す書き方は ``_extract_exec_lines`` の
     ``sys.path`` 行検出（引用符内の python 行が対象）では拾えないため、別経路で補う。
     """
     setup: List[str] = []
@@ -373,7 +441,7 @@ def run_block(
     if cls["mode"] == "import_check":
         return {
             **base,
-            **_run_import_check(cls["imports"], sys_path_dirs, cls.get("setup", []), repo_root),
+            **_run_import_check(cls.get("exec_lines", []), sys_path_dirs, repo_root),
         }
     if cls["mode"] == "run":
         return {**base, **_run_safe_bash(code, repo_root)}
@@ -382,22 +450,23 @@ def run_block(
 
 
 def _run_import_check(
-    imports: List[Dict[str, str]],
+    exec_lines: List[str],
     sys_path_dirs: List[Path],
-    setup: List[str] | None = None,
     repo_root: Path | None = None,
 ) -> Dict[str, Any]:
-    """import 文を素の python subprocess で import 検証する（conftest 下駄なし）。
+    """import 文（+ sys.path 設定行）を、元の相対順序のまま素の python subprocess で検証する
+    （conftest 下駄なし）。
 
-    ``setup`` はブロックが自前で行う sys.path 設定行（``${CLAUDE_PLUGIN_ROOT}`` は展開済み）。
-    これを import の前に実行することで「ブロックが宣言したパス」だけで import を試す
-    （ユーザーと同じ起動経路の再現）。``sys_path_dirs`` は明示的に渡された追加パスのみ
-    （layer3 は空を渡す＝勝手に scripts/lib を足さない → #487 の sys.path 不足を捕捉）。
+    ``exec_lines`` は ``classify_block`` が元のソース順のまま組み立てた実行行（``${CLAUDE_PLUGIN_ROOT}``
+    は展開済み）。setup を import より先に固定する再配置はしない（setup 行が import 対象を
+    参照する書き方で NameError の偽陽性を生むため）。``sys_path_dirs`` は明示的に渡された
+    追加パスのみ（layer3 は空を渡す＝勝手に scripts/lib を足さずユーザーと同じ起動経路を
+    再現し、sys.path 不足を捕捉する）。
     """
-    setup_lines = list(setup or [])
+    lines = list(exec_lines)
     if repo_root is not None:
-        setup_lines = [_expand_plugin_root(s, repo_root) for s in setup_lines]
-    body = "\n".join(setup_lines + [imp["stmt"] for imp in imports])
+        lines = [_expand_plugin_root(s, repo_root) for s in lines]
+    body = "\n".join(lines)
     pythonpath = os.pathsep.join(str(p) for p in sys_path_dirs)
     env = dict(os.environ)
     if pythonpath:
@@ -412,7 +481,7 @@ def _run_import_check(
         timeout=30,
     )
     if proc.returncode == 0:
-        return {"status": "pass", "detail": f"imported: {[i['module'] for i in imports]}"}
+        return {"status": "pass", "detail": f"ok: {len(lines)} 行実行"}
     err = (proc.stderr or proc.stdout or "").strip().splitlines()
     return {"status": "fail", "detail": err[-1] if err else "import failed"}
 
