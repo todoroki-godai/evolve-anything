@@ -7,7 +7,7 @@
       "scripts/lib/correction_semantic/prompt.py",
       "scripts/lib/safe_llm_call.py"
     ],
-    "sha": "7e75d3d3736cc2784babd0185170dfb11028ca4c764e7e7bbab7b32bb2cf4b97"
+    "sha": "40d8db0a6f902e322dcc7776008fc9e8c7a6708ddc6dfaca9bce6b356ee8bd80"
   },
   "metrics": [
     {
@@ -41,27 +41,27 @@
   "metrics_md": "prev_action 付き発話は本 eval コーパスでは 0/416（全件 prev_action 空）。本番母集団では約12%、本番判定実績では約34%が prev_action 付き（レビュー指摘値・本ランナーでは未計測）。このスライスの judge 精度は本 eval では測定していない。",
   "confusion_summary": {
     "n": 416,
-    "tp": 23,
-    "fn": 24,
-    "fp": 9,
-    "tn": 360,
+    "tp": 27,
+    "fn": 20,
+    "fp": 13,
+    "tn": 356,
     "positives": 47,
     "negatives": 369,
     "accuracy": 0.9206730769230769,
-    "precision": 0.71875,
+    "precision": 0.675,
     "precision_ci": [
-      0.546251630618882,
-      0.8443559315435214
+      0.52017458088898,
+      0.7991568303733828
     ],
-    "recall": 0.48936170212765956,
+    "recall": 0.574468085106383,
     "recall_ci": [
-      0.3527532433660351,
-      0.6275778241062712
+      0.43281668771211546,
+      0.7048658399817417
     ],
-    "specificity": 0.975609756097561,
+    "specificity": 0.964769647696477,
     "specificity_ci": [
-      0.954302209043424,
-      0.9871163451093313
+      0.9406639672338752,
+      0.9792977537757976
     ]
   }
 }
