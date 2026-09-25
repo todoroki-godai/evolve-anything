@@ -11,18 +11,44 @@ from typing import Any, Callable, Iterable
 
 EXPECTED_EVAL_ROWS = 416
 EXPECTED_EVAL_SHA256 = "6a65520ba6ede89842fa4bdedb38a89ec70346dda55fdae2718fffbbf575d01e"
+APPROVED_EVAL_SETS = {
+    "a0": (EXPECTED_EVAL_ROWS, EXPECTED_EVAL_SHA256),
+    "holdout682": (709, "f31004bcfe0efb81b7f43b60f81f66dcbd90b915a40b5d857b9dd2dfb4956687"),
+}
 
 
 class CaptureEvalIntegrityError(ValueError):
     """The frozen capture-evaluation corpus is not the approved artifact."""
 
 
-def load_capture_eval_set(path: Path) -> list[dict[str, Any]]:
+def _approved(name: str) -> tuple[int, str]:
+    if name == "a0":
+        return EXPECTED_EVAL_ROWS, EXPECTED_EVAL_SHA256
+    try:
+        return APPROVED_EVAL_SETS[name]
+    except KeyError as exc:
+        raise CaptureEvalIntegrityError("unapproved capture evaluation corpus") from exc
+
+
+def identify_eval_set(path: Path) -> str:
     raw = path.read_bytes()
-    if hashlib.sha256(raw).hexdigest() != EXPECTED_EVAL_SHA256:
+    digest = hashlib.sha256(raw).hexdigest()
+    for name in APPROVED_EVAL_SETS:
+        expected_rows, expected_sha = _approved(name)
+        if digest == expected_sha:
+            if len([line for line in raw.splitlines() if line.strip()]) != expected_rows:
+                raise CaptureEvalIntegrityError("capture evaluation corpus row count mismatch")
+            return name
+    raise CaptureEvalIntegrityError("capture evaluation corpus hash mismatch")
+
+
+def load_capture_eval_set(path: Path, name: str = "a0") -> list[dict[str, Any]]:
+    raw = path.read_bytes()
+    expected_rows, expected_sha = _approved(name)
+    if hashlib.sha256(raw).hexdigest() != expected_sha:
         raise CaptureEvalIntegrityError("capture evaluation corpus hash mismatch")
     rows = [json.loads(line) for line in raw.decode("utf-8").splitlines() if line.strip()]
-    if len(rows) != EXPECTED_EVAL_ROWS:
+    if len(rows) != expected_rows:
         raise CaptureEvalIntegrityError("capture evaluation corpus row count mismatch")
     return rows
 
@@ -76,7 +102,7 @@ _REMEASURE = ("既存 .claude/hillclimb/correction-judge/baseline を "
 
 def evaluate_capture_union(
     eval_rows: Iterable[dict[str, Any]], result_rows: Iterable[dict[str, Any]],
-    harness_sha: str, model: str, batch_size: int,
+    harness_sha: str, model: str, batch_size: int, eval_set_name: str = "a0",
 ) -> dict[str, Any]:
     """Advisory only: detect known ID/content/provenance mismatches, then count both lanes."""
     def unavailable(reason: str) -> dict[str, Any]:
@@ -109,6 +135,8 @@ def evaluate_capture_union(
             return unavailable("判定値は bool 必須")
         if (meta.get("harness_sha"), meta.get("model"), meta.get("batch_size_config")) != (harness_sha, model, batch_size):
             return unavailable("AI 判定の来歴が現行条件と不一致")
+        if meta.get("eval_set", "a0") != eval_set_name:
+            return unavailable("評価セットの来歴が不一致")
         timestamp = meta.get("generated_at")
         try:
             parsed = datetime.fromisoformat(timestamp)
@@ -150,7 +178,8 @@ def evaluate_capture_union(
     }
 
 
-def load_capture_union(eval_candidates: Iterable[Path], results_path: Path) -> dict[str, Any]:
+def load_capture_union(eval_candidates: Iterable[Path], results_path: Path,
+                       eval_set_name: str = "a0") -> dict[str, Any]:
     """Reuse the frozen corpus loader and candidate order; never write either artifact."""
     import sys
     bench_dir = Path(__file__).resolve().parents[1] / "bench"
@@ -163,7 +192,7 @@ def load_capture_union(eval_candidates: Iterable[Path], results_path: Path) -> d
     for candidate in eval_candidates:
         if candidate.exists():
             try:
-                rows = load_capture_eval_set(candidate)
+                rows = load_capture_eval_set(candidate, name=eval_set_name)
                 break
             except (CaptureEvalIntegrityError, OSError, ValueError):
                 mismatch = True
@@ -177,4 +206,5 @@ def load_capture_union(eval_candidates: Iterable[Path], results_path: Path) -> d
     except (OSError, ValueError):
         return {"measured": False, "reason": "AI 判定結果の読込失敗"}
     return evaluate_capture_union(rows, results, judge_eval.compute_harness_sha(),
-                                  judge_eval.RunConfig().model, judge_eval.DEFAULT_BATCH_SIZE)
+                                  judge_eval.RunConfig().model, judge_eval.DEFAULT_BATCH_SIZE,
+                                  eval_set_name=eval_set_name)
