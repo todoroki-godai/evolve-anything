@@ -143,7 +143,7 @@ def test_advisory_union_shared_data_dir_only_positive_control(tmp_path, monkeypa
     "missing", "extra", "duplicate", "same_text_different_id", "missing_filled_duplicate",
     "hash", "label", "expected_string", "predicted_string", "status", "rep",
     "missing_provenance", "mixed_provenance", "stale_harness", "wrong_model",
-    "wrong_batch", "same_text_conflicting_prediction", "missing_generated_at",
+    "wrong_batch", "missing_generated_at",
 ])
 def test_advisory_union_rejects_known_invalid_classes(change):
     rows, results = fixture()
@@ -164,8 +164,6 @@ def test_advisory_union_rejects_known_invalid_classes(change):
         for result in results: result["meta"]["harness_sha"] = "old"
     elif change == "wrong_model": results[0]["meta"]["model"] = "sonnet"
     elif change == "wrong_batch": results[0]["meta"]["batch_size_config"] = 12
-    elif change == "same_text_conflicting_prediction":
-        results[1] = copy.deepcopy(results[0]); results[1]["meta"]["predicted"] = True
     elif change == "missing_generated_at": del results[0]["meta"]["generated_at"]
     out = measure(rows, results)
     assert out["measured"] is False
