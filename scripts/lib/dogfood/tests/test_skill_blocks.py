@@ -627,3 +627,51 @@ def test_self_devised_B_heredoc_and_dash_c_mixed_in_same_block(tmp_path: Path):
     assert res["mode"] == "import_check"
     assert res["status"] == "fail", res.get("detail")
     assert "import#1" in res["detail"]
+
+
+# --- codex レビュー巡2 M4（salvage が行ごと import を消していた回帰） -------------------
+
+
+def test_M4_bare_placeholder_same_line_as_import_does_not_hide_import(tmp_path: Path):
+    """陰性試験 M4: セミコロン連結の同一行に import と裸 placeholder が同居していても
+    import 検証を見逃さない。
+
+    以前の salvage（構文エラーの物理行を丸ごと ``pass`` に置換して再試行する方式）は、
+    ``from discover import add_merge_suppression; print(<VALUE>)`` のような行全体を
+    ``pass`` に置換していたため、同じ行の import 文ごと消えて existence_only/pass に
+    後退していた（レビュー指摘）。sys.path 未設定なので import 自体は解決できず、
+    本来は fail になるべき。
+    """
+    code = 'python3 -c "from discover import add_merge_suppression; print(<VALUE>)\n"'
+    block = {"lang": "bash", "code": code, "line": 1}
+    res = sb.run_block(block, repo_root=tmp_path, sys_path_dirs=[])
+    assert res["mode"] == "import_check"
+    assert res["status"] == "fail", res.get("detail")
+
+
+def test_M4_literal_value_no_placeholder_still_fails_missing_syspath(tmp_path: Path):
+    """陰性試験（従来どおり赤の確認）: placeholder が無い同型の行（``<VALUE>`` → ``1``）も、
+    sys.path 未設定のままなら import は解決できず fail のまま。"""
+    code = 'python3 -c "from discover import add_merge_suppression; print(1)\n"'
+    block = {"lang": "bash", "code": code, "line": 1}
+    res = sb.run_block(block, repo_root=tmp_path, sys_path_dirs=[])
+    assert res["mode"] == "import_check"
+    assert res["status"] == "fail", res.get("detail")
+
+
+def test_M4_placeholder_substitution_positive_control(tmp_path: Path):
+    """陽性対照 M4: sys.path を正しく設定し、引数に複数の裸 placeholder（``<a>``/``<B>``、
+    小文字・大文字混じり）を含んでいても import 検証は緑になる。"""
+    (tmp_path / "scripts" / "lib").mkdir(parents=True)
+    (tmp_path / "scripts" / "lib" / "discover.py").write_text(
+        "def add_merge_suppression(a, b):\n    pass\n", encoding="utf-8"
+    )
+    libdir = str(tmp_path / "scripts" / "lib")
+    code = (
+        f'python3 -c "import sys; sys.path.insert(0, \'{libdir}\')\n'
+        'from discover import add_merge_suppression; add_merge_suppression(<a>, <B>)\n"'
+    )
+    block = {"lang": "bash", "code": code, "line": 1}
+    res = sb.run_block(block, repo_root=tmp_path, sys_path_dirs=[])
+    assert res["mode"] == "import_check"
+    assert res["status"] == "pass", res.get("detail")

@@ -49,7 +49,7 @@ ingest_judgment_scores(proj, emit["requests"], responses)
    - 「今回のみスキップ」
    - 「永続スキップ（denylist に追加）」
 3. 永続スキップを選んだスキルがある場合（`_plugin_root` は `~/.claude/evolve-anything` または `plugin_root.py` で解決できる実際のパス）:
-   ```python
+   ```bash
    python3 -c "
    import os, sys; sys.path.insert(0, os.path.join(os.environ.get('CLAUDE_PLUGIN_ROOT') or os.getcwd(), 'scripts', 'lib'))
    from skill_evolve.denylist import add_to_denylist

@@ -115,40 +115,13 @@ def _is_setup_stmt(node: ast.stmt) -> bool:
     return False
 
 
-def _ast_parse_salvage(source: str, max_attempts: int = 20) -> Tuple[Optional[ast.Module], Optional[str]]:
-    """``ast.parse`` を試み、失敗したら SyntaxError の行を ``pass`` に置換して再試行する。
-
-    実例（skills/evolve/references/report-narration.md）: 本文の1行だけが
-    ``save_world_context(..., env_score=<ENV_SCORE>, ...)`` のように引用符外の
-    placeholder を含み、その行単体は構文エラーになる。この行は import/setup 文ではない
-    ため元々実行対象にしないが、``ast.parse`` は本文全体を一度に解析するため、この1行の
-    エラーだけで本文中の他の import 文まで丸ごと「判定不能」になってしまう。エラー行を
-    ``pass`` に差し替えて再試行することで、無関係な1行の構文エラーが他の import 検証を
-    道連れにしないようにする（最大 ``max_attempts`` 回。複数行にまたがる構文エラー
-    ― 例えば fence の言語指定を間違えて python 以外の内容が丸ごと入っている場合 ― は
-    salvage できず、最終的に判定不能のまま返す。これは意図的: 本文の言語指定そのものが
-    誤っている可能性を隠さない）。
-    """
-    lines = source.splitlines(keepends=True)
-    last_err: Optional[SyntaxError] = None
-    for _ in range(max_attempts):
-        try:
-            return ast.parse("".join(lines)), None
-        except SyntaxError as e:
-            last_err = e
-            lineno = e.lineno
-            if lineno is None or not (1 <= lineno <= len(lines)):
-                break
-            original = lines[lineno - 1]
-            indent = original[: len(original) - len(original.lstrip(" \t"))]
-            newline = "\n" if original.endswith("\n") else ""
-            replacement = f"{indent}pass{newline}"
-            if lines[lineno - 1] == replacement:
-                break  # 同じ行を無限に置換し続ける事態を避ける
-            lines[lineno - 1] = replacement
-    if last_err is not None:
-        return None, f"{type(last_err).__name__}: {last_err}"
-    return None, "unknown parse error"
+# 引用符の外（式の中）に裸で置かれた placeholder（例: ``env_score=<ENV_SCORE>``）を
+# ``None`` に置換してから ast.parse する。placeholder は識別子として有効な形
+# （先頭は英字/アンダースコア、以降は英数字/アンダースコア）だけを対象にする
+# （`<a>`/`<B>` のような1文字・大文字混じりも含む。`<primary skill name>` のようにスペース
+# を含む形は対象外＝マッチしない。既に文字列リテラル内にある場合も、置換で文字列の
+# 中身が変わるだけで構文には影響しない）。
+_BARE_PLACEHOLDER_RE = re.compile(r"<[A-Za-z_][A-Za-z0-9_]*>")
 
 
 def _ast_select_exec_lines(source: str) -> Tuple[List[str], List[Dict[str, str]], Optional[str]]:
@@ -166,14 +139,23 @@ def _ast_select_exec_lines(source: str) -> Tuple[List[str], List[Dict[str, str]]
       失敗時は ``exec_lines``/``imports`` は空リストになる。呼び出し側は「判定不能」
       として扱い、pass や skip にはしない（`no-denylist-checks.md` に従い解析対象外を
       緑化しない）。import 以外の副作用行（関数呼び出し等）は一切実行しない。
+
+    引用符の外（式の中）に裸で置かれた placeholder（``env_score=<ENV_SCORE>`` 等）は
+    ``None`` に置換してから parse する（``_BARE_PLACEHOLDER_RE``）。**行を丸ごと置換する
+    salvage（以前のバージョン）は撤去した**: 構文エラーの物理行に import 文がセミコロン
+    連結で同居している場合（``from X import Y; print(<V>)``）、行ごと ``pass`` に
+    置換すると import ごと消えて見逃しになるため（レビュー指摘）。置換後も ``ast.parse``
+    が失敗する場合は、そのまま「判定不能」として返す（フォールバックはしない）。
     """
     # markdown の箇条書き下に置かれた fenced code block は本文全体が一律にインデント
     # されることがある（例: skills/evolve/references/prune-merge.md）。トップレベルの
     # python スクリプトとして解析するため、共通の先頭空白を取り除いてから parse する
     # （相対的なネスト構造＝実際の if/for 本体等は dedent で保たれる）。
-    tree, parse_error = _ast_parse_salvage(textwrap.dedent(source))
-    if tree is None:
-        return [], [], parse_error
+    normalized = _BARE_PLACEHOLDER_RE.sub("None", textwrap.dedent(source))
+    try:
+        tree = ast.parse(normalized)
+    except SyntaxError as e:
+        return [], [], f"{type(e).__name__}: {e}"
     exec_lines: List[str] = []
     imports: List[Dict[str, str]] = []
     for node in tree.body:
