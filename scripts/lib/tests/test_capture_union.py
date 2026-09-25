@@ -35,6 +35,61 @@ def measure(rows, results):
     return evaluate_capture_union(rows, results, "version", "haiku", 30)
 
 
+def test_named_corpus_rejects_modified_bytes_and_default_a0(tmp_path, monkeypatch):
+    rows, _ = fixture()
+    raw = "".join(json.dumps(row) + "\n" for row in rows).encode()
+    path = tmp_path / "synthetic.jsonl"
+    path.write_bytes(raw)
+    monkeypatch.setitem(capture_recall.APPROVED_EVAL_SETS, "holdout682", (len(rows), hashlib.sha256(raw).hexdigest()))
+    assert capture_recall.identify_eval_set(path) == "holdout682"
+    assert capture_recall.load_capture_eval_set(path, name="holdout682") == rows
+    monkeypatch.setattr(capture_recall, "EXPECTED_EVAL_ROWS", len(rows))
+    with pytest.raises(capture_recall.CaptureEvalIntegrityError):
+        capture_recall.load_capture_eval_set(path)
+    path.write_bytes(raw.replace(b'"eval_id": "a"', b'"eval_id": "z"', 1))
+    with pytest.raises(capture_recall.CaptureEvalIntegrityError):
+        capture_recall.identify_eval_set(path)
+
+
+def test_named_corpus_rejects_wrong_row_count_even_with_approved_hash(tmp_path, monkeypatch):
+    path = tmp_path / "synthetic.jsonl"
+    raw = b'{"eval_id": "one"}\n'
+    path.write_bytes(raw)
+    monkeypatch.setitem(capture_recall.APPROVED_EVAL_SETS, "holdout682", (2, hashlib.sha256(raw).hexdigest()))
+    with pytest.raises(capture_recall.CaptureEvalIntegrityError, match="row count"):
+        capture_recall.identify_eval_set(path)
+
+
+def test_named_union_rejects_cross_set_meta_and_legacy_only_for_a0():
+    rows, results = fixture()
+    assert measure(rows, results)["measured"] is True  # old meta, a0
+    assert evaluate_capture_union(rows, results, "version", "haiku", 30,
+                                  eval_set_name="holdout682")["measured"] is False
+    for result in results:
+        result["meta"]["eval_set"] = "holdout682"
+    assert measure(rows, results)["measured"] is False
+    assert evaluate_capture_union(rows, results, "version", "haiku", 30,
+                                  eval_set_name="holdout682")["measured"] is True
+
+
+def test_named_union_reader_rejects_holdout_results_as_a0(tmp_path, monkeypatch):
+    import judge_eval
+    rows, results = fixture()
+    raw = "".join(json.dumps(row) + "\n" for row in rows).encode()
+    eval_path = tmp_path / "synthetic.jsonl"
+    eval_path.write_bytes(raw)
+    result_path = tmp_path / "results.jsonl"
+    for result in results:
+        result["meta"]["eval_set"] = "holdout682"
+    result_path.write_text("".join(json.dumps(row) + "\n" for row in results))
+    monkeypatch.setattr(capture_recall, "EXPECTED_EVAL_ROWS", len(rows))
+    monkeypatch.setattr(capture_recall, "EXPECTED_EVAL_SHA256", hashlib.sha256(raw).hexdigest())
+    monkeypatch.setitem(capture_recall.APPROVED_EVAL_SETS, "holdout682", (len(rows), hashlib.sha256(raw).hexdigest()))
+    monkeypatch.setattr(judge_eval, "compute_harness_sha", lambda: "version")
+    assert capture_recall.load_capture_union([eval_path], result_path)["measured"] is False
+    assert capture_recall.load_capture_union([eval_path], result_path, eval_set_name="holdout682")["measured"] is True
+
+
 def test_advisory_union_valid_positive_control():
     rows, results = fixture()
     out = measure(rows, results)
