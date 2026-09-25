@@ -25,15 +25,28 @@ def _layer3_sys_path_dirs(repo_root: Path) -> List[Path]:
 
 
 def find_skill_mds(repo_root: Path) -> List[Path]:
-    """``skills/*/SKILL.md`` を列挙する（ソート済み）。"""
+    """``skills/*/SKILL.md`` と ``skills/*/references/*.md`` を列挙する（ソート済み）。
+
+    ``references/*.md`` は従来走査対象外だった（prune-merge.md 等の見逃しの根本原因の1つ）。
+    SKILL.md から参照される補助手順書であり、同じコードブロック規約（fenced python/bash）
+    を使うため、SKILL.md と同じ検証対象にする。
+    """
     skills_dir = Path(repo_root) / "skills"
     if not skills_dir.exists():
         return []
-    return sorted(skills_dir.glob("*/SKILL.md"))
+    paths = list(skills_dir.glob("*/SKILL.md")) + list(skills_dir.glob("*/references/*.md"))
+    return sorted(paths)
+
+
+def _skill_name_for(skill_md: Path) -> str:
+    """``skill_md`` が属するスキル名を返す（``references/*.md`` は親の親を見る）。"""
+    if skill_md.parent.name == "references":
+        return skill_md.parent.parent.name
+    return skill_md.parent.name
 
 
 def run_layer3(repo_root: Path) -> Dict[str, Any]:
-    """全 SKILL.md の code block を抽出・分類・検証実行する。
+    """全 SKILL.md / references/*.md の code block を抽出・分類・検証実行する。
 
     返り値: ``{"skills": [{"skill": name, "blocks": [run_block 結果...]}],
                "summary": {"pass": n, "fail": n, "skip": n}}``
@@ -44,7 +57,7 @@ def run_layer3(repo_root: Path) -> Dict[str, Any]:
     summary = {"pass": 0, "fail": 0, "skip": 0}
 
     for skill_md in find_skill_mds(repo_root):
-        skill_name = skill_md.parent.name
+        skill_name = _skill_name_for(skill_md)
         blocks = skill_blocks.extract_code_blocks(skill_md)
         block_results: List[Dict[str, Any]] = []
         for block in blocks:

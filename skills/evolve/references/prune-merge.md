@@ -69,6 +69,9 @@ prune.py の `merge_duplicates()` は `duplicate_candidates` から統合候補�
     - 却下された場合: 当該ペアを merge suppression に登録して次回以降の提案を抑制する。以下のコマンドを実行する（MUST）:
       ```bash
       python3 -c "
+      import os, sys
+      _root = os.environ.get('CLAUDE_PLUGIN_ROOT') or os.getcwd()
+      sys.path.insert(0, os.path.join(_root, 'scripts', 'lib'))
       from discover import add_merge_suppression
       add_merge_suppression('<primary_skill_name>', '<secondary_skill_name>')
       "
@@ -81,6 +84,9 @@ prune.py の `merge_duplicates()` は `duplicate_candidates` から統合候補�
     - 却下された場合: `add_merge_suppression()` で suppression 登録し、次回以降の再提案を抑制する:
       ```bash
       python3 -c "
+      import os, sys
+      _root = os.environ.get('CLAUDE_PLUGIN_ROOT') or os.getcwd()
+      sys.path.insert(0, os.path.join(_root, 'scripts', 'lib'))
       from discover import add_merge_suppression
       add_merge_suppression('<primary_skill_name>', '<secondary_skill_name>')
       "

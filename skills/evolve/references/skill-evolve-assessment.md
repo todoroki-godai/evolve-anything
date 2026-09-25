@@ -49,7 +49,7 @@ ingest_judgment_scores(proj, emit["requests"], responses)
    - 「今回のみスキップ」
    - 「永続スキップ（denylist に追加）」
 3. 永続スキップを選んだスキルがある場合（`_plugin_root` は `~/.claude/evolve-anything` または `plugin_root.py` で解決できる実際のパス）:
-   ```python
+   ```bash
    python3 -c "
    import os, sys; sys.path.insert(0, os.path.join(os.environ.get('CLAUDE_PLUGIN_ROOT') or os.getcwd(), 'scripts', 'lib'))
    from skill_evolve.denylist import add_to_denylist
@@ -60,6 +60,7 @@ ingest_judgment_scores(proj, emit["requests"], responses)
 4. 「今回のみスキップ」と「永続スキップ」の両方のスキル名を `--skip-skills` に渡し、**必ず `--confirmed-batch` を付けて** 再実行する（`--confirmed-batch` がないと guard が再発火する）。**インストール時に PATH に入る `evolve` ラッパーを使う**（`evolve.py` の実パスを glob 探索しない — #395）:
    ```bash
    PJ="${PJ:-$(pwd)}"  # 対象 PJ の絶対パス（Step 1 と同一の束縛。bash は呼び出しごとに独立プロセスのため再束縛する）
+   OUT="$(evolve --project-dir "$PJ" --print-out-path)"
    evolve --project-dir "$PJ" --confirmed-batch [--skip-skills=skill-a,skill-b] --output "$OUT" [既存の引数]
    ```
    （`evolve` は `skills/evolve/scripts/evolve/`（パッケージ）の `main` を呼ぶ薄いラッパー。PATH に無い特殊環境でのみ
