@@ -63,7 +63,7 @@ for _p in (_BENCH_DIR, _LIB_DIR):
         sys.path.insert(0, str(_p))
 
 from capture_recall import load_capture_eval_set, wilson_interval  # noqa: E402
-from correction_semantic import DEFAULT_BATCH_SIZE  # noqa: E402
+from correction_semantic import DEFAULT_BATCH_SIZE, DEFAULT_JUDGE_MODEL  # noqa: E402
 from correction_semantic import judge_runner as _judge_runner  # noqa: E402
 from correction_semantic import prompt as _prompt  # noqa: E402
 
@@ -235,7 +235,7 @@ def check_harness_approval(
 @dataclass
 class RunConfig:
     variant: str = "baseline"
-    model: str = "haiku"
+    model: str = DEFAULT_JUDGE_MODEL
     reps: int = 1
     batch_size: int = DEFAULT_BATCH_SIZE
     seed: int = 0
@@ -419,6 +419,15 @@ def run_eval(
     results_path = variant_dir / "results.jsonl"
     errors_path = variant_dir / "errors.jsonl"
 
+    harness_sha = compute_harness_sha()
+    for previous in _read_jsonl(results_path):
+        meta = previous.get("meta") or {}
+        if (meta.get("harness_sha"), meta.get("model"), meta.get("batch_size_config")) != (
+            harness_sha, cfg.model, cfg.batch_size
+        ):
+            raise ValueError("resume 来歴不一致。既存 .claude/hillclimb/correction-judge/baseline を "
+                             ".claude/hillclimb/correction-judge/baseline-<YYYYMMDD> へ退避後、"
+                             "--variant baseline で再測してください")
     done = _existing_result_keys(results_path)
     # Nit: 意図した対象総数（case × rep）を summary に併記し、resume でスキップされた
     # 件数を requested/graded/errors の合計との差分から読めるようにする。
@@ -508,6 +517,10 @@ def run_eval(
                         "batch_size": len(group),
                         "prompt_fingerprint": fingerprint,
                         "prompt_sha256": prompt_sha256,
+                        "harness_sha": harness_sha,
+                        "model": cfg.model,
+                        "batch_size_config": cfg.batch_size,
+                        "generated_at": now_fn().isoformat(),
                     },
                 }
                 _append_jsonl(results_path, row)
@@ -524,7 +537,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         description="修正発話 judge（correction_semantic）の LLM 判定精度 eval ランナー"
     )
     ap.add_argument("--variant", default="baseline")
-    ap.add_argument("--model", default="haiku")
+    ap.add_argument("--model", default=DEFAULT_JUDGE_MODEL)
     ap.add_argument("--reps", type=int, default=1)
     ap.add_argument("--limit", type=int, default=None, help="先頭 N 件のみ対象にする")
     ap.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
@@ -564,12 +577,16 @@ def main(argv: Optional[List[str]] = None) -> int:
             file=sys.stderr,
         )
         return 2
+    try:
+        summary = run_eval(cases, cfg, flow_dir=FLOW_DIR)
+    except ValueError as exc:
+        print(f"[judge_eval] {exc}", file=sys.stderr)
+        return 2
+
     new_state.setdefault("metrics", METRICS)
     new_state.setdefault("perf_fields", PERF_FIELDS)
     new_state["metrics_md"] = PREV_ACTION_COVERAGE_NOTE
     state_path.write_text(json.dumps(new_state, ensure_ascii=False, indent=2), encoding="utf-8")
-
-    summary = run_eval(cases, cfg, flow_dir=FLOW_DIR)
 
     variant_dir = FLOW_DIR / cfg.variant
     rows = _read_jsonl(variant_dir / "results.jsonl")

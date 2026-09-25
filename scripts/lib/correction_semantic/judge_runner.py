@@ -60,7 +60,7 @@ from pj_slug import canonical_pj_slug as _canonical_pj_slug  # noqa: E402
 from rl_common.file_lock import try_file_lock as _try_file_lock  # noqa: E402
 from weak_signals.ttl import _parse_iso  # noqa: E402
 
-from . import DEFAULT_BATCH_SIZE  # noqa: E402
+from . import DEFAULT_BATCH_SIZE, DEFAULT_JUDGE_MODEL  # noqa: E402
 from . import batch as _batch  # noqa: E402
 from .prompt import VERDICT_JSON_SCHEMA as _VERDICT_JSON_SCHEMA  # noqa: E402
 from . import store as _store  # noqa: E402
@@ -82,7 +82,7 @@ DEFAULT_JUDGE_UTTERANCE_MAX_AGE_DAYS = 90
 _EPOCH = datetime.min.replace(tzinfo=timezone.utc)
 
 
-def call_haiku(prompt: str, model: str = "haiku") -> str:
+def call_haiku(prompt: str, model: str = DEFAULT_JUDGE_MODEL) -> str:
     """Haiku を 1 回呼ぶ（呼び出しの唯一の集約点・単体テストはここを mock する）。
 
     実体は ``safe_llm_call.call_claude_headless`` — 判定対象の生ログに prompt injection が
@@ -265,7 +265,7 @@ def run_daily_judge(
     daily_utterance_limit: int = DEFAULT_DAILY_UTTERANCE_LIMIT,
     daily_token_limit: int = DEFAULT_DAILY_TOKEN_LIMIT,
     batch_size: int = DEFAULT_BATCH_SIZE,
-    model: str = "haiku",
+    model: str = DEFAULT_JUDGE_MODEL,
     utterances: Optional[List[Dict[str, Any]]] = None,
     tracked_projects: Optional[List[str]] = None,
     judge_utterance_max_age_days: int = DEFAULT_JUDGE_UTTERANCE_MAX_AGE_DAYS,
@@ -608,7 +608,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="今回処理する推定トークン上限",
     )
     ap.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
-    ap.add_argument("--model", default="haiku")
+    ap.add_argument("--model", default=DEFAULT_JUDGE_MODEL)
     ap.add_argument(
         "--max-age-days", type=int, default=DEFAULT_JUDGE_UTTERANCE_MAX_AGE_DAYS,
         help="未判定 utterance を judge に入れる cutoff（発話時刻基準・既定90日・#442）",

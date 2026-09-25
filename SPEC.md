@@ -38,6 +38,13 @@ Claude Code Plugin。スキル/ルールの **自律進化パイプライン**�
 | pitfall 運用 | pitfall-curate | 任意PJの pitfalls.md を育てる PJ非依存スキル。`seed`（正準ひな型生成）/ `normalize`（既存ファイルを正準形へ冪等変換）/ dedup（jaccard、日本語は CJK bigram、Root-cause 不在時は本文 fallback）/ 普遍性分類（`Transferability` universal/project/instance + `Generality` 1-5）/ 配布版(Top-N) / 同期ゲート。パーサは正準・`## N.`番号付き・インラインパイプ・`<!-- -->`スキップに対応（収束路線、[ADR-027](docs/decisions/027-pitfall-format-convergence-vs-tolerant-parser.md)）。判断は agent、決定論処理は `scripts/core.py`（curate）+ `parse.py`（フォーマット I/O）。`similarity.py` 再利用。`pitfall_manager`（自己進化専用）とは別ライフサイクルで共存（[ADR-026](docs/decisions/026-pitfall-curate-vs-pitfall-manager.md)） |
 | モデルティア管理 | evolve-tier (`bin/evolve-tier`) | HEAD/HARD/NORMAL/MECH/REVIEW ↔ model/effort の正典を `~/.claude/model-tiers.json` に一元化する CLI（#193）。正典散在（model-routing rule / `agent_tier.TIER_POLICY` / 各 PJ agent frontmatter / settings.json）による手動追従漏れ（2026-07-10 opus 4.8 廃止時に HEAD が fable⇄sonnet を往来した実例）を解消。`set`（正典更新）と `sync [--apply]`（targets 明示列挙のみへ反映・既定 dry-run・冪等）を分離、`drift` で stale なモデルエイリアスの散文残存を advisory 検出（書換はしない）。`agent_tier` gate は call-time でこの config を参照。対話 UX ラッパー `/evolve-anything:tier` スキルを同梱（CLI 直叩き不要・sync --apply は明示承認後のみ） |
 
+**柱1の戦果ボード（#679）**: 固定評価セットの TP を正規表現または AI 判定候補の
+どちらかで拾った率を主行とし、正規表現単独の `L1捕捉率` を併記する。
+AI 陽性は朝の y/n 前の候補であり、本番保存件数ではない。評価 ID/本文/ラベルの
+一対一突合と判定版・モデル別名・バッチ設定の来歴が揃わない場合、合計は測定不能とする。
+目標値は #567 を参照（合計に適用することは #679 のコメントに記録）。詳細は
+[柱1指標の定義](docs/decisions/drafts/054-pillar1-capture-recall.md)。
+
 「4本目の柱」は fleet 観測・介入としての evolve-anything 拡張。per-PJ 自己進化から fleet 自己進化への昇格（[ADR-022](docs/decisions/022-fleet-observation-plus-intervention.md)）。
 
 **#515 修正在庫の待ち契約**: `queue` は `material_count` の閾値条件に加え、有効な promoted

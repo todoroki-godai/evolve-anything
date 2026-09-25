@@ -351,7 +351,7 @@ def test_board_scopes_are_structured_and_rendered(monkeypatch):
     assert scopes["withdrawal_candidates"]["slug"] == "proj"
     for scope in scopes.values():
         assert scope["label"] in text
-def _board_with_gate(monkeypatch, **gate_fields):
+def _board_with_gate(monkeypatch, *, judge_results_path=None, **gate_fields):
     """gate だけ差し替えた board を組む（gate 検算テストの共通足場）。"""
     summary = _closed_summary()
     summary["gate"].update(**gate_fields)
@@ -359,7 +359,8 @@ def _board_with_gate(monkeypatch, **gate_fields):
     monkeypatch.setattr(results_board, "load_effective_history", lambda slug: [])
     monkeypatch.setattr(results_board, "load_revert_events", lambda slug: [])
     monkeypatch.setattr(results_board, "_build_capture_recall", lambda: {"measured": False, "reason": "fixture"})
-    return summary, results_board.build_results_board("proj", now=NOW)
+    kwargs = {"judge_results_path": judge_results_path} if judge_results_path else {}
+    return summary, results_board.build_results_board("proj", now=NOW, **kwargs)
 
 
 def test_gate_open_is_rechecked_against_best_run_length(monkeypatch):
@@ -404,7 +405,7 @@ def test_inverse_gate_mismatch_is_also_closed(monkeypatch):
     assert health["measured"] is False
 
 
-def test_broken_streak_after_a_past_run_stays_open(monkeypatch):
+def test_broken_streak_after_a_past_run_stays_open(monkeypatch, tmp_path):
     """#508 が凍結した系列表示を検算が黙って止めないこと（#568 実装レビューの回帰）。
 
     `_decide_display_gate` の判定式は `best_run >= k`（`correction_rate.py:551`）で、
@@ -420,6 +421,7 @@ def test_broken_streak_after_a_past_run_stays_open(monkeypatch):
         required=4,
         best_run_length=4,
         current_run_length=1,
+        judge_results_path=tmp_path / "results.jsonl",
     )
     health = board["measurements"]["correction_rate_gate"]
     text = "\n".join(results_board.render_results_board(board))

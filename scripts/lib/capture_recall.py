@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import datetime, timedelta
 from math import sqrt
 from pathlib import Path
 from typing import Any, Callable, Iterable
@@ -64,3 +65,114 @@ def evaluate_capture_recall(
         "precision": caught / hits if hits else None,
         "recall_ci": recall_ci, "precision_ci": precision_ci,
     }
+
+
+_REMEASURE = ("既存 .claude/hillclimb/correction-judge/baseline を "
+              ".claude/hillclimb/correction-judge/baseline-<YYYYMMDD> へ退避後、"
+              "python3 scripts/bench/judge_eval.py --run --approve-harness --variant baseline")
+
+
+def evaluate_capture_union(
+    eval_rows: Iterable[dict[str, Any]], result_rows: Iterable[dict[str, Any]],
+    harness_sha: str, model: str, batch_size: int,
+) -> dict[str, Any]:
+    """Advisory only: detect known ID/content/provenance mismatches, then count both lanes."""
+    def unavailable(reason: str) -> dict[str, Any]:
+        return {"measured": False, "reason": f"{reason}。再測: {_REMEASURE}"}
+
+    examples, results = list(eval_rows), list(result_rows)
+    eval_by_id: dict[str, dict[str, Any]] = {}
+    for row in examples:
+        if not isinstance(row, dict):
+            return unavailable("評価行の形式不正")
+        ident, body = row.get("eval_id"), row.get("text")
+        if not isinstance(ident, str) or not ident or ident in eval_by_id:
+            return unavailable("評価 ID の欠落・重複")
+        if not isinstance(body, str) or row.get("label") not in ("TP", "not_TP"):
+            return unavailable("評価行の本文・ラベル不正")
+        eval_by_id[ident] = row
+    result_by_id: dict[str, dict[str, Any]] = {}
+    timestamps: list[str] = []
+    for result in results:
+        if not isinstance(result, dict):
+            return unavailable("判定行の形式不正")
+        ident = result.get("prompt_id")
+        if not isinstance(ident, str) or not ident or ident in result_by_id:
+            return unavailable("判定 ID の欠落・重複")
+        result_by_id[ident] = result
+        meta = result.get("meta")
+        if not isinstance(meta, dict) or result.get("status") != "ok" or type(meta.get("rep")) is not int or meta["rep"] != 0:
+            return unavailable("判定行の状態・rep 不正")
+        if not isinstance(meta.get("expected"), bool) or not isinstance(meta.get("predicted"), bool):
+            return unavailable("判定値は bool 必須")
+        if (meta.get("harness_sha"), meta.get("model"), meta.get("batch_size_config")) != (harness_sha, model, batch_size):
+            return unavailable("AI 判定の来歴が現行条件と不一致")
+        timestamp = meta.get("generated_at")
+        try:
+            parsed = datetime.fromisoformat(timestamp)
+            if parsed.utcoffset() != timedelta(0):
+                raise ValueError("UTC required")
+        except (TypeError, ValueError, AttributeError):
+            return unavailable("AI 判定の生成日時が不明")
+        timestamps.append(timestamp)
+    if not examples or set(eval_by_id) != set(result_by_id):
+        return unavailable("評価 ID と判定 ID が一対一でない")
+
+    from rl_common import detection
+    positives = caught = regex_caught = judge_caught = hits = 0
+    for ident, row in eval_by_id.items():
+        meta = result_by_id[ident]["meta"]
+        if (meta.get("prompt_sha256") != hashlib.sha256(row["text"].encode("utf-8")).hexdigest()
+                or meta["expected"] != (row["label"] == "TP")):
+            return unavailable("同一 ID の本文・ラベル不一致")
+        positive = row["label"] == "TP"
+        regex = detection.should_include_message(row["text"]) and detection._detect_correction(
+            row["text"], false_positive_hashes=()
+        ) is not None
+        judge = meta["predicted"]
+        positives += positive
+        caught += bool(positive and (regex or judge))
+        regex_caught += bool(positive and regex)
+        judge_caught += bool(positive and judge)
+        hits += bool(regex or judge)
+    if not positives or not hits:
+        return unavailable("合計の分母・検出数が不足")
+    return {
+        "measured": True, "caught": caught, "positives": positives,
+        "regex_caught": regex_caught, "judge_caught": judge_caught,
+        "hits": hits, "recall": caught / positives, "precision": caught / hits,
+        "recall_ci": wilson_interval(caught, positives),
+        "generated_at": min(timestamps) if min(timestamps) == max(timestamps)
+                        else f"{min(timestamps)}〜{max(timestamps)}",
+        "harness_sha": harness_sha, "model": model, "batch_size": batch_size,
+    }
+
+
+def load_capture_union(eval_candidates: Iterable[Path], results_path: Path) -> dict[str, Any]:
+    """Reuse the frozen corpus loader and candidate order; never write either artifact."""
+    import sys
+    bench_dir = Path(__file__).resolve().parents[1] / "bench"
+    if str(bench_dir) not in sys.path:
+        sys.path.insert(0, str(bench_dir))
+    import judge_eval
+
+    rows = None
+    mismatch = False
+    for candidate in eval_candidates:
+        if candidate.exists():
+            try:
+                rows = load_capture_eval_set(candidate)
+                break
+            except (CaptureEvalIntegrityError, OSError, ValueError):
+                mismatch = True
+                continue
+    if rows is None:
+        return {"measured": False, "reason": "評価セット不一致" if mismatch else "評価セットなし", "display": results_path.exists()}
+    if not results_path.exists():
+        return {"measured": False, "reason": f"AI 判定結果なし。再測: {_REMEASURE}"}
+    try:
+        results = [json.loads(line) for line in results_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    except (OSError, ValueError):
+        return {"measured": False, "reason": "AI 判定結果の読込失敗"}
+    return evaluate_capture_union(rows, results, judge_eval.compute_harness_sha(),
+                                  judge_eval.RunConfig().model, judge_eval.DEFAULT_BATCH_SIZE)
