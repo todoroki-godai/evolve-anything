@@ -331,16 +331,19 @@ def test_run_block_missing_function_name_is_caught(tmp_path: Path):
     assert "no_such_function_xyz" in res["detail"]
 
 
-def test_classify_bracketed_multiline_import_still_normalized():
-    """陽性対照（#496 の割り切りを維持）: 複数行 bracket import は verbatim 実行しない。
+def test_classify_bracketed_multiline_import_is_verbatim_via_ast():
+    """陽性対照: 複数行 bracket import も ast 経由で verbatim 再構成され検証できる。
 
-    ``from X import (`` で終わる開き行は、単一行完結の from-import と違い
-    ``import X`` に正規化されたまま（そうしないと欠けた括弧で SyntaxError になる）。
+    AST から ``ast.unparse`` で再構成するため（テキストの部分切り出しではない）、複数行
+    bracket import でも常に構文的に正しい単独文になる。#496 が懸念していた「テキストを
+    そのまま実行すると SyntaxError になる」問題は、AST 経由の再構成では発生しない。
     """
     code = "from agent_quality import (\n    scan_agents,\n    score_agent,\n)\n"
     cls = sb.classify_block("python", code)
     assert cls["mode"] == "import_check"
-    assert cls["imports"][0]["stmt"] == "import agent_quality"
+    assert cls["imports"][0]["module"] == "agent_quality"
+    assert "scan_agents" in cls["imports"][0]["stmt"]
+    assert "score_agent" in cls["imports"][0]["stmt"]
 
 
 def test_run_block_heredoc_style_missing_syspath_fails(tmp_path: Path):
@@ -454,3 +457,173 @@ def test_real_prune_merge_doc_passes_after_fix(monkeypatch):
         res = sb.run_block(block, repo_root=repo_root, sys_path_dirs=[])
         assert res["mode"] == "import_check"
         assert res["status"] == "pass", res.get("detail")
+
+
+# --- codex レビュー M1-M3（ast/shlex ベースの呼び出し単位分離） -----------------------
+
+
+def test_M1_import_on_opening_line_missing_syspath_fails(tmp_path: Path):
+    """陰性試験 M1: import が ``python3 -c "..."`` の開始行そのものにある複数行本文。
+
+    旧実装は引用符が「開いたまま」の行だけを isolate していたため、引用符が開いた
+    その行自体（import を含む開始行）を取りこぼしていた。shlex で ``-c`` の引数全体を
+    正しく1トークンとして取り出すことでこれを直接解決する。
+    """
+    code = 'python3 -c "from discover import add_merge_suppression\nprint(1)\n"'
+    block = {"lang": "bash", "code": code, "line": 1}
+    res = sb.run_block(block, repo_root=tmp_path, sys_path_dirs=[])
+    assert res["mode"] == "import_check"
+    assert res["status"] == "fail", res.get("detail")
+
+
+def test_M1_import_on_opening_line_with_syspath_passes(tmp_path: Path):
+    """陽性対照 M1: 開始行に import があっても、sys.path が正しく解決できれば緑になる。"""
+    (tmp_path / "scripts" / "lib").mkdir(parents=True)
+    (tmp_path / "scripts" / "lib" / "discover.py").write_text(
+        "def add_merge_suppression(a, b):\n    pass\n", encoding="utf-8"
+    )
+    libdir = str(tmp_path / "scripts" / "lib")
+    code = (
+        f'python3 -c "import sys; sys.path.insert(0, \'{libdir}\')\n'
+        "from discover import add_merge_suppression\n"
+        "print(1)\n\""
+    )
+    block = {"lang": "bash", "code": code, "line": 1}
+    res = sb.run_block(block, repo_root=tmp_path, sys_path_dirs=[])
+    assert res["mode"] == "import_check"
+    assert res["status"] == "pass", res.get("detail")
+
+
+def test_M2_second_invocation_without_setup_is_not_hidden_by_first(tmp_path: Path):
+    """陰性試験 M2: 同一ブロック内の2つ目の ``python3 -c`` 呼び出しが setup 無しで失敗する。
+
+    旧実装は同一ブロック内の複数呼び出しを1本の python ソースへ連結して1回だけ実行して
+    いたため、1つ目の sys.path 設定が2つ目にも「漏れて」効いてしまい、2つ目単独なら
+    失敗するはずの import が隠れて pass になっていた。
+    """
+    (tmp_path / "scripts" / "lib").mkdir(parents=True)
+    (tmp_path / "scripts" / "lib" / "discover.py").write_text(
+        "def add_merge_suppression(a, b):\n    pass\n", encoding="utf-8"
+    )
+    libdir = str(tmp_path / "scripts" / "lib")
+    code = (
+        f'python3 -c "\nimport sys\nsys.path.insert(0, \'{libdir}\')\n'
+        'from discover import add_merge_suppression\n"\n'
+        'python3 -c "\nfrom discover import add_merge_suppression\n"\n'
+    )
+    block = {"lang": "bash", "code": code, "line": 1}
+    res = sb.run_block(block, repo_root=tmp_path, sys_path_dirs=[])
+    assert res["mode"] == "import_check"
+    assert res["status"] == "fail", res.get("detail")
+    assert "import#1" in res["detail"]  # 2 つ目の呼び出しが失敗したと分かる
+
+
+def test_M2_both_invocations_with_setup_pass(tmp_path: Path):
+    """陽性対照 M2: 2つ目の呼び出しにも正しい setup があれば、両方とも緑になる。"""
+    (tmp_path / "scripts" / "lib").mkdir(parents=True)
+    (tmp_path / "scripts" / "lib" / "discover.py").write_text(
+        "def add_merge_suppression(a, b):\n    pass\n", encoding="utf-8"
+    )
+    libdir = str(tmp_path / "scripts" / "lib")
+    inv = (
+        f'python3 -c "\nimport sys\nsys.path.insert(0, \'{libdir}\')\n'
+        'from discover import add_merge_suppression\n"\n'
+    )
+    code = inv + inv
+    block = {"lang": "bash", "code": code, "line": 1}
+    res = sb.run_block(block, repo_root=tmp_path, sys_path_dirs=[])
+    assert res["mode"] == "import_check"
+    assert res["status"] == "pass", res.get("detail")
+
+
+def test_M3_missing_command_fails_even_with_valid_import(tmp_path: Path):
+    """陰性試験 M3: 存在しないコマンド行 + 有効な import が同居する場合、全体が fail になる。
+
+    旧実装は import_check への昇格が見つかった時点で早期 return し、コマンド存在検証
+    （``_run_existence_check``）を一度も呼んでいなかった。
+    """
+    code = "missing_command_review_123\npython3 -c \"import os\"\n"
+    block = {"lang": "bash", "code": code, "line": 1}
+    res = sb.run_block(block, repo_root=tmp_path, sys_path_dirs=[])
+    assert res["mode"] == "import_check"
+    assert res["status"] == "fail", res.get("detail")
+    assert "missing_command_review_123" in res["detail"]
+
+
+def test_M3_existing_command_with_valid_import_passes(tmp_path: Path):
+    """陽性対照 M3: コマンドが実在し import も有効なら、両方の検証を経て緑になる。"""
+    (tmp_path / "bin").mkdir()
+    (tmp_path / "bin" / "rl-foo").write_text("#!/bin/sh\n", encoding="utf-8")
+    code = "rl-foo --project-dir x\npython3 -c \"import os\"\n"
+    block = {"lang": "bash", "code": code, "line": 1}
+    res = sb.run_block(block, repo_root=tmp_path, sys_path_dirs=[])
+    assert res["mode"] == "import_check"
+    assert res["status"] == "pass", res.get("detail")
+
+
+def test_dash_c_arg_not_glued_with_adjacent_closing_paren(tmp_path: Path):
+    """回帰: ``$(python3 -c "..." )`` のように閉じ引用符の直後に空白無しで ``)`` が
+    続く実パターン（skills/evolve/references/self-analysis.md 等）で、shlex の
+    ``whitespace_split`` により ``)`` が引数へ混入し ``SyntaxError`` になっていたバグの
+    回帰確認（自分で見つけた副作用。M1-M3 とは別種のバグ）。
+    """
+    (tmp_path / "scripts" / "lib").mkdir(parents=True)
+    (tmp_path / "scripts" / "lib" / "discover.py").write_text(
+        "def add_merge_suppression(a, b):\n    pass\n", encoding="utf-8"
+    )
+    libdir = str(tmp_path / "scripts" / "lib")
+    code = (
+        "BODY=$(python3 -c \"\nimport sys\nsys.path.insert(0, '" + libdir + "')\n"
+        "from discover import add_merge_suppression\n\")\n"
+        "gh issue create --body \"$BODY\"\n"
+    )
+    block = {"lang": "bash", "code": code, "line": 1}
+    res = sb.run_block(block, repo_root=tmp_path, sys_path_dirs=[])
+    assert res["mode"] == "import_check"
+    assert res["status"] == "pass", res.get("detail")
+
+
+def test_self_devised_A_per_invocation_pythonpath_prefix_not_mixed(tmp_path: Path):
+    """自分で考えた回避手段A（M1-M3 とは別種）: 2つの呼び出しがそれぞれ別々の
+    ``PYTHONPATH=`` 前置を持つとき、1つ目の PYTHONPATH が2つ目にも誤って適用され
+    ないことを確認する（M2 は setup 文をブロック本文に書く形だったのに対し、これは
+    bash レベルの環境変数前置が呼び出しごとに正しく分離されるかを検証する）。
+    """
+    (tmp_path / "scripts" / "lib_a").mkdir(parents=True)
+    (tmp_path / "scripts" / "lib_a" / "mod_a.py").write_text("x = 1\n", encoding="utf-8")
+    # lib_b は意図的に作らない（2つ目の PYTHONPATH は解決できない前提）。
+    libdir_a = str(tmp_path / "scripts" / "lib_a")
+    libdir_b = str(tmp_path / "scripts" / "lib_b_does_not_exist")
+    code = (
+        f'PYTHONPATH="{libdir_a}" python3 -c "import mod_a"\n'
+        f'PYTHONPATH="{libdir_b}" python3 -c "import mod_a"\n'
+    )
+    block = {"lang": "bash", "code": code, "line": 1}
+    res = sb.run_block(block, repo_root=tmp_path, sys_path_dirs=[])
+    assert res["mode"] == "import_check"
+    # 1つ目は mod_a を解決できるが、2つ目は解決できない PYTHONPATH のため全体は fail。
+    assert res["status"] == "fail", res.get("detail")
+    assert "import#1" in res["detail"]
+
+
+def test_self_devised_B_heredoc_and_dash_c_mixed_in_same_block(tmp_path: Path):
+    """自分で考えた回避手段B（M1-M3 とは別種）: heredoc と ``-c`` 呼び出しが同一ブロック内に
+    混在するとき、heredoc 側の setup 欠落が ``-c`` 側の成功に隠されずに fail することを確認する。
+    """
+    (tmp_path / "scripts" / "lib").mkdir(parents=True)
+    (tmp_path / "scripts" / "lib" / "discover.py").write_text(
+        "def add_merge_suppression(a, b):\n    pass\n", encoding="utf-8"
+    )
+    libdir = str(tmp_path / "scripts" / "lib")
+    code = (
+        f'python3 -c "\nimport sys\nsys.path.insert(0, \'{libdir}\')\n'
+        'from discover import add_merge_suppression\n"\n'
+        "python3 - <<'EOF'\n"
+        "from discover import add_merge_suppression\n"  # heredoc 側は setup 無し
+        "EOF\n"
+    )
+    block = {"lang": "bash", "code": code, "line": 1}
+    res = sb.run_block(block, repo_root=tmp_path, sys_path_dirs=[])
+    assert res["mode"] == "import_check"
+    assert res["status"] == "fail", res.get("detail")
+    assert "import#1" in res["detail"]
