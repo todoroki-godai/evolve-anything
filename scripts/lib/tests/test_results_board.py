@@ -869,6 +869,24 @@ class TestRenderResultsBoard:
         assert "精度: 21/23 = 91.3%" in text
         assert "pattern v2" in text
 
+    def test_advisory_union_positive_control_and_legacy_l1_unchanged(self):
+        union = {"measured": True, "caught": 31, "positives": 47, "recall": 31 / 47,
+                 "recall_ci": (0.519, 0.779), "precision": 31 / 42,
+                 "regex_caught": 21, "judge_caught": 23,
+                 "generated_at": "2026-09-25T00:00:00+00:00", "harness_sha": "abcdefgh1234",
+                 "model": "haiku"}
+        text = "\n".join(results_board.render_results_board(self._board(capture_union=union)))
+        assert "柱1 捕捉率（評価セット・2経路）: 31/47 = 66.0%" in text
+        assert "正規表現 21/47・AI 候補（未確認）23/47" in text
+        assert "版 abcdefgh・haiku" in text
+        assert "L1捕捉率: 21/47 = 44.7%" in text
+
+    def test_advisory_union_unmeasured_reason_keeps_legacy_l1(self):
+        text = "\n".join(results_board.render_results_board(self._board(
+            capture_union={"measured": False, "reason": "来歴なし"})))
+        assert "柱1 捕捉率（評価セット・2経路）: 測定不能（来歴なし）" in text
+        assert "L1捕捉率: 21/47 = 44.7%" in text
+
     def test_capture_recall_missing_eval_set_is_explicit(self):
         text = "\n".join(results_board.render_results_board(
             self._board(capture_recall={"measured": False, "reason": "評価セットなし"})

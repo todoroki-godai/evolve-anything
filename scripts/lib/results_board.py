@@ -23,7 +23,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from capture_recall import CaptureEvalIntegrityError, evaluate_capture_recall, load_capture_eval_set
+from capture_recall import CaptureEvalIntegrityError, evaluate_capture_recall, load_capture_eval_set, load_capture_union
 from optimize_history_store import load_effective_history, load_revert_events
 from correction_rate import (
     build_correction_rate_summary,
@@ -48,6 +48,7 @@ import rl_common.detection as correction_detection
 _WINDOW_DAYS = 30
 _CAPTURE_EVAL_FILENAME = "a0_eval_set.jsonl"
 _CAPTURE_EVAL_PATH = Path(__file__).resolve().parents[1] / "bench" / _CAPTURE_EVAL_FILENAME
+_JUDGE_RESULTS_PATH = Path(__file__).resolve().parents[2] / ".claude/hillclimb/correction-judge/baseline/results.jsonl"
 
 
 def _capture_eval_candidates() -> List[Path]:
@@ -347,6 +348,7 @@ def build_results_board(
         correction_fallback={**_EMPTY_CORRECTION_RATE, "generated_at": _now.isoformat()},
     )
     capture_recall = _build_capture_recall()
+    capture_union = load_capture_union(_capture_eval_candidates(), _JUDGE_RESULTS_PATH)
 
     pillar2_fallback = {
         "count": 0,
@@ -443,6 +445,7 @@ def build_results_board(
         "generated_at": _now.isoformat(),
         "correction_rate": correction_rate,
         "capture_recall": capture_recall,
+        "capture_union": capture_union,
         "pillar2": pillar2,
         "measurement_scopes": scopes,
         "measurements": measurements,
@@ -752,6 +755,15 @@ def render_results_board(board: Dict[str, Any]) -> List[str]:
     scopes = board.get("measurement_scopes") or pillar_scopes(board.get("slug", "(unknown)"))
     measurements = board.get("measurements") or {}
 
+    union = board.get("capture_union") or {"display": False}
+    if union.get("measured"):
+        low, high = union["recall_ci"]
+        lines.append(f"**柱1 捕捉率（評価セット・2経路）: {union['caught']}/{union['positives']} = {union['recall']:.1%}** "
+                     f"（Wilson 95% CI {low:.1%}–{high:.1%}・精度 {union['precision']:.1%}）")
+        lines.append(f"内訳: 正規表現 {union['regex_caught']}/{union['positives']}・AI 候補（未確認）{union['judge_caught']}/{union['positives']} "
+                     f"／ AI 判定の来歴: {union['generated_at']}・版 {union['harness_sha'][:8]}・{union['model']}")
+    elif union.get("display", True):
+        lines.append(f"**柱1 捕捉率（評価セット・2経路）: 測定不能（{union.get('reason', '来歴不明')}）**")
     capture = board.get("capture_recall") or {"measured": False, "reason": "評価セットなし"}
     if capture.get("measured"):
         recall_low, recall_high = capture["recall_ci"]

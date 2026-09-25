@@ -177,6 +177,21 @@ def test_audit_api_surface_snapshot():
     _assert_snapshot(actual, "audit_api_surface.txt")
 
 
+def test_advisory_capture_union_board_snapshot():
+    """#679 advisory: snapshot only known reconciled board rows and unchanged L1."""
+    from results_board import render_results_board
+
+    board = {"slug": "fixture", "decisions": {"accepted": 0, "rejected": 0, "pending": 0, "excluded": 0},
+             "accepted_list": [], "withdrawal_candidates": [],
+             "capture_union": {"measured": False, "reason": "来歴なし"},
+             "capture_recall": {"measured": True, "caught": 21, "positives": 47,
+                                "recall": 21 / 47, "recall_ci": (0.314, 0.588),
+                                "hits": 23, "precision": 21 / 23,
+                                "precision_ci": (0.732, 0.976), "pattern_version": 2}}
+    actual = "\n".join(render_results_board(board)[2:5]) + "\n"
+    _assert_snapshot(actual, "audit_capture_union_board.txt")
+
+
 def test_generate_report_empty_snapshot(tmp_path, monkeypatch):
     """全引数 empty 相当で generate_report を呼んだ出力 snapshot。
 
