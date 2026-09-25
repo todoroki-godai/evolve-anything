@@ -43,6 +43,117 @@ def test_build_prompt_asks_for_structured_verdict_result() -> None:
     assert "idiom" in p
 
 
+def _assert_advisory_boundary_contract(prompt: str) -> None:
+    """Advisory: known wording only; semantic paraphrases can evade this check."""
+    normalized = " ".join(prompt.split())
+    clauses = (
+        "まず、対象が Claude の既存の成果物・方針・進め方かを確認する。",
+        "次に、その対象の変更・不足の解消・制約や約束事の追加を求めているかを確認する。",
+        "最後に、修正の要求が引用部分だけでなくユーザー自身の発話にあるかを確認する。",
+        "発話が既存の成果物や作業の特定の不備・未完了を指し示している疑問形は修正に含める。状態・進捗・可否を尋ねるだけの質問は含めない。",
+        "特定の欠落・不足を指し示す婉曲な発話も修正に含める。",
+        "Claude の誤りの指摘に加え、既に出した成果物・方針・進め方を変えさせる要求も修正に含める。",
+        "その作業1回に限る条件は含めない。以後の作業にも続けて適用させる約束事は含める。",
+        "新しい情報を求める質問は修正に含めない。",
+        "既存の成果物・方針に向かわない相談・提案は修正に含めない。",
+        "新しい作業の依頼（「次これやって」）と、その作業の初期条件の指定は修正に含めない。",
+    )
+    positions = []
+    for clause in clauses:
+        assert normalized.count(clause) == 1, clause
+        positions.append(normalized.index(clause))
+    assert positions == sorted(positions)
+
+
+def test_advisory_known_wording_only_boundary_rules_and_order() -> None:
+    """Advisory: known wording only; this is not a semantic judge test."""
+    _assert_advisory_boundary_contract(cs_prompt.build_batch_prompt([]))
+
+
+_M1_CLAUSE = "発話が既存の成果物や作業の特定の不備・未完了を指し示している疑問形は修正に含める。状態・進捗・可否を尋ねるだけの質問は含めない。"
+_SHOULD_CLAUSE = "その作業1回に限る条件は含めない。以後の作業にも続けて適用させる約束事は含める。"
+
+
+@pytest.mark.parametrize(
+    "clause",
+    [
+        _M1_CLAUSE,
+        "状態・進捗・可否を尋ねるだけの質問は含めない。",
+        _SHOULD_CLAUSE,
+        "以後の作業にも続けて適用させる約束事は含める。",
+    ],
+)
+def test_advisory_new_boundary_deletion_is_rejected(clause: str) -> None:
+    """Advisory: known wording only; deleting either new clause must fail."""
+    prompt = cs_prompt.build_batch_prompt([])
+    with pytest.raises(AssertionError):
+        _assert_advisory_boundary_contract(prompt.replace(clause, "", 1))
+
+
+@pytest.mark.parametrize(
+    ("before", "after"),
+    [
+        ("状態・進捗・可否を尋ねるだけの質問は含めない。", "状態・進捗・可否を尋ねるだけの質問は含める。"),
+        ("以後の作業にも続けて適用させる約束事は含める。", "以後の作業にも続けて適用させる約束事は含めない。"),
+    ],
+)
+def test_advisory_new_boundary_inversion_is_rejected(before: str, after: str) -> None:
+    """Advisory: known wording only; opposite meanings must fail."""
+    prompt = cs_prompt.build_batch_prompt([])
+    with pytest.raises(AssertionError):
+        _assert_advisory_boundary_contract(prompt.replace(before, after, 1))
+
+
+@pytest.mark.parametrize(
+    ("first", "second"),
+    [
+        (_M1_CLAUSE, "特定の欠落・不足を指し示す婉曲な発話も修正に含める。"),
+        (_SHOULD_CLAUSE, "- 新しい情報を求める質問は修正に含めない。"),
+    ],
+)
+def test_advisory_new_boundary_order_swap_is_rejected(first: str, second: str) -> None:
+    """Advisory: known wording only; swapping either new clause must fail."""
+    prompt = cs_prompt.build_batch_prompt([])
+    swapped = prompt.replace(first, "__FIRST__", 1).replace(
+        second, first, 1
+    ).replace("__FIRST__", second, 1)
+    with pytest.raises(AssertionError):
+        _assert_advisory_boundary_contract(swapped)
+
+
+def test_advisory_exclusion_deletion_is_rejected() -> None:
+    """Advisory: known wording only; deleting an exclusion must fail."""
+    prompt = cs_prompt.build_batch_prompt([])
+    with pytest.raises(AssertionError):
+        _assert_advisory_boundary_contract(
+            prompt.replace("- 新しい情報を求める質問は修正に含めない。", "", 1)
+        )
+
+
+def test_advisory_format_only_change_is_accepted() -> None:
+    """Advisory: known wording only; whitespace changes preserve the contract."""
+    prompt = cs_prompt.build_batch_prompt([])
+    _assert_advisory_boundary_contract(prompt.replace("\n", "\n  "))
+
+
+def test_advisory_duplicate_clause_is_rejected() -> None:
+    """Advisory: known wording only; duplicating a rule must fail."""
+    prompt = cs_prompt.build_batch_prompt([])
+    with pytest.raises(AssertionError):
+        _assert_advisory_boundary_contract(prompt + _M1_CLAUSE)
+
+
+def test_advisory_exclusion_moved_before_inclusion_is_rejected() -> None:
+    """Advisory: known wording only; moving an exclusion ahead of rules must fail."""
+    prompt = cs_prompt.build_batch_prompt([])
+    exclusion = "- 新しい情報を求める質問は修正に含めない。"
+    moved = prompt.replace(exclusion, "", 1).replace(
+        _M1_CLAUSE, exclusion + "\n" + _M1_CLAUSE, 1
+    )
+    with pytest.raises(AssertionError):
+        _assert_advisory_boundary_contract(moved)
+
+
 # ── #400 A5: category（対象軸 8値 enum）────────────────────────────
 
 
@@ -75,10 +186,10 @@ def test_prompt_fingerprint_changes_with_template() -> None:
     assert cs_prompt.prompt_fingerprint() == fp1
 
 
-def test_prompt_contract_version_and_fingerprint_for_schema_v2() -> None:
-    """#625: 文面短縮と構造schema導入後の系列識別値を固定する。"""
-    assert cs_prompt.CATEGORY_SCHEMA_VERSION == 2
-    assert cs_prompt.prompt_fingerprint() == "53c3982a2738"
+def test_prompt_contract_version_and_fingerprint_for_schema_v4() -> None:
+    """#682: 判定境界の変更後の系列識別値を固定する。"""
+    assert cs_prompt.CATEGORY_SCHEMA_VERSION == 4
+    assert cs_prompt.prompt_fingerprint() == "e6a3814e11e7"
 
 
 @pytest.mark.parametrize(
