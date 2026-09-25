@@ -42,6 +42,7 @@ def test_advisory_union_valid_positive_control():
     assert (out["caught"], out["positives"], out["regex_caught"], out["judge_caught"]) == (2, 2, 1, 1)
     assert out["precision"] == 1
     assert out["generated_at"] == "2026-09-25T00:00:00+00:00"
+    assert out["batch_size"] == 30
 
 
 def test_advisory_union_counts_non_tp_hit_in_precision_positive_control():
@@ -50,6 +51,66 @@ def test_advisory_union_counts_non_tp_hit_in_precision_positive_control():
     out = measure(rows, results)
     assert out["measured"] is True
     assert (out["caught"], out["hits"], out["precision"]) == (2, 3, 2 / 3)
+
+
+def test_duplicate_result_with_all_ids_present_is_rejected():
+    rows, results = fixture()
+    duplicate = copy.deepcopy(results[0])
+    duplicate["meta"]["predicted"] = True
+    results.append(duplicate)
+    assert "重複" in measure(rows, results)["reason"]
+    assert measure(rows, results[:3])["measured"] is True
+
+
+@pytest.mark.parametrize("timestamp", ["2026-09-25T09:00:00+09:00", "2026-09-25T00:00:00"])
+def test_non_utc_timestamp_is_rejected(timestamp):
+    rows, results = fixture()
+    results[0]["meta"]["generated_at"] = timestamp
+    assert measure(rows, results)["measured"] is False
+    assert measure(*fixture())["measured"] is True
+
+
+def test_zero_detected_hits_is_unmeasured(monkeypatch):
+    rows, results = fixture()
+    for result in results:
+        result["meta"]["predicted"] = False
+    monkeypatch.setattr("rl_common.detection.should_include_message", lambda text: False)
+    assert measure(rows, results)["measured"] is False
+    results[0]["meta"]["predicted"] = True
+    assert measure(rows, results)["measured"] is True
+
+
+def test_same_text_distinct_ids_are_valid_but_content_swap_is_rejected():
+    rows, results = fixture()
+    rows[1]["text"] = rows[0]["text"]
+    results[1]["meta"]["prompt_sha256"] = results[0]["meta"]["prompt_sha256"]
+    assert measure(rows, results)["measured"] is True
+    results[1]["meta"]["prompt_sha256"] = hashlib.sha256(b"other").hexdigest()
+    assert measure(rows, results)["measured"] is False
+
+
+def test_json_array_result_row_is_unmeasured(tmp_path, monkeypatch):
+    import judge_eval
+    rows, results = fixture()
+    raw = "".join(json.dumps(row) + "\n" for row in rows).encode()
+    eval_path = tmp_path / "a0_eval_set.jsonl"
+    eval_path.write_bytes(raw)
+    path = tmp_path / "results.jsonl"
+    path.write_text("[]\n")
+    monkeypatch.setattr(capture_recall, "EXPECTED_EVAL_ROWS", len(rows))
+    monkeypatch.setattr(capture_recall, "EXPECTED_EVAL_SHA256", hashlib.sha256(raw).hexdigest())
+    assert capture_recall.load_capture_union([eval_path], path)["measured"] is False
+    path.write_text("".join(json.dumps(row) + "\n" for row in results))
+    monkeypatch.setattr(judge_eval, "compute_harness_sha", lambda: "version")
+    assert capture_recall.load_capture_union([eval_path], path)["measured"] is True
+
+
+def test_absent_and_mismatched_eval_set_have_distinct_reasons(tmp_path):
+    results_path = tmp_path / "results.jsonl"
+    assert capture_recall.load_capture_union([tmp_path / "absent"], results_path)["reason"] == "評価セットなし"
+    bad = tmp_path / "bad.jsonl"
+    bad.write_text("{}\n")
+    assert capture_recall.load_capture_union([bad], results_path)["reason"] == "評価セット不一致"
 
 
 def test_advisory_union_shared_data_dir_only_positive_control(tmp_path, monkeypatch):
@@ -75,7 +136,7 @@ def test_advisory_union_shared_data_dir_only_positive_control(tmp_path, monkeypa
              "accepted_list": [], "withdrawal_candidates": [], "capture_union": out}
     text = "\n".join(render_results_board(board))
     assert "柱1 捕捉率（評価セット・2経路）: 2/2 = 100.0%" in text
-    assert "正規表現 1/2・AI 候補（未確認）1/2" in text
+    assert "正規表現 1/2・AI 候補（朝の y/n 前・未保存）1/2" in text
 
 
 @pytest.mark.parametrize("change", [

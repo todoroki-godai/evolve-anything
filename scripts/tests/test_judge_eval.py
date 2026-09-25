@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "bench"))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 
 import judge_eval as je  # noqa: E402
+from correction_semantic import DEFAULT_JUDGE_MODEL  # noqa: E402
 from correction_semantic import prompt as _prompt  # noqa: E402
 
 
@@ -46,6 +47,14 @@ NOT_TP_ROW = _row("nottp-1", "not_TP", text="続けて", category="continue")
 def test_expected_is_correction_maps_tp_and_not_tp():
     assert je.expected_is_correction({"label": "TP"}) is True
     assert je.expected_is_correction({"label": "not_TP"}) is False
+
+
+def test_judge_default_model_alias_is_shared():
+    import inspect
+    from correction_semantic import judge_runner
+    assert je.RunConfig().model == DEFAULT_JUDGE_MODEL
+    assert inspect.signature(judge_runner.call_haiku).parameters["model"].default == DEFAULT_JUDGE_MODEL
+    assert inspect.signature(judge_runner.run_daily_judge).parameters["model"].default == DEFAULT_JUDGE_MODEL
 
 
 def test_expected_is_correction_rejects_unknown_label():
@@ -294,7 +303,7 @@ def test_advisory_new_results_record_complete_provenance(tmp_path: Path):
     assert meta["generated_at"].endswith("+00:00")
 
 
-def test_advisory_cli_resume_rejection_leaves_approval_state_unwritten(tmp_path: Path, monkeypatch):
+def test_advisory_cli_resume_rejection_leaves_approval_state_unwritten(tmp_path: Path, monkeypatch, capsys):
     """Reject mixed provenance before approving state or calling an LLM."""
     flow = tmp_path / "flow"
     variant = flow / "baseline"
@@ -302,9 +311,38 @@ def test_advisory_cli_resume_rejection_leaves_approval_state_unwritten(tmp_path:
     (variant / "results.jsonl").write_text(json.dumps({"prompt_id": "tp-1", "meta": {"rep": 0}}) + "\n")
     monkeypatch.setattr(je, "FLOW_DIR", flow)
     monkeypatch.setattr(je, "load_corpus", lambda _path: _cases())
-    with pytest.raises(ValueError, match="variant"):
-        je.main(["--run", "--approve-harness"])
+    assert je.main(["--run", "--approve-harness"]) == 2
+    assert "baseline-<YYYYMMDD>" in capsys.readouterr().err
     assert not (flow / "_state.json").exists()
+
+
+def test_remeasure_archive_then_baseline_is_visible_on_board(tmp_path: Path, monkeypatch):
+    import capture_recall
+    import results_board
+    cases = _cases()
+    flow = tmp_path / "correction-judge"
+    baseline = flow / "baseline"
+    baseline.mkdir(parents=True)
+    old = baseline / "results.jsonl"
+    old.write_text(json.dumps({"prompt_id": "tp-1", "meta": {"rep": 0}}) + "\n")
+    old_bytes = old.read_bytes()
+    cfg = je.RunConfig(variant="baseline")
+    with pytest.raises(ValueError, match="baseline-<YYYYMMDD>"):
+        je.run_eval(cases, cfg, flow_dir=flow, call_haiku_fn=lambda *_: pytest.fail("LLM called"))
+    baseline.rename(flow / "baseline-20260925")
+    raw = "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in cases).encode()
+    eval_path = tmp_path / "a0_eval_set.jsonl"
+    eval_path.write_bytes(raw)
+    monkeypatch.setattr(capture_recall, "EXPECTED_EVAL_ROWS", len(cases))
+    monkeypatch.setattr(capture_recall, "EXPECTED_EVAL_SHA256", hashlib.sha256(raw).hexdigest())
+    monkeypatch.setattr(results_board, "_capture_eval_candidates", lambda: [eval_path])
+    oracle = lambda *_: json.dumps({"verdicts": [
+        {"index": 0, "is_correction": True, "idiom": None, "category": "factual", "reason": "r"},
+        {"index": 1, "is_correction": False, "idiom": None, "category": None, "reason": "r"}]})
+    assert je.run_eval(cases, cfg, flow_dir=flow, call_haiku_fn=oracle, sleep_fn=lambda _: None)["graded"] == 2
+    board = results_board.build_results_board("fixture", judge_results_path=baseline / "results.jsonl")
+    assert board["capture_union"]["measured"] is True
+    assert (flow / "baseline-20260925" / "results.jsonl").read_bytes() == old_bytes
 
 
 def test_results_row_never_contains_raw_utterance_text(tmp_path: Path):

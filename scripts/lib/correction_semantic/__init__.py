@@ -42,6 +42,7 @@ LLM_JUDGE_CHANNEL = "llm_judge"
 
 # 1 LLM call にまとめる発話件数（#431: 30 件程度を 1 call）。
 DEFAULT_BATCH_SIZE = 30
+DEFAULT_JUDGE_MODEL = "haiku"
 
 # 1 発話あたりプロンプトに含める本文の最大文字数（#410 [Must]C）。verbosity/judge.py の
 # max_chars（既定 4000）と同じ値・同じ思想（貼り付けられた長文で1発話が青天井に膨張する

@@ -67,7 +67,9 @@ def evaluate_capture_recall(
     }
 
 
-_REMEASURE = "python3 scripts/bench/judge_eval.py --run --approve-harness --variant <新しい名前>"
+_REMEASURE = ("既存 .claude/hillclimb/correction-judge/baseline を "
+              ".claude/hillclimb/correction-judge/baseline-<YYYYMMDD> へ退避後、"
+              "python3 scripts/bench/judge_eval.py --run --approve-harness --variant baseline")
 
 
 def evaluate_capture_union(
@@ -81,6 +83,8 @@ def evaluate_capture_union(
     examples, results = list(eval_rows), list(result_rows)
     eval_by_id: dict[str, dict[str, Any]] = {}
     for row in examples:
+        if not isinstance(row, dict):
+            return unavailable("評価行の形式不正")
         ident, body = row.get("eval_id"), row.get("text")
         if not isinstance(ident, str) or not ident or ident in eval_by_id:
             return unavailable("評価 ID の欠落・重複")
@@ -90,6 +94,8 @@ def evaluate_capture_union(
     result_by_id: dict[str, dict[str, Any]] = {}
     timestamps: list[str] = []
     for result in results:
+        if not isinstance(result, dict):
+            return unavailable("判定行の形式不正")
         ident = result.get("prompt_id")
         if not isinstance(ident, str) or not ident or ident in result_by_id:
             return unavailable("判定 ID の欠落・重複")
@@ -138,7 +144,7 @@ def evaluate_capture_union(
         "recall_ci": wilson_interval(caught, positives),
         "generated_at": min(timestamps) if min(timestamps) == max(timestamps)
                         else f"{min(timestamps)}〜{max(timestamps)}",
-        "harness_sha": harness_sha, "model": model,
+        "harness_sha": harness_sha, "model": model, "batch_size": batch_size,
     }
 
 
@@ -151,15 +157,17 @@ def load_capture_union(eval_candidates: Iterable[Path], results_path: Path) -> d
     import judge_eval
 
     rows = None
+    mismatch = False
     for candidate in eval_candidates:
         if candidate.exists():
             try:
                 rows = load_capture_eval_set(candidate)
                 break
             except (CaptureEvalIntegrityError, OSError, ValueError):
+                mismatch = True
                 continue
     if rows is None:
-        return {"measured": False, "reason": "評価セットなし・不一致", "display": results_path.exists()}
+        return {"measured": False, "reason": "評価セット不一致" if mismatch else "評価セットなし", "display": results_path.exists()}
     if not results_path.exists():
         return {"measured": False, "reason": f"AI 判定結果なし。再測: {_REMEASURE}"}
     try:
