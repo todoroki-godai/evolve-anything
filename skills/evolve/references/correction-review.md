@@ -148,12 +148,12 @@ from correction_semantic import daily_review
 # resolve_slug() の再導出は read/write split-brain（既読除外不発）の原因になる。
 slug = result["correction_review"]["daily"]["slug"]
 
-# 1/2（反映した）場合: promote_res の promoted_keys のみ既読追記する（#326）。
+# 1（ルールに書く）の場合: promote_res の promoted_keys のみ既読追記する（#326）。
 res = daily_review.record_reviewed(
     promote_res["promoted_keys"], slug, decision="promoted", dry_run=dry_run
 )
-# 3（いまは反映しない）の場合: decision="deferred" で既読化するが reflect_status は
-# promoted のまま反映先へは書かない（#475 §5.1）。
+# 2（いまは反映しない）の場合: decision="deferred" で既読化するが reflect_status は
+# promoted のまま反映先へは書かない（#475 §5.1）。3（既に反映済み）は --already-reflected-weak を使う。
 res = daily_review.record_reviewed(
     promote_res["promoted_keys"], slug, decision="deferred", dry_run=dry_run
 )

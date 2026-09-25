@@ -23,8 +23,8 @@ evolve --project-dir "$PJ" --dry-run --observe-first --output "$OUT"
 
 - 出力（`$OUT` の）`observe` フェーズの `action` で分岐する:
   - `action: "backfill_recommended"`（テレメトリ未取得＝初回導入直後、`telemetry_empty: true`）の場合:
-    - 「テレメトリが空。先に /evolve-anything:backfill で既存セッション履歴を取り込んでください」と案内する（MUST）
-    - evolve を続行せず、backfill を先に実行するよう促す（自動実行はしない）
+    - 「テレメトリが空です。observe hooks が今後のセッションを自動記録するので、数セッション利用してから evolve を回してください」と案内する（MUST）
+    - evolve はここで終える（空のテレメトリでは分析対象が無い）
   - `action: "skip_recommended"`（少量だが観測ありのデータ不足）の場合:
     - 「データ不足のためスキップ推奨」メッセージを表示（MUST）
     - AskUserQuestion で実行/スキップを選択させる

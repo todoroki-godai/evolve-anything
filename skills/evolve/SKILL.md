@@ -181,7 +181,7 @@ result JSON を作る」という意味しか持たない。**スキルレベル
 ⚠️ **`--output` は必須（MUST）**: full JSON は `$OUT`（`/tmp/rl_evolve_<slug>.json`）に書かれ、stdout は1行サマリのみ。
 ⚠️ **slug 照合は MUST（#408-B）**: `$OUT` を Read したら `slug`/`project_dir`/`generated_at` が対象 PJ と一致するか検証してから進む。以降「evolve.py の出力に含まれる X フェーズを確認する」は**すべて `$OUT` を Read して参照する**（stdout を `head`/`tail` で読んではならない — MUST NOT。巨大 JSON が途中で切れて invalid になるため）。
 
-`$OUT` の `observe.action` で分岐する（`backfill_recommended`=先に backfill を案内・continue しない / `skip_recommended`=AskUserQuestion で実行可否 / `lightweight_recommended`=軽量モードかフル実行かを AskUserQuestion / 無し=フル実行）。フル実行時は所要時間目安（`env_tier` 基準）を伝えてから `--observe-first` 無しで dry-run を再実行し、`$OUT` を書き直す。
+`$OUT` の `observe.action` で分岐する（`backfill_recommended`=テレメトリ未取得。数セッション利用後の再実行を案内して終了 / `skip_recommended`=AskUserQuestion で実行可否 / `lightweight_recommended`=軽量モードかフル実行かを AskUserQuestion / 無し=フル実行）。フル実行時は所要時間目安（`env_tier` 基準）を伝えてから `--observe-first` 無しで dry-run を再実行し、`$OUT` を書き直す。
 → 各分岐の詳細条件・フル dry-run コマンドは **[references/diagnose.md](references/diagnose.md)**。
 
 ### Step 2: Fitness 関数チェック
