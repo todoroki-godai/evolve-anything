@@ -44,6 +44,14 @@ def test_advisory_union_valid_positive_control():
     assert out["generated_at"] == "2026-09-25T00:00:00+00:00"
 
 
+def test_advisory_union_counts_non_tp_hit_in_precision_positive_control():
+    rows, results = fixture()
+    results[2]["meta"]["predicted"] = True
+    out = measure(rows, results)
+    assert out["measured"] is True
+    assert (out["caught"], out["hits"], out["precision"]) == (2, 3, 2 / 3)
+
+
 def test_advisory_union_shared_data_dir_only_positive_control(tmp_path, monkeypatch):
     """A valid shared candidate works when the checkout candidate is absent."""
     import judge_eval
@@ -62,6 +70,12 @@ def test_advisory_union_shared_data_dir_only_positive_control(tmp_path, monkeypa
     out = capture_recall.load_capture_union([tmp_path / "missing", shared], result_path)
     assert out["measured"] is True
     assert out["caught"] == 2
+    from results_board import render_results_board
+    board = {"slug": "fixture", "decisions": {"accepted": 0, "rejected": 0, "pending": 0, "excluded": 0},
+             "accepted_list": [], "withdrawal_candidates": [], "capture_union": out}
+    text = "\n".join(render_results_board(board))
+    assert "柱1 捕捉率（評価セット・2経路）: 2/2 = 100.0%" in text
+    assert "正規表現 1/2・AI 候補（未確認）1/2" in text
 
 
 @pytest.mark.parametrize("change", [

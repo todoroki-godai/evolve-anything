@@ -575,12 +575,12 @@ def main(argv: Optional[List[str]] = None) -> int:
             file=sys.stderr,
         )
         return 2
+    summary = run_eval(cases, cfg, flow_dir=FLOW_DIR)
+
     new_state.setdefault("metrics", METRICS)
     new_state.setdefault("perf_fields", PERF_FIELDS)
     new_state["metrics_md"] = PREV_ACTION_COVERAGE_NOTE
     state_path.write_text(json.dumps(new_state, ensure_ascii=False, indent=2), encoding="utf-8")
-
-    summary = run_eval(cases, cfg, flow_dir=FLOW_DIR)
 
     variant_dir = FLOW_DIR / cfg.variant
     rows = _read_jsonl(variant_dir / "results.jsonl")

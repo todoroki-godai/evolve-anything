@@ -161,7 +161,7 @@ def load_capture_union(eval_candidates: Iterable[Path], results_path: Path) -> d
     if rows is None:
         return {"measured": False, "reason": "評価セットなし・不一致", "display": results_path.exists()}
     if not results_path.exists():
-        return {"measured": False, "reason": "AI 判定結果なし"}
+        return {"measured": False, "reason": f"AI 判定結果なし。再測: {_REMEASURE}"}
     try:
         results = [json.loads(line) for line in results_path.read_text(encoding="utf-8").splitlines() if line.strip()]
     except (OSError, ValueError):

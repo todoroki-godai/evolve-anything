@@ -294,6 +294,19 @@ def test_advisory_new_results_record_complete_provenance(tmp_path: Path):
     assert meta["generated_at"].endswith("+00:00")
 
 
+def test_advisory_cli_resume_rejection_leaves_approval_state_unwritten(tmp_path: Path, monkeypatch):
+    """Reject mixed provenance before approving state or calling an LLM."""
+    flow = tmp_path / "flow"
+    variant = flow / "baseline"
+    variant.mkdir(parents=True)
+    (variant / "results.jsonl").write_text(json.dumps({"prompt_id": "tp-1", "meta": {"rep": 0}}) + "\n")
+    monkeypatch.setattr(je, "FLOW_DIR", flow)
+    monkeypatch.setattr(je, "load_corpus", lambda _path: _cases())
+    with pytest.raises(ValueError, match="variant"):
+        je.main(["--run", "--approve-harness"])
+    assert not (flow / "_state.json").exists()
+
+
 def test_results_row_never_contains_raw_utterance_text(tmp_path: Path):
     """tacchi レビュー [Must]1 の回帰テスト: results.jsonl の prompt/meta に生発話本文・
     idiom・reason の引用が一切含まれないことを固定する（commit 対象ファイルのため）。
