@@ -69,7 +69,9 @@ def evaluate_capture_recall(
 
 _REMEASURE = ("既存 .claude/hillclimb/correction-judge/baseline を "
               ".claude/hillclimb/correction-judge/baseline-<YYYYMMDD> へ退避後、"
-              "python3 scripts/bench/judge_eval.py --run --approve-harness --variant baseline")
+              "python3 scripts/bench/judge_eval.py --run --approve-harness --variant baseline。"
+              "共有 checkout ではなく worktree で実行し、新しい baseline/results.jsonl と _state.json を commit して PR にする。"
+              "退避した baseline-<YYYYMMDD>/ は commit せず削除する（旧結果は git 履歴に残る）。")
 
 
 def evaluate_capture_union(
