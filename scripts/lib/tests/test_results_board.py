@@ -890,6 +890,37 @@ class TestRenderResultsBoard:
         assert board["capture_union"] == {"measured": False, "reason": "判定結果の読込失敗"}
         assert "戦果ボード" in "\n".join(results_board.render_results_board(board))
 
+    def test_default_judge_results_ignores_checkout_result(self, monkeypatch, tmp_path):
+        """来歴つき結果が実配置に現れても、暗黙の読み取りは隔離する。"""
+        real_path = results_board._JUDGE_RESULTS_PATH
+        synthetic = {"measured": True, "harness_sha": "synthetic", "caught": 1, "positives": 1}
+        seen = []
+
+        def fake_load(_candidates, path):
+            seen.append(path)
+            return synthetic if path == real_path else {"measured": False, "reason": "AI 判定結果なし"}
+
+        monkeypatch.setattr(results_board, "load_capture_union", fake_load)
+        board = results_board.build_results_board("fixture", now=_NOW)
+        assert board["capture_union"]["measured"] is False
+        assert seen == [tmp_path / "isolated-judge-results.jsonl"]
+        assert not seen[0].exists()
+
+    def test_explicit_judge_results_path_is_read(self, monkeypatch, tmp_path):
+        """明示指定は隔離の対象外。"""
+        explicit = tmp_path / "provenance-results.jsonl"
+        explicit.write_text('{"meta":{"harness_sha":"synthetic"}}\n')
+        seen = []
+
+        def fake_load(_candidates, path):
+            seen.append(path)
+            return {"measured": path == explicit, "harness_sha": "synthetic"}
+
+        monkeypatch.setattr(results_board, "load_capture_union", fake_load)
+        board = results_board.build_results_board("fixture", now=_NOW, judge_results_path=explicit)
+        assert board["capture_union"] == {"measured": True, "harness_sha": "synthetic"}
+        assert seen == [explicit]
+
     def test_advisory_union_unmeasured_reason_keeps_legacy_l1(self):
         text = "\n".join(results_board.render_results_board(self._board(
             capture_union={"measured": False, "reason": "来歴なし"})))

@@ -195,6 +195,16 @@ def _isolate_plugin_data(tmp_path, tmp_path_factory, monkeypatch, request):
     """
     monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
     _rebase_module_data_dirs(monkeypatch, sys.modules, tmp_path)
+    # build_results_board の既定引数は定義時に実 results.jsonl を束縛する。
+    # 定数の差し替えでは効かないため、関数の既定値をテストごとに隔離する。
+    import results_board
+
+    defaults = results_board.build_results_board.__defaults__
+    monkeypatch.setattr(
+        results_board.build_results_board,
+        "__defaults__",
+        (*defaults[:-1], tmp_path / "isolated-judge-results.jsonl"),
+    )
     if not any(request.node.get_closest_marker(m) for m in _REAL_HOME_MARKERS):
         # 隔離 HOME は **test の tmp_path の外**（factory 側の別 basetemp）に作る。
         # tmp_path 直下に置くと、tmp_path を列挙・監視するテスト（fleet
