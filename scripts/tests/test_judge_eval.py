@@ -41,36 +41,107 @@ TP_ROW = _row("tp-1", "TP", text="四国めたんじゃなくてつむぎにし�
 NOT_TP_ROW = _row("nottp-1", "not_TP", text="続けて", category="continue")
 
 
+def _synthetic_holdout(tmp_path, monkeypatch):
+    path = tmp_path / "synthetic.jsonl"
+    raw = (json.dumps(TP_ROW, ensure_ascii=False) + "\n").encode()
+    path.write_bytes(raw)
+    monkeypatch.setitem(capture_recall.APPROVED_EVAL_SETS, "holdout682",
+                        (1, hashlib.sha256(raw).hexdigest()))
+    return path
+
+
 @pytest.mark.parametrize("variant", ["./baseline", "baseline/", "../../x", "Baseline", "a\\b", "a..b",
                                     "baseline\u2215x", "baseline\x00x"])
 def test_holdout_variant_rejected_before_state_or_llm(tmp_path, monkeypatch, variant):
     flow = tmp_path / "flow"
     (flow / "baseline").mkdir(parents=True)  # empty baseline boundary
     monkeypatch.setattr(je, "FLOW_DIR", flow)
-    monkeypatch.setattr(je, "load_corpus", lambda _path: [TP_ROW])
-    monkeypatch.setattr(je, "identify_eval_set", lambda _path: "holdout682")
-    monkeypatch.setattr(je._judge_runner, "call_haiku", lambda *_: pytest.fail("LLM called"))
-    assert je.main(["--variant", variant, "--eval-set", str(tmp_path / "synthetic")]) == 2
+    path = _synthetic_holdout(tmp_path, monkeypatch)
+    monkeypatch.setattr(je, "run_eval", lambda *_args, **_kwargs: pytest.fail("run_eval called"))
+    assert je.main(["--run", "--approve-harness", "--variant", variant,
+                    "--eval-set", str(path)]) == 2
     assert not (flow / "_state.json").exists()
-    assert not (flow / variant / "results.jsonl").exists()
+    assert not (flow / "baseline" / "results.jsonl").exists()
+    assert list(flow.iterdir()) == [flow / "baseline"]
 
 
 def test_holdout_baseline_rejected_before_state_or_llm(tmp_path, monkeypatch):
     flow = tmp_path / "flow"
     monkeypatch.setattr(je, "FLOW_DIR", flow)
-    monkeypatch.setattr(je, "load_corpus", lambda _path: [TP_ROW])
-    monkeypatch.setattr(je, "identify_eval_set", lambda _path: "holdout682")
-    monkeypatch.setattr(je._judge_runner, "call_haiku", lambda *_: pytest.fail("LLM called"))
-    assert je.main(["--variant", "baseline", "--eval-set", str(tmp_path / "synthetic")]) == 2
+    path = _synthetic_holdout(tmp_path, monkeypatch)
+    monkeypatch.setattr(je, "run_eval", lambda *_args, **_kwargs: pytest.fail("run_eval called"))
+    assert je.main(["--run", "--approve-harness", "--variant", "baseline",
+                    "--eval-set", str(path)]) == 2
     assert not flow.exists()
 
 
+def test_default_holdout_baseline_rejected_before_state_or_llm(tmp_path, monkeypatch):
+    flow = tmp_path / "flow"
+    path = _synthetic_holdout(tmp_path, monkeypatch)
+    monkeypatch.setattr(je, "FLOW_DIR", flow)
+    monkeypatch.setattr(je, "REPO_EVAL_SET_PATH", path)
+    monkeypatch.setattr(je, "run_eval", lambda *_args, **_kwargs: pytest.fail("run_eval called"))
+    assert je.main(["--run", "--approve-harness", "--variant", "baseline"]) == 2
+    assert not (flow / "_state.json").exists()
+    assert not (flow / "baseline").exists()
+
+
 def test_holdout_variant_positive_control(tmp_path, monkeypatch, capsys):
-    monkeypatch.setattr(je, "load_corpus", lambda _path: [TP_ROW])
-    monkeypatch.setattr(je, "identify_eval_set", lambda _path: "holdout682")
+    path = _synthetic_holdout(tmp_path, monkeypatch)
     assert je.main(["--dry-run", "--variant", "holdout682-before",
-                    "--eval-set", str(tmp_path / "synthetic")]) == 0
+                    "--eval-set", str(path)]) == 0
     assert json.loads(capsys.readouterr().out)["cases"] == 1
+
+
+def test_holdout_run_preserves_a0_confusion_summary(tmp_path, monkeypatch, capsys):
+    path = _synthetic_holdout(tmp_path, monkeypatch)
+    flow = tmp_path / "flow"
+    flow.mkdir()
+    state_path = flow / "_state.json"
+    a0_confusion = {"tp": 23, "fn": 4}
+    state_path.write_text(json.dumps({"confusion_summary": a0_confusion}))
+    monkeypatch.setattr(je, "FLOW_DIR", flow)
+    original_run_eval = je.run_eval
+    oracle = lambda *_: json.dumps({"verdicts": [
+        {"index": 0, "is_correction": True, "idiom": None,
+         "category": "factual", "reason": "r"}]})
+    monkeypatch.setattr(je, "run_eval", lambda *args, **kwargs:
+                        original_run_eval(*args, **kwargs, call_haiku_fn=oracle))
+    assert je.main(["--run", "--approve-harness", "--variant", "holdout682-before",
+                    "--eval-set", str(path)]) == 0
+    assert json.loads(state_path.read_text())["confusion_summary"] == a0_confusion
+    assert json.loads(capsys.readouterr().out)["confusion_summary"]["tp"] == 1
+    assert (flow / "holdout682-before" / "results.jsonl").exists()
+
+
+@pytest.mark.parametrize("variant,eval_set_name", [
+    ("../baseline", "a0"), ("baseline", "holdout682"),
+])
+def test_run_eval_rejects_invalid_destination_before_write(tmp_path, variant, eval_set_name):
+    flow = tmp_path / "flow"
+    with pytest.raises(ValueError):
+        je.run_eval([TP_ROW], je.RunConfig(variant=variant), flow_dir=flow,
+                    eval_set_name=eval_set_name,
+                    call_haiku_fn=lambda *_: pytest.fail("LLM called"))
+    assert not flow.exists()
+
+
+def test_a0_run_updates_confusion_summary(tmp_path, monkeypatch, capsys):
+    path = tmp_path / "synthetic_a0.jsonl"
+    raw = (json.dumps(TP_ROW, ensure_ascii=False) + "\n").encode()
+    path.write_bytes(raw)
+    monkeypatch.setattr(capture_recall, "EXPECTED_EVAL_ROWS", 1)
+    monkeypatch.setattr(capture_recall, "EXPECTED_EVAL_SHA256", hashlib.sha256(raw).hexdigest())
+    monkeypatch.setattr(je, "FLOW_DIR", tmp_path / "flow")
+    original_run_eval = je.run_eval
+    oracle = lambda *_: json.dumps({"verdicts": [
+        {"index": 0, "is_correction": True, "idiom": None,
+         "category": "factual", "reason": "r"}]})
+    monkeypatch.setattr(je, "run_eval", lambda *args, **kwargs:
+                        original_run_eval(*args, **kwargs, call_haiku_fn=oracle))
+    assert je.main(["--run", "--approve-harness", "--eval-set", str(path)]) == 0
+    assert json.loads((je.FLOW_DIR / "_state.json").read_text())["confusion_summary"]["tp"] == 1
+    assert json.loads(capsys.readouterr().out)["confusion_summary"]["tp"] == 1
 
 
 def test_resume_rejects_cross_set_before_llm(tmp_path):
@@ -368,7 +439,8 @@ def test_advisory_cli_resume_rejection_leaves_approval_state_unwritten(tmp_path:
     variant.mkdir(parents=True)
     (variant / "results.jsonl").write_text(json.dumps({"prompt_id": "tp-1", "meta": {"rep": 0}}) + "\n")
     monkeypatch.setattr(je, "FLOW_DIR", flow)
-    monkeypatch.setattr(je, "load_corpus", lambda _path: _cases())
+    monkeypatch.setattr(je, "identify_eval_set", lambda _path: "a0")
+    monkeypatch.setattr(je, "load_corpus", lambda _path, *, name: _cases())
     assert je.main(["--run", "--approve-harness"]) == 2
     assert "baseline-<YYYYMMDD>" in capsys.readouterr().err
     assert not (flow / "_state.json").exists()

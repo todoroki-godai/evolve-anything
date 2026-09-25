@@ -125,11 +125,9 @@ def resolve_eval_set_path(override: Optional[Path] = None) -> Path:
     return FALLBACK_EVAL_SET_PATH
 
 
-def load_corpus(path: Optional[Path] = None) -> List[Dict[str, Any]]:
+def load_corpus(path: Path, *, name: str) -> List[Dict[str, Any]]:
     """凍結コーパスを SHA/行数検証つきで読む（``capture_recall`` が単一ソース。再実装しない）。"""
-    resolved = resolve_eval_set_path(path)
-    name = identify_eval_set(resolved)
-    return load_capture_eval_set(resolved, name=name)
+    return load_capture_eval_set(path, name=name)
 
 
 def expected_is_correction(row: Dict[str, Any]) -> bool:
@@ -414,6 +412,10 @@ def run_eval(
       自動では再試行しない（resume は「results.jsonl に無い (case,rep)」を対象にするため
       再実行すれば再試行されるが、自動リトライループは無い）。
     """
+    if re.fullmatch(r"[a-z0-9][a-z0-9-]*", cfg.variant) is None:
+        raise ValueError("invalid variant")
+    if eval_set_name != "a0" and cfg.variant == "baseline":
+        raise ValueError("baseline is reserved for a0")
     rng = rng or random.Random(cfg.seed)
     variant_dir = flow_dir / cfg.variant
     traces_dir = variant_dir / "traces"
@@ -560,12 +562,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         print("[judge_eval] invalid variant", file=sys.stderr)
         return 2
 
-    eval_set_name = identify_eval_set(args.eval_set) if args.eval_set is not None else "a0"
+    eval_set_path = resolve_eval_set_path(args.eval_set)
+    eval_set_name = identify_eval_set(eval_set_path)
     if eval_set_name != "a0" and args.variant == "baseline":
         print("[judge_eval] baseline is reserved for a0", file=sys.stderr)
         return 2
 
-    cases = load_corpus(args.eval_set)
+    cases = load_corpus(eval_set_path, name=eval_set_name)
     if args.limit is not None:
         cases = cases[: args.limit]
 
@@ -608,10 +611,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     confusion = compute_confusion_summary(rows)
     summary["confusion_summary"] = confusion
 
-    # summary（Wilson 95% CI 込み）を _state.json にも残す（tacchi レビュー Should-5）。
-    state_after = load_state(state_path)
-    state_after["confusion_summary"] = confusion
-    state_path.write_text(json.dumps(state_after, ensure_ascii=False, indent=2), encoding="utf-8")
+    # a0 の summary（Wilson 95% CI 込み）だけを _state.json に残す。
+    if eval_set_name == "a0":
+        state_after = load_state(state_path)
+        state_after["confusion_summary"] = confusion
+        state_path.write_text(json.dumps(state_after, ensure_ascii=False, indent=2), encoding="utf-8")
 
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     return 0
