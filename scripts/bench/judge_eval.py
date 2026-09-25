@@ -419,6 +419,13 @@ def run_eval(
     results_path = variant_dir / "results.jsonl"
     errors_path = variant_dir / "errors.jsonl"
 
+    harness_sha = compute_harness_sha()
+    for previous in _read_jsonl(results_path):
+        meta = previous.get("meta") or {}
+        if (meta.get("harness_sha"), meta.get("model"), meta.get("batch_size_config")) != (
+            harness_sha, cfg.model, cfg.batch_size
+        ):
+            raise ValueError("resume provenance differs; choose a new --variant name")
     done = _existing_result_keys(results_path)
     # Nit: 意図した対象総数（case × rep）を summary に併記し、resume でスキップされた
     # 件数を requested/graded/errors の合計との差分から読めるようにする。
@@ -508,6 +515,10 @@ def run_eval(
                         "batch_size": len(group),
                         "prompt_fingerprint": fingerprint,
                         "prompt_sha256": prompt_sha256,
+                        "harness_sha": harness_sha,
+                        "model": cfg.model,
+                        "batch_size_config": cfg.batch_size,
+                        "generated_at": now_fn().isoformat(),
                     },
                 }
                 _append_jsonl(results_path, row)

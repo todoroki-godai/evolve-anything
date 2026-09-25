@@ -259,6 +259,41 @@ def test_run_eval_resume_skips_already_graded_case_rep(tmp_path: Path):
     assert summary2["batches_called"] == 0
 
 
+@pytest.mark.parametrize("field,value", [
+    ("harness_sha", "stale"), ("model", "sonnet"), ("batch_size_config", 12),
+    ("harness_sha", None),
+])
+def test_advisory_resume_rejects_mixed_provenance_before_append(tmp_path: Path, field, value):
+    """Known provenance differences reject resume before any LLM call or write."""
+    cfg = je.RunConfig(variant="baseline", batch_size=30)
+    path = tmp_path / "baseline" / "results.jsonl"
+    path.parent.mkdir()
+    row = {"prompt_id": "tp-1", "meta": {"rep": 0, "harness_sha": je.compute_harness_sha(),
+           "model": cfg.model, "batch_size_config": cfg.batch_size}}
+    if value is None: del row["meta"][field]
+    else: row["meta"][field] = value
+    path.write_text(json.dumps(row) + "\n")
+    before = path.read_bytes()
+    with pytest.raises(ValueError, match="variant"):
+        je.run_eval(_cases(), cfg, flow_dir=tmp_path,
+                    call_haiku_fn=lambda *_: pytest.fail("LLM called"))
+    assert path.read_bytes() == before
+
+
+def test_advisory_new_results_record_complete_provenance(tmp_path: Path):
+    """Positive control for provenance saved with a synthetic fixture."""
+    cfg = je.RunConfig(variant="fresh", batch_size=30)
+    je.run_eval([TP_ROW], cfg, flow_dir=tmp_path,
+                call_haiku_fn=lambda *_: json.dumps({"verdicts": [
+                    {"index": 0, "is_correction": True, "idiom": None, "category": "factual", "reason": "r"}]}))
+    row = json.loads((tmp_path / "fresh" / "results.jsonl").read_text())
+    meta = row["meta"]
+    assert meta["harness_sha"] == je.compute_harness_sha()
+    assert meta["model"] == cfg.model
+    assert meta["batch_size_config"] == cfg.batch_size
+    assert meta["generated_at"].endswith("+00:00")
+
+
 def test_results_row_never_contains_raw_utterance_text(tmp_path: Path):
     """tacchi レビュー [Must]1 の回帰テスト: results.jsonl の prompt/meta に生発話本文・
     idiom・reason の引用が一切含まれないことを固定する（commit 対象ファイルのため）。
