@@ -91,7 +91,10 @@ def _print_layer3(l3: Dict[str, Any]) -> None:
         if fails:
             print(f"  ✗ {skill['skill']}: {len(fails)} 件の赤")
             for b in fails:
-                src = Path(b.get("source", "")).parent.name + "/SKILL.md"
+                # source は SKILL.md 本体または references/*.md（#674）。実ファイル名を
+                # そのまま出す（親ディレクトリ名 + "/SKILL.md" 固定だと references を誤表示する）。
+                src_path = Path(b.get("source", ""))
+                src = f"{src_path.parent.name}/{src_path.name}"
                 print(f"       {src}:{b['line']} [{b['mode']}] {b['detail']}")
 
 

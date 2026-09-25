@@ -164,6 +164,22 @@ def classify_block(lang: str, code: str) -> Dict[str, Any]:
     # bash
     commands = _extract_bash_commands(code)
     cls["commands"] = commands
+    # 埋め込み python（``python3 -c "..."`` / ``'...'`` の複数行本文）の import 文も
+    # python fence と同じ import_check 経路に通す（#674: 見逃した回帰の再発防止）。
+    # 引用符の「中身」の行だけを isolate してから抽出するため、bash 構文（例:
+    # ``SLUG="$(... python3 -c "..." ...)"`` の一行完結形）を python として誤解釈しない
+    # （単一行で開閉する形は isolate 対象外＝既存の import_check 検出条件が anchored
+    # regex のため自然に除外される。#655 のこの制限は意図的で、テスト側に明記する）。
+    py_source = _extract_embedded_python_source(code)
+    embedded_imports = _extract_imports(py_source) if py_source else []
+    if embedded_imports:
+        cls["mode"] = "import_check"
+        cls["imports"] = embedded_imports
+        # setup は「引用符内の sys.path 設定」＋「``PYTHONPATH=`` 前置」の両方を拾う。
+        # プレースホルダは import 文自体に含まれない限り無視する（python fence と同じ
+        # 割り切り。#674 の実例は import 行と無関係な引数にだけ placeholder があった）。
+        cls["setup"] = _extract_syspath_setup(py_source) + _extract_env_pythonpath_setup(code)
+        return cls
     if cls.get("has_placeholder"):
         cls["mode"] = "existence_only"
         return cls
@@ -258,6 +274,56 @@ def _extract_bash_commands(code: str) -> List[str]:
         if _BARE_CMD_RE.match(head):
             cmds.append(head)
     return cmds
+
+
+def _extract_embedded_python_source(code: str) -> str:
+    """bash ブロック中で python 用の引用符が「開いたまま」の行だけを連結して返す。
+
+    ``python3 -c "..."`` / ``'...'`` の複数行本文（ヒアドキュメント風の書き方）を対象にする。
+    ``_extract_bash_commands`` と同じ per-line クォート parity 追跡を再利用し、bash 構文の
+    行（例: ``SLUG="$(... python3 -c "..." ...)"`` の一行完結形）は「開始時点で引用符内」に
+    ならないため自然に除外される。**既知の限界**: 単一行で開いて閉じる形
+    （``python3 -c "import json; ..."``）とヒアドキュメント形（``python3 - <<'EOF' ... EOF``）
+    は対象外＝迂回可能（bash 構文形で判定しているため。`no-denylist-checks.md`）。
+    """
+    collected: List[str] = []
+    in_dquote = False
+    in_squote = False
+    for line in _split_logical_lines(code):
+        started_in_quote = in_dquote or in_squote
+        if not in_squote and line.count('"') % 2 == 1:
+            in_dquote = not in_dquote
+        if not in_dquote and line.count("'") % 2 == 1:
+            in_squote = not in_squote
+        if started_in_quote:
+            collected.append(line)
+    return "\n".join(collected)
+
+
+# ``PYTHONPATH=<path> python3 -c`` 前置（report-feedback/SKILL.md #31 の慣習）を検出する。
+_ENV_PYTHONPATH_PREFIX_RE = re.compile(
+    r"(?m)^\s*PYTHONPATH=(\"(?P<dq>[^\"]*)\"|'(?P<sq>[^']*)'|(?P<bare>\S+))\s+python3?\s+-c\b"
+)
+
+
+def _extract_env_pythonpath_setup(code: str) -> List[str]:
+    """``PYTHONPATH=<path> python3 -c`` 前置を ``sys.path.insert`` 相当の setup 行に変換する。
+
+    シェル環境変数で解決パスを渡す書き方は ``_extract_syspath_setup`` の
+    ``sys.path`` 行検出（引用符内の python 行が対象）では拾えないため、別経路で補う。
+    """
+    setup: List[str] = []
+    for m in _ENV_PYTHONPATH_PREFIX_RE.finditer(code):
+        value = m.group("dq") if m.group("dq") is not None else (m.group("sq") if m.group("sq") is not None else m.group("bare"))
+        if not value:
+            continue
+        for entry in value.split(os.pathsep):
+            entry = entry.strip()
+            if entry:
+                setup.append(f"sys.path.insert(0, {entry!r})")
+    if setup:
+        setup = ["import sys"] + setup
+    return setup
 
 
 def _is_safe_bash(code: str) -> bool:
