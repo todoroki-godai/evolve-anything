@@ -47,6 +47,7 @@ import argparse
 import hashlib
 import json
 import random
+import re
 import sys
 import time
 from dataclasses import dataclass
@@ -62,7 +63,7 @@ for _p in (_BENCH_DIR, _LIB_DIR):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-from capture_recall import load_capture_eval_set, wilson_interval  # noqa: E402
+from capture_recall import APPROVED_EVAL_SETS, identify_eval_set, load_capture_eval_set, wilson_interval  # noqa: E402
 from correction_semantic import DEFAULT_BATCH_SIZE, DEFAULT_JUDGE_MODEL  # noqa: E402
 from correction_semantic import judge_runner as _judge_runner  # noqa: E402
 from correction_semantic import prompt as _prompt  # noqa: E402
@@ -127,7 +128,8 @@ def resolve_eval_set_path(override: Optional[Path] = None) -> Path:
 def load_corpus(path: Optional[Path] = None) -> List[Dict[str, Any]]:
     """凍結コーパスを SHA/行数検証つきで読む（``capture_recall`` が単一ソース。再実装しない）。"""
     resolved = resolve_eval_set_path(path)
-    return load_capture_eval_set(resolved)
+    name = identify_eval_set(resolved)
+    return load_capture_eval_set(resolved, name=name)
 
 
 def expected_is_correction(row: Dict[str, Any]) -> bool:
@@ -384,6 +386,7 @@ def run_eval(
     cfg: RunConfig,
     *,
     flow_dir: Path,
+    eval_set_name: str = "a0",
     call_haiku_fn: Callable[[str, str], str] = _judge_runner.call_haiku,
     now_fn: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
     sleep_fn: Callable[[float], None] = time.sleep,
@@ -422,8 +425,9 @@ def run_eval(
     harness_sha = compute_harness_sha()
     for previous in _read_jsonl(results_path):
         meta = previous.get("meta") or {}
-        if (meta.get("harness_sha"), meta.get("model"), meta.get("batch_size_config")) != (
-            harness_sha, cfg.model, cfg.batch_size
+        if (meta.get("harness_sha"), meta.get("model"), meta.get("batch_size_config"),
+                meta.get("eval_set", "a0")) != (
+            harness_sha, cfg.model, cfg.batch_size, eval_set_name
         ):
             raise ValueError("resume 来歴不一致。既存 .claude/hillclimb/correction-judge/baseline を "
                              ".claude/hillclimb/correction-judge/baseline-<YYYYMMDD> へ退避後、"
@@ -520,6 +524,8 @@ def run_eval(
                         "harness_sha": harness_sha,
                         "model": cfg.model,
                         "batch_size_config": cfg.batch_size,
+                        "eval_set": eval_set_name,
+                        "eval_set_sha256": APPROVED_EVAL_SETS[eval_set_name][1],
                         "generated_at": now_fn().isoformat(),
                     },
                 }
@@ -550,6 +556,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--eval-set", type=Path, default=None, help="凍結コーパスの override パス")
     args = ap.parse_args(argv)
 
+    if re.fullmatch(r"[a-z0-9][a-z0-9-]*", args.variant) is None:
+        print("[judge_eval] invalid variant", file=sys.stderr)
+        return 2
+
+    eval_set_name = identify_eval_set(args.eval_set) if args.eval_set is not None else "a0"
+    if eval_set_name != "a0" and args.variant == "baseline":
+        print("[judge_eval] baseline is reserved for a0", file=sys.stderr)
+        return 2
+
     cases = load_corpus(args.eval_set)
     if args.limit is not None:
         cases = cases[: args.limit]
@@ -578,7 +593,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         )
         return 2
     try:
-        summary = run_eval(cases, cfg, flow_dir=FLOW_DIR)
+        summary = run_eval(cases, cfg, flow_dir=FLOW_DIR, eval_set_name=eval_set_name)
     except ValueError as exc:
         print(f"[judge_eval] {exc}", file=sys.stderr)
         return 2
