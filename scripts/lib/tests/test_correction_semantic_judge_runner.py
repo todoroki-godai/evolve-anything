@@ -406,7 +406,7 @@ def test_run_threads_model_into_weak_signal_provenance(tmp_path, monkeypatch):
     assert ws_lines[0]["provenance"]["model"] == "haiku"
     assert ws_lines[0]["provenance"]["category"] == "factual"
     assert ws_lines[0]["provenance"]["prompt_fingerprint"]
-    assert ws_lines[0]["provenance"]["category_schema_version"] == 2
+    assert ws_lines[0]["provenance"]["category_schema_version"] == 3
 
 
 def test_dry_run_does_not_acquire_lock_and_proceeds_while_lock_held(tmp_path):
