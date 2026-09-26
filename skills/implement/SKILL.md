@@ -35,8 +35,12 @@ plan → implement → ship の「implement」フェーズを構造化する。
 evolve-usage-log "implement"
 setopt +o nomatch 2>/dev/null || true  # zsh compat
 GSTACK_SLUG=""
-if command -v ~/.claude/skills/gstack/bin/gstack-slug &>/dev/null; then
-  eval "$(~/.claude/skills/gstack/bin/gstack-slug 2>/dev/null)" 2>/dev/null || true
+GSTACK_BIN=""  # gstack の置き場所は環境で違う（~/.claude/skills か ~/.agents/skills）。無ければ連携は飛ばす
+for _d in ~/.claude/skills/gstack/bin ~/.agents/skills/gstack/bin; do
+  [ -x "$_d/gstack-slug" ] && { GSTACK_BIN="$_d"; break; }
+done
+if [ -n "$GSTACK_BIN" ]; then
+  eval "$("$GSTACK_BIN/gstack-slug" 2>/dev/null)" 2>/dev/null || true
   GSTACK_SLUG="$SLUG"
 fi
 BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null | tr '/' '-' || echo 'no-branch')
@@ -268,8 +272,11 @@ evolve のたびに効かせるなら audit に section を足す配線が必要
 gstack の reviews.jsonl がある環境なら、ビルドログも書く:
 
 ```bash
-if command -v ~/.claude/skills/gstack/bin/gstack-review-log &>/dev/null; then
-  ~/.claude/skills/gstack/bin/gstack-review-log '{"skill":"implement","timestamp":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'","status":"STATUS","depth":"DEPTH","tasks_count":N,"tasks_total":N,"mode":"MODE","conformance_rate":RATE,"commit":"'"$(git rev-parse --short HEAD)"'"}'
+for _d in ~/.claude/skills/gstack/bin ~/.agents/skills/gstack/bin; do
+  [ -x "$_d/gstack-review-log" ] && { GSTACK_REVIEW_LOG="$_d/gstack-review-log"; break; }
+done
+if [ -n "${GSTACK_REVIEW_LOG:-}" ]; then
+  "$GSTACK_REVIEW_LOG" '{"skill":"implement","timestamp":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'","status":"STATUS","depth":"DEPTH","tasks_count":N,"tasks_total":N,"mode":"MODE","conformance_rate":RATE,"commit":"'"$(git rev-parse --short HEAD)"'"}'
 fi
 ```
 
