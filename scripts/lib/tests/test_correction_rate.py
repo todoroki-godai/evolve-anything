@@ -505,6 +505,26 @@ class TestStandardizedRate:
         assert out["rate"] == pytest.approx(expected)
         assert out["coverage"] == pytest.approx(total)
 
+    def test_positive_control_mix_shift_with_unchanged_pj_rates_does_not_move_rate(self):
+        """陽性対照①: 各PJの率は固定したまま judged 件数比だけ入れ替えても標準化率は
+        動かない（pooled rate はこの入れ替えで動く — #690 変更2 の狙いそのもの）。"""
+        def _counts(updater_judged, evolve_judged):
+            return {
+                "updater-index": {"judged": updater_judged, "tp": int(updater_judged * 0.20)},
+                "evolve-anything": {"judged": evolve_judged, "tp": int(evolve_judged * 0.05)},
+            }
+
+        counts_a = _counts(900, 100)
+        counts_b = _counts(100, 900)
+        std_a = correction_rate._standardized_rate(counts_a)
+        std_b = correction_rate._standardized_rate(counts_b)
+
+        def _pooled(counts):
+            return sum(c["tp"] for c in counts.values()) / sum(c["judged"] for c in counts.values())
+
+        assert std_a["rate"] == pytest.approx(std_b["rate"])
+        assert abs(_pooled(counts_a) - _pooled(counts_b)) > 0.05  # pooled は同じ入れ替えで動く
+
     def test_unpinned_pj_only_is_not_measured(self):
         counts = {"some-unpinned-pj": {"judged": 100, "tp": 10}}
         out = correction_rate._standardized_rate(counts)
@@ -520,10 +540,54 @@ class TestStandardizedRate:
         assert out["measured"] is True
         assert out["rate"] == pytest.approx(1 / 3)
 
+    def test_variance_uses_weighted_formula_not_pooled(self):
+        """#690 変更3 陰性試験⑥: 分散は Var=Σwᵢ²pᵢ(1−pᵢ)/nᵢ（重み付き）で出す。pooled の
+        p(1−p)/N に戻すと、PJ間の重み差が大きいほど帯が狭くなり偽の悪化判定を許す
+        （小さい重みの PJ の分散が過小に効くため）。"""
+        counts = {
+            "updater-index": {"judged": 1000, "tp": 100},
+            "evolve-anything": {"judged": 10, "tp": 1},
+        }
+        out = correction_rate._standardized_rate(counts)
+        w_u = correction_rate.STANDARD_PJ_WEIGHTS["updater-index"]
+        w_e = correction_rate.STANDARD_PJ_WEIGHTS["evolve-anything"]
+        total = w_u + w_e
+        wi_u, wi_e = w_u / total, w_e / total
+        p_u, p_e = 0.1, 0.1
+        expected_variance = (wi_u ** 2) * p_u * (1 - p_u) / 1000 + (wi_e ** 2) * p_e * (1 - p_e) / 10
+        assert out["variance"] == pytest.approx(expected_variance)
+        # pooled の式に戻すと分散がずっと小さくなる（帯が狭くなる方向）ことも固定する。
+        pooled_variance = 0.1 * 0.9 / 1010
+        assert out["variance"] > pooled_variance * 5
+
     def test_standard_mix_id_is_reported(self):
         counts = {"updater-index": {"judged": 10, "tp": 1}}
         out = correction_rate._standardized_rate(counts)
         assert out["standard_mix_id"] == correction_rate.STANDARD_MIX_ID
+
+    def test_standardized_rate_is_pinned_and_unaffected_by_later_weeks(self):
+        """#690 変更2 陰性試験③: 標準構成は固定週集合にピン留め。表示対象の全週から
+        動的に再集計する実装だと、後から週を足しただけで過去週（W34）の標準化率が動く
+        （このテストは「動かない」ことを固定する）。"""
+        u_w34 = _utt("w34", pj_slug="evolve-anything")
+        raw_without_w35 = _raw([u_w34], [_judged(u_w34)], [_tp(u_w34)])
+        result_a = correction_rate.compute_weekly_correction_rate(now=_AFTER_CUTOFF, raw=raw_without_w35)
+        w34_a = next(w for w in result_a["weeks"] if w["week_id"] == "2026-W34")
+
+        u_w35 = _utt("w35", ts=_W34_START + timedelta(days=7, hours=1),
+                      ingested_at=_W34_START + timedelta(days=7, hours=2), pj_slug="big-pj")
+        raw_with_w35 = _raw(
+            [u_w34, u_w35],
+            [_judged(u_w34), _judged(u_w35, judged_at=_W34_CUTOFF + timedelta(days=7))],
+            [_tp(u_w34)],
+        )
+        result_b = correction_rate.compute_weekly_correction_rate(
+            now=_AFTER_CUTOFF + timedelta(days=7), raw=raw_with_w35,
+        )
+        w34_b = next(w for w in result_b["weeks"] if w["week_id"] == "2026-W34")
+
+        assert w34_a["standardized"]["rate"] == pytest.approx(w34_b["standardized"]["rate"])
+        assert w34_a["standardized"]["coverage"] == pytest.approx(w34_b["standardized"]["coverage"])
 
     def test_week_output_includes_standardized_field(self):
         u1 = _utt("a", pj_slug="evolve-anything")
@@ -997,6 +1061,42 @@ class TestBuildCorrectionRateSummary:
         # W12: 0.20 → 0.10 は改善（悪化ではない）→ top3 は削られる
         assert displayed[2]["is_worsening"] is False
         assert "top3_examples" not in displayed[2] or displayed[2]["top3_examples"] == []
+
+    def test_worsening_uses_standardized_rate_not_pooled(self):
+        """#690 変更2 陰性試験①: PJ構成の変化だけで pooled rate が跳ねても、標準化率が
+        動いていなければ悪化と判定しない（構成変化を悪化と誤読しない・issue実例の再現）。
+        """
+        import correction_rate as cr
+
+        weeks = [
+            {"week_id": f"2026-W{n:02d}", "measured": True, "rate": 0.10, "judged_count": 100,
+             "tp_count": 10, "total_population": 100, "coverage": 1.0,
+             "pj_breakdown": {}, "top3_examples": [], "failure_reasons": [],
+             "standardized": {"measured": True, "rate": 0.10, "variance": 0.0001,
+                               "coverage": 1.0, "standard_mix_id": "test"}}
+            for n in (8, 9, 10)
+        ] + [
+            # pooled rate は構成変化だけで 0.10→0.20 に跳ねるが、標準化率は 0.10 のまま不変。
+            {"week_id": "2026-W11", "measured": True, "rate": 0.20, "judged_count": 100,
+             "tp_count": 20, "total_population": 100, "coverage": 1.0,
+             "pj_breakdown": {}, "top3_examples": [{"text": "mix change"}], "failure_reasons": [],
+             "standardized": {"measured": True, "rate": 0.10, "variance": 0.0001,
+                               "coverage": 1.0, "standard_mix_id": "test"}},
+        ]
+
+        def _fake_compute(*, now=None, raw=None, **_ignored):
+            return {"weeks": weeks, "diagnostics": {}, "generated_at": now.isoformat()}
+
+        orig = cr.compute_weekly_correction_rate
+        cr.compute_weekly_correction_rate = _fake_compute
+        try:
+            summary = cr.build_correction_rate_summary(now=_AFTER_CUTOFF, raw={})
+        finally:
+            cr.compute_weekly_correction_rate = orig
+
+        displayed = {w["week_id"]: w for w in summary["displayed_weeks"]}
+        assert displayed["2026-W11"]["is_worsening"] is False
+        assert displayed["2026-W11"]["top3_examples"] == []
 
     def test_worsening_suppressed_when_diff_within_min_detectable_band(self):
         """#690 変更3: 週差が最小検出可能差未満なら、上昇していても悪化と判定しない。"""
