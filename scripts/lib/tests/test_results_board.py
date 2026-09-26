@@ -949,6 +949,22 @@ class TestRenderResultsBoard:
         assert board["capture_union"] == {"measured": False, "reason": "判定結果の読込失敗"}
         assert "戦果ボード" in "\n".join(results_board.render_results_board(board))
 
+    def test_holdout_reader_failure_does_not_promote_measured_a0(self, monkeypatch, tmp_path):
+        def fake_load(_candidates, _path, eval_set_name="a0"):
+            if eval_set_name == "holdout682":
+                raise ValueError("synthetic holdout read failure")
+            return self._union(42, 47)
+
+        monkeypatch.setattr(results_board, "load_capture_union", fake_load)
+        board = results_board.build_results_board("fixture", now=_NOW,
+                                                 judge_results_path=tmp_path / "a0.jsonl")
+        assert board["capture_union"]["measured"] is True
+        assert board["capture_holdout"] == {"measured": False, "reason": "確認用セットの読込失敗"}
+        lines = results_board.render_results_board(board)
+        assert "柱1 捕捉率（確認用セット・調整に不使用）: 測定不能（確認用セットの読込失敗）" in lines[2]
+        assert "42/47" not in lines[2]
+        assert any("参考: 調整に使った評価セットでの値 42/47" in line for line in lines)
+
     def test_builder_uses_named_holdout_from_call_time_data_dir(self, monkeypatch, tmp_path):
         import rl_common
         monkeypatch.setattr(rl_common, "DATA_DIR", tmp_path)
