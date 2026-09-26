@@ -14,6 +14,7 @@ EXPECTED_EVAL_SHA256 = "6a65520ba6ede89842fa4bdedb38a89ec70346dda55fdae2718fffbb
 APPROVED_EVAL_SETS = {
     "a0": (EXPECTED_EVAL_ROWS, EXPECTED_EVAL_SHA256),
     "holdout682": (709, "f31004bcfe0efb81b7f43b60f81f66dcbd90b915a40b5d857b9dd2dfb4956687"),
+    "holdout691": (770, "60d9aebfcce337c58f7543b85c6d0ce6821fff4288b69b48d4223edfeab1fa29"),
 }
 
 
@@ -98,7 +99,8 @@ _REMEASURE = {"a0": ("既存 .claude/hillclimb/correction-judge/baseline を "
               "python3 scripts/bench/judge_eval.py --run --approve-harness --variant baseline。"
               "共有 checkout ではなく worktree で実行し、新しい baseline/results.jsonl と _state.json を commit して PR にする。"
               "退避した baseline-<YYYYMMDD>/ は commit せず削除する（旧結果は git 履歴に残る）。"),
-              "holdout682": "確認用セットは1回使用済みで取り直さない。判定を変えたら新しい確認用セットを作って測る（#682）"}
+              "holdout682": "確認用セットは1回使用済みで取り直さない。判定を変えたら新しい確認用セットを作って測る（#682）",
+              "holdout691": "確認用セットは未使用。初回の判定実行後は1回使用済みとなり、以後は判定を変えたら新しい確認用セットを作って測る（#682/#691）"}
 
 
 def evaluate_capture_union(

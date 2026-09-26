@@ -275,6 +275,38 @@ def test_advisory_union_shared_data_dir_only_positive_control(tmp_path, monkeypa
     assert "到達の根拠にしない" in text
 
 
+def test_holdout691_is_registered_with_expected_rows_and_hash():
+    assert capture_recall.APPROVED_EVAL_SETS["holdout691"] == (
+        770, "60d9aebfcce337c58f7543b85c6d0ce6821fff4288b69b48d4223edfeab1fa29",
+    )
+
+
+def test_holdout691_remeasure_text_says_unused_and_differs_from_holdout682():
+    holdout691_text = capture_recall._REMEASURE["holdout691"]
+    holdout682_text = capture_recall._REMEASURE["holdout682"]
+    assert "未使用" in holdout691_text
+    assert holdout691_text != holdout682_text
+
+
+def test_holdout691_identify_eval_set_matches_only_on_exact_rows_and_hash(tmp_path, monkeypatch):
+    rows = [{"eval_id": str(i), "text": f"t{i}", "label": "TP"} for i in range(3)]
+    raw = "".join(json.dumps(row) + "\n" for row in rows).encode()
+    monkeypatch.setitem(
+        capture_recall.APPROVED_EVAL_SETS, "holdout691", (len(rows), hashlib.sha256(raw).hexdigest())
+    )
+    path = tmp_path / "synthetic691.jsonl"
+    path.write_bytes(raw)
+    assert capture_recall.identify_eval_set(path) == "holdout691"
+
+    path.write_bytes(raw + b'{"eval_id": "3", "text": "t3", "label": "TP"}\n')
+    with pytest.raises(capture_recall.CaptureEvalIntegrityError):
+        capture_recall.identify_eval_set(path)
+
+    path.write_bytes(raw.replace(b'"eval_id": "0"', b'"eval_id": "9"', 1))
+    with pytest.raises(capture_recall.CaptureEvalIntegrityError):
+        capture_recall.identify_eval_set(path)
+
+
 @pytest.mark.parametrize("change", [
     "missing", "extra", "duplicate", "same_text_different_id", "missing_filled_duplicate",
     "hash", "label", "expected_string", "predicted_string", "status", "rep",
