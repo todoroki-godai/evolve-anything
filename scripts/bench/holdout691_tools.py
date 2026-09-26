@@ -295,16 +295,13 @@ def main() -> None:
     freeze.add_argument("--db", type=Path, required=True)
     freeze.add_argument("--out", type=Path, required=True)
     freeze.add_argument("--until", required=True)
-    freeze.add_argument("--root", type=Path, default=DATA_ROOT)
     keys = sub.add_parser("keys")
     keys.add_argument("--source", type=Path, required=True)
     keys.add_argument("--out", type=Path, required=True)
-    keys.add_argument("--root", type=Path, default=DATA_ROOT)
     sample = sub.add_parser("sample")
     sample.add_argument("--population", type=Path, required=True)
     sample.add_argument("--population-sha256", required=True)
     sample.add_argument("--out", type=Path, required=True)
-    sample.add_argument("--root", type=Path, default=DATA_ROOT)
     sample.add_argument("--n", type=int, required=True)
     sample.add_argument("--seed", type=int, required=True)
     verify = sub.add_parser("verify-keys")
@@ -320,12 +317,12 @@ def main() -> None:
     args = parser.parse_args()
     try:
         if args.command == "freeze":
-            result = freeze_population(args.db, args.out, args.until, root=args.root)
+            result = freeze_population(args.db, args.out, args.until)
         elif args.command == "keys":
-            result = extract_keys(args.source, args.out, root=args.root)
+            result = extract_keys(args.source, args.out)
         elif args.command == "sample":
             result = sample_population(args.population, args.out, n=args.n, seed=args.seed,
-                                       population_sha256=args.population_sha256, root=args.root)
+                                       population_sha256=args.population_sha256)
         elif args.command == "verify-keys":
             result = count_duplicates(args.new, args.existing)
             if any(result.values()):

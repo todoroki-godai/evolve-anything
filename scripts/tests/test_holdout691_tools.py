@@ -127,16 +127,21 @@ def test_key_file_max_timestamp_handles_fractional_seconds(tmp_path):
                                     "rows": 2, "max_timestamp": "2026-08-12T00:00:00.500Z"}]
 
 
-def test_sample_no_key_files_stops_without_output(tmp_path):
+def test_sample_no_key_files_stops_without_output(tmp_path, monkeypatch):
     pop = jsonl(tmp_path / "population.jsonl", [row(0)])
     out = tmp_path / "sample.jsonl"
     with pytest.raises(ValueError, match="no adopted key files"):
         sample(tmp_path, pop, out)
     assert not out.exists()
-    result = cli("sample", "--population", pop, "--population-sha256",
-                 hashlib.sha256(pop.read_bytes()).hexdigest(), "--out", out,
-                 "--n", 1, "--seed", 1, "--root", tmp_path)
-    assert result.returncode != 0
+    original = tool.sample_population
+    monkeypatch.setattr(tool, "sample_population", lambda population, output, **kwargs:
+                        original(population, output, root=tmp_path, **kwargs))
+    monkeypatch.setattr(sys, "argv", [str(tool.__file__), "sample", "--population", str(pop),
+                                   "--population-sha256", hashlib.sha256(pop.read_bytes()).hexdigest(),
+                                   "--out", str(out), "--n", "1", "--seed", "1"])
+    with pytest.raises(SystemExit) as failure:
+        tool.main()
+    assert failure.value.code == 1
     assert not out.exists()
 
 
@@ -242,6 +247,13 @@ def test_output_guard_rejects_symlink_escape_and_symlink_root(tmp_path):
                           root=parent_alias / "holdout_691")
 
 
+def test_cli_cannot_override_artifact_root(tmp_path):
+    result = cli("keys", "--source", tmp_path / "unused", "--out", tmp_path / "a.keys.jsonl",
+                 "--root", tmp_path)
+    assert result.returncode != 0
+    assert "unrecognized arguments: --root" in result.stderr
+
+
 def test_existing_output_survives_freeze_failure(tmp_path):
     db = tmp_path / "empty.db"
     duckdb.connect(str(db)).close()
@@ -270,14 +282,22 @@ def test_sample_rejects_changed_population(tmp_path):
     assert not out.exists()
 
 
-def test_cli_failures_hide_text_and_write_manifest(tmp_path):
+def test_cli_failures_hide_text_and_write_manifest(tmp_path, monkeypatch, capsys):
     source = tmp_path / "bad.jsonl"
     source.write_text('{"text":"SYNTHETIC-SECRET", broken json}\n')
     out = tmp_path / "a.keys.jsonl"
-    result = cli("keys", "--source", source, "--out", out, "--root", tmp_path)
-    assert result.returncode != 0
-    assert "SYNTHETIC-SECRET" not in result.stdout + result.stderr
+    original = tool.extract_keys
+    monkeypatch.setattr(tool, "extract_keys", lambda source, output:
+                        original(source, output, root=tmp_path))
+    monkeypatch.setattr(sys, "argv", [str(tool.__file__), "keys", "--source", str(source),
+                                   "--out", str(out)])
+    with pytest.raises(SystemExit) as failure:
+        tool.main()
+    assert failure.value.code == 1
+    captured = capsys.readouterr()
+    assert "SYNTHETIC-SECRET" not in captured.out + captured.err
     assert not out.exists()
+    monkeypatch.setattr(tool, "extract_keys", original)
     freeze = {"population_rows": 0, "population_dump_sha256": "0" * 64,
               "db_snapshot": {"sha256": "1" * 64, "size_bytes": 0},
               "max_timestamp": None, "population_filter": tool.POPULATION_FILTER}
