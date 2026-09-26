@@ -147,6 +147,7 @@ def freeze_population(db_path: Path, output: Path, until: str, *,
                 while batch := cursor.fetchmany(256):
                     for record in batch:
                         row = dict(zip(names, record))
+                        max_timestamp = _latest_timestamp(max_timestamp, row["timestamp"])
                         if not should_include_message(row["text"]):
                             continue
                         payload = (json.dumps(row, ensure_ascii=False)
@@ -154,7 +155,6 @@ def freeze_population(db_path: Path, output: Path, until: str, *,
                         dest.write(payload)
                         digest.update(payload)
                         count += 1
-                        max_timestamp = _latest_timestamp(max_timestamp, row["timestamp"])
             finally:
                 con.close()
             snapshot = {"sha256": _sha256(db_path), "size_bytes": db_path.stat().st_size}

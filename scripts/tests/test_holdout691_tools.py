@@ -171,7 +171,8 @@ def test_freeze_filters_using_production_function_and_records_window(tmp_path, m
              (row(1, text=""), "dialogue"),
              (row(2), "long_paste"), (row(3, timestamp="2026-08-13T00:00:00Z"), "dialogue"),
              (row(4, source_path="/fixture/subagents/4"), "dialogue"),
-             (row(5, timestamp="2026-08-12T00:00:01.500Z"), "dialogue")]
+             (row(5, timestamp="2026-08-12T00:00:01.500Z"), "dialogue"),
+             (row(6, timestamp="2026-08-12T00:00:02Z", text=""), "dialogue")]
     for item, kind in cases:
         con.execute("INSERT INTO utterances VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                     [item[k] for k in ("source_path", "line_no", "pj_slug", "session_id",
@@ -187,7 +188,7 @@ def test_freeze_filters_using_production_function_and_records_window(tmp_path, m
     result = tool.freeze_population(db, dump, "2026-08-13T00:00:00Z", root=tmp_path)
     assert seen == [{"read_only": True}]
     assert result["population_rows"] == 2
-    assert result["max_timestamp"] == "2026-08-12T00:00:01.500Z"
+    assert result["max_timestamp"] == "2026-08-12T00:00:02Z"
     assert result["population_filter"] == tool.POPULATION_FILTER
     assert result["population_dump_sha256"] == hashlib.sha256(dump.read_bytes()).hexdigest()
     assert [json.loads(x)["text"] for x in dump.read_text().splitlines()] == [row(0)["text"], row(5)["text"]]
