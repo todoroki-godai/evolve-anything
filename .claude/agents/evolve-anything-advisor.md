@@ -41,7 +41,7 @@ maxTurns: 30
 
 - **evolve-anything プラグインディレクトリ**: `/Users/matsukaze-takashi/matsukaze-utils/evolve-anything/`
 - **テレメトリデータ**: `~/.claude/evolve-anything/` (usage/errors/corrections/sessions/workflows.jsonl 等)
-- **エージェント定義**: `~/.claude/agents/` (ambiguous-intent-resolver, senior-engineer, evolve-anything-advisor)
+- **エージェント定義**: `~/.claude/agents/` と PJ の `.claude/agents/` を Glob して一覧を確認してから Read する（列挙を固定しない）
 - **グローバルルール**: `~/.claude/rules/`
 - **プロジェクト仕様**: `SPEC.md` + `spec/` + `docs/decisions/`
 - **push アカウント**: `todoroki-godai` (evolve-anything は public/todoroki-godai org)

@@ -296,7 +296,7 @@ grep -c '^### ' "${CLAUDE_PLUGIN_ROOT}/skills/spec-keeper/references/pitfalls.md
 
 **`references/pitfalls.md` を手で編集しない。** 記録は `/evolve-anything:pitfall-curate` に委譲する
 （`skills/pitfall-curate/SKILL.md` が正典。parse / 類似度による dedup / フィールド書込みは
-`scripts/pitfall_curate.py` が決定論的に担う）。
+`skills/pitfall-curate/scripts/pitfall_curate.py` が決定論的に担う）。
 
 **記録対象の範囲（MUST）**: この pitfalls.md は全 PJ 共通の spec-keeper が参照する。
 記録してよいのは **spec-keeper の手順そのものに起因し、PJ を変えても再発する失敗**だけ。

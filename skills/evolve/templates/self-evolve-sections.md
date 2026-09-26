@@ -22,7 +22,7 @@ grep -c '^### ' "{{PITFALLS_GATE_PATH}}" 2>/dev/null || echo 0
 
 **`references/pitfalls.md` を手で編集しない。** 記録は `/evolve-anything:pitfall-curate` に委譲する
 （`skills/pitfall-curate/SKILL.md` が正典。parse / 類似度による dedup / フィールド書込みは
-`scripts/pitfall_curate.py` が決定論的に担う）。
+`skills/pitfall-curate/scripts/pitfall_curate.py` が決定論的に担う）。
 
 **記録対象の範囲（MUST）**: この pitfalls.md は本スキル（{{SKILL_NAME}}）専用に配置される。
 記録してよいのは **このスキルの手順そのものに起因し、PJ を変えても再発する失敗**だけ。
