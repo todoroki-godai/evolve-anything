@@ -129,9 +129,7 @@ def freeze_population(db_path: Path, output: Path, until: str, *,
             try:
                 cursor = con.execute(
                     "SELECT source_path, line_no, pj_slug, session_id, timestamp, text, prev_action "
-                    "FROM utterances WHERE source_kind = 'dialogue' "
-                    "AND source_path NOT LIKE '%/subagents/%' "
-                    "AND timestamp >= ? AND timestamp < ? "
+                    f"FROM utterances WHERE {POPULATION_WHERE} "
                     "ORDER BY session_id, timestamp, line_no, source_path",
                     [NEW_SINCE, until],
                 )
@@ -139,11 +137,16 @@ def freeze_population(db_path: Path, output: Path, until: str, *,
                          "text", "prev_action")
                 while batch := cursor.fetchmany(256):
                     for record in batch:
-                        payload = (json.dumps(dict(zip(names, record)), ensure_ascii=False)
+                        row = dict(zip(names, record))
+                        if not should_include_message(row["text"]):
+                            continue
+                        payload = (json.dumps(row, ensure_ascii=False)
                                    + "\n").encode("utf-8")
                         dest.write(payload)
                         digest.update(payload)
                         count += 1
+                        if max_timestamp is None or row["timestamp"] > max_timestamp:
+                            max_timestamp = row["timestamp"]
             finally:
                 con.close()
             snapshot = {"sha256": _sha256(db_path), "size_bytes": db_path.stat().st_size}
@@ -152,7 +155,8 @@ def freeze_population(db_path: Path, output: Path, until: str, *,
             output.unlink()
         raise
     return {"population_rows": count, "population_dump_sha256": digest.hexdigest(),
-            "db_snapshot": snapshot}
+            "db_snapshot": snapshot, "max_timestamp": max_timestamp,
+            "population_filter": POPULATION_FILTER}
 
 
 def extract_keys(source: Path, output: Path) -> dict[str, Any]:
