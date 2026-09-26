@@ -60,12 +60,11 @@ def _window(until: str) -> None:
     from datetime import datetime
 
     try:
-        if datetime.fromisoformat(until.replace("Z", "+00:00")) <= datetime.fromisoformat(
-            NEW_SINCE.replace("Z", "+00:00")
-        ):
-            raise ValueError("until must follow since")
+        parsed = datetime.fromisoformat(until.replace("Z", "+00:00"))
     except ValueError as exc:
         raise ValueError("invalid until timestamp") from exc
+    if parsed <= datetime.fromisoformat(NEW_SINCE.replace("Z", "+00:00")):
+        raise ValueError("until must follow since")
 
 
 def _json_lines(path: Path):
@@ -159,9 +158,11 @@ def freeze_population(db_path: Path, output: Path, until: str, *,
             "population_filter": POPULATION_FILTER}
 
 
-def extract_keys(source: Path, output: Path) -> dict[str, Any]:
+def extract_keys(source: Path, output: Path, *, root: Path = DATA_ROOT) -> dict[str, Any]:
     """Stream strict JSONL to five-field key JSONL; never write or print text."""
-    output = _external_output(output)
+    output = _external_output(output, root)
+    if not output.name.endswith(".keys.jsonl"):
+        raise ValueError("key output must end in .keys.jsonl")
     count = 0
     created = False
     try:
@@ -177,39 +178,48 @@ def extract_keys(source: Path, output: Path) -> dict[str, Any]:
     return {"rows": count, "source_sha256": _sha256(source)}
 
 
-def _read_key_sets(paths: list[Path]) -> tuple[set, set]:
+def _read_key_sets(paths: list[Path]) -> tuple[set, set, list[dict[str, Any]]]:
     physical, logical = set(), set()
+    summaries = []
     for path in paths:
+        rows, max_timestamp = 0, None
         for row in _json_lines(path):
             p, l = _identities(_key(row, has_text=False))
             physical.add(p)
             logical.add(l)
-    return physical, logical
+            rows += 1
+            if max_timestamp is None or row["timestamp"] > max_timestamp:
+                max_timestamp = row["timestamp"]
+        summaries.append({"file": path.name, "sha256": _sha256(path),
+                          "rows": rows, "max_timestamp": max_timestamp})
+    return physical, logical, summaries
 
 
-def count_duplicates(paths: list[Path]) -> dict[str, int]:
-    """Count repeated physical and logical keys across all provided key files."""
-    physical, logical = set(), set()
+def count_duplicates(new: Path, existing: list[Path]) -> dict[str, int]:
+    """Count only duplicates involving the new set, including within the new set."""
+    physical, logical, _ = _read_key_sets(existing)
     counts = {"physical": 0, "logical": 0}
-    for path in paths:
-        for row in _json_lines(path):
-            p, l = _identities(_key(row, has_text=False))
-            counts["physical"] += p in physical
-            counts["logical"] += l in logical
-            physical.add(p)
-            logical.add(l)
+    for row in _json_lines(new):
+        p, l = _identities(_key(row, has_text=False))
+        counts["physical"] += p in physical
+        counts["logical"] += l in logical
+        physical.add(p)
+        logical.add(l)
     return counts
 
 
-def sample_population(population: Path, adopted_keys: list[Path], output: Path, *,
-                      n: int, seed: int, population_sha256: str) -> dict[str, Any]:
+def sample_population(population: Path, output: Path, *, n: int, seed: int,
+                      population_sha256: str, root: Path = DATA_ROOT) -> dict[str, Any]:
     """Exclude adopted keys before calling the existing random sampler."""
-    output = _external_output(output)
+    output = _external_output(output, root)
     if type(n) is not int or n < 1 or type(seed) is not int:
         raise ValueError("n must be positive and seed must be an integer")
     if _sha256(population) != population_sha256:
         raise ValueError("frozen population hash mismatch")
-    physical, logical = _read_key_sets(adopted_keys)
+    key_files = sorted(Path(root).glob("*.keys.jsonl"))
+    if not key_files:
+        raise ValueError("no adopted key files in holdout root")
+    physical, logical, summaries = _read_key_sets(key_files)
     candidates = []
     excluded = {"physical": 0, "logical": 0}
     for row in _json_lines(population):
@@ -233,27 +243,40 @@ def sample_population(population: Path, adopted_keys: list[Path], output: Path, 
             output.unlink()
         raise
     return {"remaining": len(candidates), "sampled": len(selected),
-            "excluded_keys_summary": excluded}
+            "excluded_keys_summary": excluded, "key_files": summaries}
 
 
 def write_manifest(path: Path = MANIFEST, *, until: str, freeze: dict[str, Any],
-                   seed_log: list[dict[str, int]], excluded_keys_summary: dict[str, int]) -> None:
+                   seed_log: list[dict[str, int]], excluded_keys_summary: dict[str, int],
+                   key_files: list[dict[str, Any]]) -> None:
     """Write only aggregate and hash values to the tracked manifest."""
     _window(until)
-    if set(freeze) != {"population_rows", "population_dump_sha256", "db_snapshot"}:
+    if set(freeze) != {"population_rows", "population_dump_sha256", "db_snapshot",
+                       "max_timestamp", "population_filter"}:
         raise ValueError("invalid freeze summary")
     if (type(freeze["population_rows"]) is not int or freeze["population_rows"] < 0
             or not re.fullmatch(r"[0-9a-f]{64}", freeze["population_dump_sha256"])
             or set(freeze["db_snapshot"]) != {"sha256", "size_bytes"}
             or not re.fullmatch(r"[0-9a-f]{64}", freeze["db_snapshot"]["sha256"])
             or type(freeze["db_snapshot"]["size_bytes"]) is not int
+            or freeze["population_filter"] != POPULATION_FILTER
+            or (freeze["max_timestamp"] is not None and
+                not isinstance(freeze["max_timestamp"], str))
             or any(set(item) != {"seed", "n"} or
                    type(item["seed"]) is not int or type(item["n"]) is not int for item in seed_log)
             or set(excluded_keys_summary) != {"physical", "logical"}
-            or any(type(x) is not int or x < 0 for x in excluded_keys_summary.values())):
+            or any(type(x) is not int or x < 0 for x in excluded_keys_summary.values())
+            or not key_files
+            or any(set(item) != {"file", "sha256", "rows", "max_timestamp"}
+                   or not item["file"].endswith(".keys.jsonl")
+                   or not re.fullmatch(r"[0-9a-f]{64}", item["sha256"])
+                   or type(item["rows"]) is not int or item["rows"] < 0
+                   or (item["max_timestamp"] is not None and
+                       not isinstance(item["max_timestamp"], str)) for item in key_files)):
         raise ValueError("invalid manifest summary")
     data = {"since": NEW_SINCE, "until": until, "source_kind": "dialogue", **freeze,
-            "seed_log": seed_log, "excluded_keys_summary": excluded_keys_summary}
+            "seed_log": seed_log, "excluded_keys_summary": excluded_keys_summary,
+            "key_files": key_files}
     Path(path).write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
@@ -264,33 +287,51 @@ def main() -> None:
     freeze.add_argument("--db", type=Path, required=True)
     freeze.add_argument("--out", type=Path, required=True)
     freeze.add_argument("--until", required=True)
+    freeze.add_argument("--root", type=Path, default=DATA_ROOT)
     keys = sub.add_parser("keys")
     keys.add_argument("--source", type=Path, required=True)
     keys.add_argument("--out", type=Path, required=True)
+    keys.add_argument("--root", type=Path, default=DATA_ROOT)
     sample = sub.add_parser("sample")
     sample.add_argument("--population", type=Path, required=True)
     sample.add_argument("--population-sha256", required=True)
-    sample.add_argument("--adopted-keys", type=Path, nargs="*", default=[])
     sample.add_argument("--out", type=Path, required=True)
+    sample.add_argument("--root", type=Path, default=DATA_ROOT)
     sample.add_argument("--n", type=int, required=True)
     sample.add_argument("--seed", type=int, required=True)
     verify = sub.add_parser("verify-keys")
-    verify.add_argument("paths", type=Path, nargs="+")
+    verify.add_argument("--new", type=Path, required=True)
+    verify.add_argument("--existing", type=Path, nargs="+", required=True)
+    manifest = sub.add_parser("write-manifest")
+    manifest.add_argument("--out", type=Path, default=MANIFEST)
+    manifest.add_argument("--until", required=True)
+    manifest.add_argument("--freeze-result", type=Path, required=True)
+    manifest.add_argument("--sample-result", type=Path, required=True)
+    manifest.add_argument("--seed", type=int, required=True)
+    manifest.add_argument("--n", type=int, required=True)
     args = parser.parse_args()
     try:
         if args.command == "freeze":
-            result = freeze_population(args.db, args.out, args.until)
+            result = freeze_population(args.db, args.out, args.until, root=args.root)
         elif args.command == "keys":
-            result = extract_keys(args.source, args.out)
+            result = extract_keys(args.source, args.out, root=args.root)
         elif args.command == "sample":
-            result = sample_population(args.population, args.adopted_keys, args.out, n=args.n,
-                                       seed=args.seed, population_sha256=args.population_sha256)
-        else:
-            result = count_duplicates(args.paths)
+            result = sample_population(args.population, args.out, n=args.n, seed=args.seed,
+                                       population_sha256=args.population_sha256, root=args.root)
+        elif args.command == "verify-keys":
+            result = count_duplicates(args.new, args.existing)
             if any(result.values()):
                 raise ValueError("duplicate keys found")
-    except (ValueError, OSError, duckdb.Error) as exc:
-        parser.exit(1, f"holdout691: {type(exc).__name__}\n")
+        else:
+            freeze_result = json.loads(args.freeze_result.read_text())
+            sample_result = json.loads(args.sample_result.read_text())
+            write_manifest(args.out, until=args.until, freeze=freeze_result,
+                           seed_log=[{"seed": args.seed, "n": args.n}],
+                           excluded_keys_summary=sample_result["excluded_keys_summary"],
+                           key_files=sample_result["key_files"])
+            result = {"manifest": str(args.out)}
+    except (ValueError, OSError, KeyError, TypeError) as exc:
+        parser.exit(1, f"holdout691: {type(exc).__name__}: {exc}\n")
     print(json.dumps(result, sort_keys=True))
 
 
