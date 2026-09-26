@@ -555,12 +555,9 @@ def build_session_proposals(
 
 
 def _context_suffix(g: Dict[str, Any], pj_slug: str) -> str:
-    """ADR-054 PR2-d: 発話の実時刻（相対表記）+ 観測/confirmed cross-PJ を1行にまとめる。
-
-    `cross_pj_confirmed` だけを足す旧案は実データで発火0件＝実質 no-op だったため、
-    観測ベース cross-PJ（global レーン）・発話の実時刻という実際に朝の y/n に欠けていた
-    判断材料を出す（判断材料が無ければ空文字＝ノイズを足さない）。channel 名
-    （llm_judge/rephrase 等のジャーゴン）は出さない。
+    """#441 + ADR-054 PR2-d: 発話の実時刻・相対日付警告・観測/confirmed cross-PJ を1行に
+    まとめる（旧 cross_pj_confirmed 単体案は発火0件のため拡張）。相対日付表現があれば
+    発話日基準で読むよう警告し、判断材料が無ければ空文字（ノイズ無し・channel 名は出さない）。
     """
     parts: List[str] = []
     freshness_iso = _ranking.group_freshness_iso(g)
@@ -568,6 +565,9 @@ def _context_suffix(g: Dict[str, Any], pj_slug: str) -> str:
         label = _ranking.relative_time_label(freshness_iso)
         if label:
             parts.append(label)
+    warning = _ranking.relative_date_warning_for_group(g)
+    if warning:
+        parts.append(warning)
     note = _ranking.cross_pj_note(g, pj_slug)
     if note:
         parts.append(note)

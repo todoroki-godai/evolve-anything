@@ -1175,6 +1175,125 @@ def test_build_proposal_prompt_silent_when_no_context():
     assert "確認済み" not in msg
 
 
+def test_build_proposal_prompt_includes_relative_date_warning_with_uttered_date():
+    """#441 正常系E2E: 文面に相対日付表現を含む提案を digest 描画まで通すと、警告行と
+    発話日（曜日つき）が「N日前の発話」の近くに出る。2026-09-10 は木曜日。
+    """
+    ts = "2026-09-10T03:00:00+00:00"
+    g = _group_with_meta(["k1"], rep="来週やる案", uttered_at=ts)
+    msg = pd.build_proposal_prompt([g], "pj-a")
+    assert "相対日付あり" in msg
+    assert "2026-09-10" in msg
+    assert "(木)" in msg
+    assert "基準で読むこと" in msg
+
+
+def test_build_proposal_prompt_no_relative_date_warning_when_text_is_plain():
+    """陽性対照: 相対日付を含まない提案では警告が出ない。"""
+    ts = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
+    g = _group_with_meta(["k1"], rep="テストを追加する案", uttered_at=ts)
+    msg = pd.build_proposal_prompt([g], "pj-a")
+    assert "相対日付あり" not in msg
+
+
+def test_build_proposal_prompt_relative_date_warning_unparsable_uttered_at():
+    """発話時刻が parse 不能なとき、発話日不明の文言が出る。"""
+    g = _group_with_meta(["k1"], rep="来週やる案", uttered_at="not-a-date")
+    msg = pd.build_proposal_prompt([g], "pj-a")
+    assert "発話日不明のため日付を確認すること" in msg
+
+
+def test_build_proposal_prompt_relative_date_warning_no_false_positive_proper_noun():
+    """陽性対照: 「明日香」のような固有名詞は誤爆しない（#441 指定ケース）。"""
+    ts = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
+    g = _group_with_meta(["k1"], rep="明日香さんに確認する案", uttered_at=ts)
+    msg = pd.build_proposal_prompt([g], "pj-a")
+    assert "相対日付あり" not in msg
+
+
+def test_build_proposal_prompt_relative_date_warning_uses_representative_key_not_freshness_max():
+    """#441 レビュー[Must]2 正常系E2E: group の残存キーの最新時刻（freshness）と代表文
+    （signal_keys[0]）の発話時刻がずれていても、警告の発話日は代表文自身の発話日を出す。
+    """
+    g = {
+        "signal_keys": ["k1", "k2"],
+        "representative": "来週やる案",
+        "evidence_text": "来週やる案",
+        "signal_meta_by_key": {
+            "k1": {"uttered_at": "2026-09-10T03:00:00+00:00", "detected_at": None, "cross_pj": []},
+            "k2": {
+                "uttered_at": (datetime.now(timezone.utc) - timedelta(days=1)).isoformat(),
+                "detected_at": None, "cross_pj": [],
+            },
+        },
+        "cross_pj_confirmed": [],
+    }
+    msg = pd.build_proposal_prompt([g], "pj-a")
+    assert "2026-09-10" in msg
+    assert "(木)" in msg
+
+
+def test_build_proposal_prompt_relative_date_warning_scans_all_representatives():
+    """#441 レビュー巡1[Should]3 正常系E2E: merge 済み提案は表示が all_representatives の
+    全代表文なので、先頭代表文が一致すれば他の代表文が同居していても発話日を出す。
+    """
+    g = {
+        "signal_keys": ["k1"],
+        "representative": "来週やる案",
+        "evidence_text": "来週やる案",
+        "all_representatives": ["来週やる案", "別の代表文"],
+        "signal_meta_by_key": {
+            "k1": {"uttered_at": "2026-09-10T03:00:00+00:00", "detected_at": None, "cross_pj": []},
+        },
+        "cross_pj_confirmed": [],
+    }
+    msg = pd.build_proposal_prompt([g], "pj-a")
+    assert "相対日付あり" in msg
+    assert "2026-09-10" in msg
+
+
+def test_build_proposal_prompt_relative_date_warning_unknown_when_only_secondary_representative_matches():
+    """#441 レビュー巡2[Must]B-2 正常系E2E: 一致が先頭代表文以外にしか無いときは、
+    検出そのものは効く（警告は出る）が、その文の発話時刻を持っていないため「発話日不明」
+    に倒す（先頭代表文＝signal_keys[0] の日付を誤って言い切らない）。
+    """
+    g = {
+        "signal_keys": ["k1"],
+        "representative": "普通の提案",
+        "evidence_text": "普通の提案",
+        "all_representatives": ["普通の提案", "来週やる別提案"],
+        "signal_meta_by_key": {
+            "k1": {"uttered_at": "2026-09-10T03:00:00+00:00", "detected_at": None, "cross_pj": []},
+        },
+        "cross_pj_confirmed": [],
+    }
+    msg = pd.build_proposal_prompt([g], "pj-a")
+    assert "相対日付あり" in msg
+    assert "発話日不明" in msg
+    assert "2026-09-10" not in msg
+
+
+def test_build_proposal_prompt_relative_date_warning_unknown_when_signal_keys_were_subtracted():
+    """#441 レビュー巡2[Must]B-1 正常系E2E: 既読差し引きで signal_keys が減った群
+    （count と件数が食い違う）は、詰め直しにより signal_keys[0] が代表文の key と限らない
+    ため「発話日不明」に倒す。
+    """
+    g = {
+        "signal_keys": ["k2"],  # 元は ["k0", "k2"] で k0（代表文の key）が既読除外された
+        "count": 2,
+        "representative": "来週やる案",
+        "evidence_text": "来週やる案",
+        "signal_meta_by_key": {
+            "k2": {"uttered_at": (datetime.now(timezone.utc) - timedelta(days=1)).isoformat(),
+                   "detected_at": None, "cross_pj": []},
+        },
+        "cross_pj_confirmed": [],
+    }
+    msg = pd.build_proposal_prompt([g], "pj-a")
+    assert "相対日付あり" in msg
+    assert "発話日不明" in msg
+
+
 def test_build_proposal_systemmessage_includes_top_group_context():
     ts = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
     g = _group_with_meta(["k1"], rep="rep1", detected_at=ts, cross_pj_confirmed=["amamo"])
