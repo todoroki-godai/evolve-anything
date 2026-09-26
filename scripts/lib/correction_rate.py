@@ -38,6 +38,7 @@ cutoff を課す（``ingested_at`` / ``judged_at`` / ``detected_at`` がいず�
 """
 from __future__ import annotations
 
+import math
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -70,6 +71,152 @@ GATE_CONSECUTIVE_WEEKS = 4
 MIN_PJ_RATE_DENOM = 10
 
 LLM_JUDGE_CHANNEL = "llm_judge"
+
+# ─────────────────────────────────────────────────────────────────
+# #690 変更1: 判定器の版を系列の軸にする（read 時導出・書込みゼロ）
+# ─────────────────────────────────────────────────────────────────
+# 版の切替は生涯で2回のみ・単調・交互出現なし（2026-09-26 実測・#690 issue 本文の表。
+# weak_signals.jsonl の provenance.prompt_fingerprint 実測値と correction_judged.jsonl の
+# judged_at 分布から導出した固定値）。新しい切替が起きたら、この定数に1行追記する
+# （動的検出はしない — provenance は TP のみに付くため 0-TP 区間を検出できない盲点がある）。
+_VERSION_SWITCHES: List["tuple[datetime, str]"] = [
+    (datetime(2026, 8, 14, 0, 8, 48, tzinfo=timezone.utc), "28c25437f34a"),
+    (datetime(2026, 9, 6, 0, 7, 45, tzinfo=timezone.utc), "53c3982a2738"),
+]
+
+
+def _judge_version_for_judged_at(judged_at: Optional[datetime]) -> Optional[str]:
+    """``judged_at`` から判定器の版ラベルを read 時に導出する（分母側の版・新ストア不要）。
+
+    初回切替（2026-08-14）より前は版の記録が無い期間を表す ``None``（"版なし"）を返す。
+    """
+    if judged_at is None:
+        return None
+    version: Optional[str] = None
+    for switch_at, label in _VERSION_SWITCHES:
+        if judged_at >= switch_at:
+            version = label
+        else:
+            break
+    return version
+
+
+# ─────────────────────────────────────────────────────────────────
+# #690 変更2: PJ構成を揃えた率（標準化率）
+# ─────────────────────────────────────────────────────────────────
+# 標準構成は「導入時点の直近4週」（2026-W35〜2026-W38）の PJ 別 judged 件数（実測・
+# 2026-09-26。read-only で本番3ストアを再計算して取得。以後の週を足しても動かない
+# 固定値 — 動的な再計算はしない）。
+STANDARD_MIX_ID = "2026-W35..2026-W38"
+_STANDARD_PJ_JUDGED_COUNTS: Dict[str, int] = {
+    "ai-daily-report": 78,
+    "amamo": 3,
+    "aws-cost-guardian": 20,
+    "docs-platform": 286,
+    "evolve-anything": 540,
+    "figma-to-code": 112,
+    "receipt": 92,
+    "sys-bots": 115,
+    "updater-index": 1613,
+    "zundamon-explainer": 220,
+}
+_STANDARD_PJ_WEIGHT_TOTAL = sum(_STANDARD_PJ_JUDGED_COUNTS.values())
+STANDARD_PJ_WEIGHTS: Dict[str, float] = {
+    pj: count / _STANDARD_PJ_WEIGHT_TOTAL for pj, count in _STANDARD_PJ_JUDGED_COUNTS.items()
+}
+
+# ピン外 PJ の重みは 0 になる。次の条件を2週連続で満たしたら STANDARD_MIX_ID /
+# _STANDARD_PJ_JUDGED_COUNTS を張り替える（人間判断・自動再計算はしない）。
+UNPINNED_PJ_REWEIGHT_THRESHOLD_PCT = 10
+UNPINNED_PJ_REWEIGHT_CONSECUTIVE_WEEKS = 2
+
+
+def _pj_raw_counts(
+    population_keys: List[str],
+    judged_key_set: set,
+    tp_key_set: set,
+    utterances_by_key: Dict[str, Dict[str, Any]],
+) -> Dict[str, Dict[str, int]]:
+    """PJ 別の judged/tp 件数を、表示フロア（``MIN_PJ_RATE_DENOM``）を適用せず集計する。
+
+    ``_pj_breakdown``（表示用）と ``_standardized_rate``（計算用）が共有する単一ソース
+    （両側にコピーを作ると #690 変更2 の「計算にはフロアを適用しない」契約が drift する）。
+    """
+    judged: Dict[str, int] = defaultdict(int)
+    tp: Dict[str, int] = defaultdict(int)
+    for key in population_keys:
+        if key not in judged_key_set:
+            continue
+        slug = utterances_by_key[key].get("pj_slug") or "(unknown)"
+        judged[slug] += 1
+        if key in tp_key_set:
+            tp[slug] += 1
+    return {slug: {"judged": judged[slug], "tp": tp[slug]} for slug in judged}
+
+
+def _standardized_rate(
+    pj_raw_counts: Dict[str, Dict[str, int]],
+    weights: Optional[Dict[str, float]] = None,
+) -> Dict[str, Any]:
+    """固定 PJ 構成（``STANDARD_PJ_WEIGHTS``）で重み付けした標準化率を計算する（#690 変更2）。
+
+    欠損 PJ（この週に judged=0）はピン重みから除外し、**存在する PJ の重みだけで
+    再正規化**する（週ごとの PJ 有無パターンに依存しない自己完結の計算 — 他週の
+    データが増減しても、この週自身の値は変わらない）。分散は
+    ``Var = Σ wᵢ² pᵢ(1−pᵢ)/nᵢ``（wᵢ は再正規化後の重み）。
+    """
+    weights = weights if weights is not None else STANDARD_PJ_WEIGHTS
+    present = {
+        pj: counts for pj, counts in pj_raw_counts.items()
+        if pj in weights and counts.get("judged", 0) > 0
+    }
+    weight_sum = sum(weights[pj] for pj in present)
+    if weight_sum <= 0:
+        return {
+            "measured": False,
+            "rate": None,
+            "variance": None,
+            "coverage": 0.0,
+            "standard_mix_id": STANDARD_MIX_ID,
+        }
+    rate = 0.0
+    variance = 0.0
+    for pj, counts in present.items():
+        wi = weights[pj] / weight_sum
+        judged = counts["judged"]
+        p = counts["tp"] / judged
+        rate += wi * p
+        variance += (wi ** 2) * p * (1 - p) / judged
+    return {
+        "measured": True,
+        "rate": rate,
+        "variance": variance,
+        "coverage": weight_sum,
+        "standard_mix_id": STANDARD_MIX_ID,
+    }
+
+
+def _version_breakdown(
+    judged_keys: List[str],
+    tp_key_set: set,
+    version_by_key: Dict[str, Optional[str]],
+) -> Dict[Optional[str], Dict[str, Any]]:
+    """判定済 key を判定基準の版で内訳集計する（#690 変更1: 混在週の分割表示用）。"""
+    judged: Dict[Optional[str], int] = defaultdict(int)
+    tp: Dict[Optional[str], int] = defaultdict(int)
+    for key in judged_keys:
+        version = version_by_key.get(key)
+        judged[version] += 1
+        if key in tp_key_set:
+            tp[version] += 1
+    out: Dict[Optional[str], Dict[str, Any]] = {}
+    for version, count in judged.items():
+        out[version] = {
+            "judged": count,
+            "tp": tp.get(version, 0),
+            "rate": (tp.get(version, 0) / count) if count > 0 else None,
+        }
+    return out
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -337,6 +484,12 @@ def compute_weekly_correction_rate(
             if jat < existing:
                 judged_at_by_key[key] = jat
 
+    # #690 変更1: 版は judged_at から一意に導出する（single source・TP provenance の
+    # prompt_fingerprint は使わない — 0-TP 期間を検出できない盲点があるため）。
+    version_by_key: Dict[str, Optional[str]] = {
+        key: _judge_version_for_judged_at(jat) for key, jat in judged_at_by_key.items()
+    }
+
     # ── TP 記録を物理キーごとにグルーピング（channel=llm_judge の raw 記録） ──
     tp_records_by_key: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
     for rec in raw.get("weak_signals", []) or []:
@@ -459,6 +612,12 @@ def compute_weekly_correction_rate(
         category_breakdown = _category_breakdown(tp_keys, tp_records_by_key, cutoff)
         diagnostics["category_conflict_keys"] += category_breakdown["conflict_keys"]
 
+        # #690 変更1: 判定基準の版で内訳集計する（混在週の分割表示用）。
+        version_breakdown = _version_breakdown(judged_keys, set(tp_keys), version_by_key)
+        # #690 変更2: 固定 PJ 構成で重み付けした標準化率（is_worsening の判定はこちらを使う）。
+        pj_raw_counts = _pj_raw_counts(population_keys, judged_key_set, set(tp_keys), utterances_by_key)
+        standardized = _standardized_rate(pj_raw_counts)
+
         top3_source.sort(key=lambda t: t["detected_at"], reverse=True)
         top3_examples = [
             {
@@ -486,6 +645,8 @@ def compute_weekly_correction_rate(
             "pj_breakdown": pj_breakdown,
             "top3_examples": top3_examples,
             "category_breakdown": category_breakdown,
+            "version_breakdown": version_breakdown,
+            "standardized": standardized,
         })
 
     return {
@@ -504,27 +665,25 @@ def _pj_breakdown(
     """PJ 別の判定済件数・TP数・カバレッジ・rate を集計する（§2.7 Simpson 防御 evidence）。
 
     rate は judged が ``MIN_PJ_RATE_DENOM`` 未満（1桁）なら None にする（件数は常に出す）。
+    **これは表示フロアであって計算契約ではない** — 標準化率（#690 変更2）はフロア無しの
+    ``_pj_raw_counts`` を直接使う。
     """
     totals: Dict[str, int] = defaultdict(int)
-    judged: Dict[str, int] = defaultdict(int)
-    tp: Dict[str, int] = defaultdict(int)
     for key in population_keys:
         slug = utterances_by_key[key].get("pj_slug") or "(unknown)"
         totals[slug] += 1
-        if key in judged_key_set:
-            judged[slug] += 1
-        if key in tp_key_set:
-            tp[slug] += 1
+    raw = _pj_raw_counts(population_keys, judged_key_set, tp_key_set, utterances_by_key)
 
     out: Dict[str, Dict[str, Any]] = {}
     for slug in totals:
-        j = judged[slug]
+        j = raw.get(slug, {}).get("judged", 0)
+        tp_count = raw.get(slug, {}).get("tp", 0)
         out[slug] = {
             "total": totals[slug],
             "judged": j,
-            "tp": tp[slug],
+            "tp": tp_count,
             "coverage": (j / totals[slug]) if totals[slug] > 0 else 0.0,
-            "rate": (tp[slug] / j) if j >= MIN_PJ_RATE_DENOM else None,
+            "rate": (tp_count / j) if j >= MIN_PJ_RATE_DENOM else None,
         }
     return out
 
@@ -698,16 +857,32 @@ def build_correction_rate_summary(
 
     displayed: List[Dict[str, Any]] = []
     if gate["gate_open"]:
-        prev_rate: Optional[float] = None
+        # #690 変更2: is_worsening は pooled rate ではなく標準化率で判定する
+        # （PJ構成の変化だけで悪化判定が出る誤検出を塞ぐ）。#690 変更3: 週差が
+        # 同じ推定量の分散から出した最小検出可能差（1.96·SE_diff）を超えたときだけ真。
+        prev_standardized: Optional[Dict[str, Any]] = None
         for w in weeks:
             if not w["measured"] or w["week_id"] < gate["display_start_week"]:
                 continue
             entry = dict(w)
-            is_worsening = prev_rate is not None and w["rate"] is not None and w["rate"] > prev_rate
+            standardized = w.get("standardized") or {}
+            is_worsening = False
+            min_detectable_diff: Optional[float] = None
+            if (
+                standardized.get("measured")
+                and prev_standardized is not None
+                and prev_standardized.get("measured")
+            ):
+                diff = standardized["rate"] - prev_standardized["rate"]
+                se_diff = math.sqrt(standardized["variance"] + prev_standardized["variance"])
+                min_detectable_diff = 1.96 * se_diff
+                is_worsening = diff > min_detectable_diff
             entry["is_worsening"] = is_worsening
+            entry["min_detectable_diff"] = min_detectable_diff
             if not is_worsening:
                 entry["top3_examples"] = []
-            prev_rate = w["rate"]
+            if standardized.get("measured"):
+                prev_standardized = standardized
             displayed.append(entry)
 
     latest = weeks[-1] if weeks else None

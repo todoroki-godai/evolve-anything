@@ -125,6 +125,49 @@ def _render_coverage_gap_reasons(correction_rate: Dict[str, Any]) -> List[str]:
     return lines
 
 
+def _version_label(version: Optional[str]) -> str:
+    """判定基準の版ラベルを表示用文字列にする（None＝版の記録が無い期間・#690）。"""
+    return version if version is not None else "版なし"
+
+
+def _version_breakdown_lines(version_breakdown: Optional[Dict[Any, Any]]) -> List[str]:
+    """版が混在する週を、単一の値に潰さず版ごとに分けて表示する（#690 変更1・blocking(a)）。
+
+    単一版の週（または内訳が無い週）では何も出さない — 見出し行の rate_label が
+    既にその1版の値そのものなので重複表示にしない。
+    """
+    vb = version_breakdown or {}
+    if len(vb) <= 1:
+        return []
+    parts = []
+    for version, stats in sorted(vb.items(), key=lambda kv: _version_label(kv[0])):
+        rate = stats.get("rate")
+        rate_label = f"{rate * 100:.1f}%" if rate is not None else "?"
+        parts.append(f"{_version_label(version)} {stats['tp']}/{stats['judged']}（{rate_label}）")
+    return [f"  版別（判定基準の変更により混在週は分割表示）: {', '.join(parts)}"]
+
+
+def _standardized_rate_line(standardized: Optional[Dict[str, Any]]) -> List[str]:
+    """PJ構成を固定した標準化率を併記する（#690 変更2。is_worsening の判定はこちらを使う）。"""
+    std = standardized or {}
+    if not std.get("measured"):
+        return []
+    rate = std["rate"]
+    coverage = std.get("coverage", 0.0)
+    mix_id = std.get("standard_mix_id", "?")
+    return [
+        f"  標準化率（PJ構成固定・{mix_id}）: {rate * 100:.1f}%"
+        f"（ピン重みカバー率 {coverage * 100:.0f}%）"
+    ]
+
+
+def _min_detectable_diff_line(min_detectable_diff: Optional[float]) -> List[str]:
+    """最小検出可能差を表示する（#690 変更3。この帯未満は変化なしと明示する）。"""
+    if min_detectable_diff is None:
+        return []
+    return [f"  最小検出可能差: ±{min_detectable_diff * 100:.1f}pt 未満は変化なし"]
+
+
 def _render_point_pj_breakdown(pj_breakdown: Dict[str, Any]) -> List[str]:
     """点表示（状態(ii)）専用の PJ 別内訳（#508 I7・全 PJ 列挙・floor 込み）。
 
@@ -153,16 +196,24 @@ def _render_correction_rate_point(gate: Dict[str, Any], correction_rate: Dict[st
     week_id = point_week["week_id"]
     judged = point_week["judged_count"]
     tp = point_week["tp_count"]
-    rate = point_week.get("rate")
-    rate_label = f"{rate * 100:.1f}%" if rate is not None else "?"
+    version_breakdown = point_week.get("version_breakdown") or {}
+    if len(version_breakdown) > 1:
+        # #690 変更1 blocking(a): 点表示でも版混在週を単一値にしない。
+        headline = f"**指摘率（{week_id}）: 版混在のため単一値なし**（1週分。推移は {required} 週連続で表示）"
+    else:
+        rate = point_week.get("rate")
+        rate_label = f"{rate * 100:.1f}%" if rate is not None else "?"
+        headline = f"**指摘率（{week_id}）: {rate_label}**（1週分。推移は {required} 週連続で表示）"
 
     lines: List[str] = [
         # (a)(b): 対象週の week_id と分子/分母の実数。(c): 1週分の但し書き。
-        f"**指摘率（{week_id}）: {rate_label}**（1週分。推移は {required} 週連続で表示）",
+        headline,
         f"判定 {judged} 件中 TP {tp} 件・カバレッジ100%",
         # (d): 連続 run の進捗。n は表示専用（I8）。
         f"連続 run の進捗: {n}/{required} 週連続",
     ]
+    lines.extend(_version_breakdown_lines(version_breakdown))
+    lines.extend(_standardized_rate_line(point_week.get("standardized")))
 
     # (e)/I6: 点の対象週より新しい確定候補週が未測定なら、欠測を隠さず明示する。
     latest = correction_rate.get("latest_coverage")
@@ -264,12 +315,21 @@ def _render_correction_rate(
         )
         lines.append("")
     for w in reversed(displayed):
-        rate = w.get("rate")
-        rate_label = f"{rate * 100:.1f}%" if rate is not None else "?"
-        lines.append(
-            f"- {w['week_id']}: {rate_label}"
-            f"（判定 {w['judged_count']} 件中 TP {w['tp_count']} 件・カバレッジ100%）"
-        )
+        version_breakdown = w.get("version_breakdown") or {}
+        # #690 変更1 blocking(a): 版が混在する週は単一の値として出さない。
+        if len(version_breakdown) > 1:
+            lines.append(
+                f"- {w['week_id']}: 版混在のため単一値なし"
+                f"（判定 {w['judged_count']} 件中 TP {w['tp_count']} 件・カバレッジ100%）"
+            )
+        else:
+            rate = w.get("rate")
+            rate_label = f"{rate * 100:.1f}%" if rate is not None else "?"
+            lines.append(
+                f"- {w['week_id']}: {rate_label}"
+                f"（判定 {w['judged_count']} 件中 TP {w['tp_count']} 件・カバレッジ100%）"
+            )
+        lines.extend(_version_breakdown_lines(version_breakdown))
         pj_parts = []
         for pj_slug, stats in sorted((w.get("pj_breakdown") or {}).items()):
             if stats.get("rate") is not None:
@@ -280,6 +340,8 @@ def _render_correction_rate(
                 pj_parts.append(f"{pj_slug} {stats['tp']}/{stats['judged']}（件数のみ・分母不足）")
         if pj_parts:
             lines.append(f"  PJ別: {', '.join(pj_parts)}")
+        lines.extend(_standardized_rate_line(w.get("standardized")))
+        lines.extend(_min_detectable_diff_line(w.get("min_detectable_diff")))
         lines.extend(category_lines_by_week.get(w["week_id"], []))
         if w.get("is_worsening") and w.get("top3_examples"):
             lines.append("  悪化週です。気になった直近の指摘:")

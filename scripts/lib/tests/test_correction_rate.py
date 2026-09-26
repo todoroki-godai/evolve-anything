@@ -412,6 +412,128 @@ class TestPjBreakdown:
         assert pj["rate"] == pytest.approx(0.1)
 
 
+# ── #690 変更1: 判定基準の版を系列の軸にする ─────────────────────────
+
+
+class TestJudgeVersionForJudgedAt:
+    def test_before_first_switch_is_none(self):
+        before = correction_rate._VERSION_SWITCHES[0][0] - timedelta(seconds=1)
+        assert correction_rate._judge_version_for_judged_at(before) is None
+
+    def test_at_first_switch_boundary_is_inclusive(self):
+        at, label = correction_rate._VERSION_SWITCHES[0]
+        assert correction_rate._judge_version_for_judged_at(at) == label
+
+    def test_between_switches_uses_first_label(self):
+        first_at, first_label = correction_rate._VERSION_SWITCHES[0]
+        second_at, _ = correction_rate._VERSION_SWITCHES[1]
+        midpoint = first_at + (second_at - first_at) / 2
+        assert correction_rate._judge_version_for_judged_at(midpoint) == first_label
+
+    def test_after_second_switch_uses_second_label(self):
+        second_at, second_label = correction_rate._VERSION_SWITCHES[1]
+        after = second_at + timedelta(days=1)
+        assert correction_rate._judge_version_for_judged_at(after) == second_label
+
+    def test_none_judged_at_returns_none(self):
+        assert correction_rate._judge_version_for_judged_at(None) is None
+
+
+_W36_TS = datetime(2026, 8, 31, 12, tzinfo=timezone.utc)
+_W36_INGESTED = datetime(2026, 8, 31, 13, tzinfo=timezone.utc)
+_W36_NOW_AFTER_CUTOFF = datetime(2026, 9, 11, tzinfo=timezone.utc)  # W36 cutoff は 09-10
+
+
+class TestVersionBreakdown:
+    """判定基準の版が生涯で切り替わる境界（2026-09-06）を跨ぐ週（W36）を使い、
+    混在週が版ごとに分割集計されることを固定する（#690 変更1）。
+    """
+
+    def test_mixed_week_splits_by_version(self):
+        u_old = _utt("old-ver", ts=_W36_TS, ingested_at=_W36_INGESTED)
+        u_new = _utt("new-ver", ts=_W36_TS, ingested_at=_W36_INGESTED)
+        raw = _raw(
+            [u_old, u_new],
+            [
+                _judged(u_old, judged_at=datetime(2026, 9, 5, tzinfo=timezone.utc)),
+                _judged(u_new, judged_at=datetime(2026, 9, 7, tzinfo=timezone.utc)),
+            ],
+            [_tp(u_old)],
+        )
+        result = correction_rate.compute_weekly_correction_rate(now=_W36_NOW_AFTER_CUTOFF, raw=raw)
+        w = next(w for w in result["weeks"] if w["week_id"] == "2026-W36")
+        vb = w["version_breakdown"]
+        assert vb["28c25437f34a"] == {"judged": 1, "tp": 1, "rate": pytest.approx(1.0)}
+        assert vb["53c3982a2738"] == {"judged": 1, "tp": 0, "rate": pytest.approx(0.0)}
+        assert len(vb) == 2
+
+    def test_single_version_week_has_one_entry(self):
+        u1 = _utt("a")  # 既定 judged_at は 2026-08-26 台（初回切替後・2回目切替前）
+        raw = _raw([u1], [_judged(u1)], [_tp(u1)])
+        result = correction_rate.compute_weekly_correction_rate(now=_AFTER_CUTOFF, raw=raw)
+        w = next(w for w in result["weeks"] if w["week_id"] == "2026-W34")
+        vb = w["version_breakdown"]
+        assert len(vb) == 1
+        assert vb["28c25437f34a"]["judged"] == 1
+
+
+# ── #690 変更2: PJ構成を揃えた標準化率 ─────────────────────────────
+
+
+class TestStandardizedRate:
+    def test_pinned_pj_present_matches_direct_ratio(self):
+        """1つの pinned PJ しか居ない週は、その PJ の tp/judged と一致する
+        （重み再正規化により、単一 PJ の重みは 1.0 になるため）。"""
+        counts = {"updater-index": {"judged": 20, "tp": 4}}
+        out = correction_rate._standardized_rate(counts)
+        assert out["measured"] is True
+        assert out["rate"] == pytest.approx(0.2)
+        assert out["coverage"] == pytest.approx(correction_rate.STANDARD_PJ_WEIGHTS["updater-index"])
+
+    def test_missing_pinned_pj_is_excluded_and_reweighted(self):
+        """欠損 PJ はピン重みから除外し、居る PJ だけで再正規化する（過去週の値は
+        他週のデータに依存しない自己完結の計算）。"""
+        counts = {
+            "updater-index": {"judged": 10, "tp": 5},
+            "evolve-anything": {"judged": 10, "tp": 1},
+        }
+        out = correction_rate._standardized_rate(counts)
+        w_updater = correction_rate.STANDARD_PJ_WEIGHTS["updater-index"]
+        w_evolve = correction_rate.STANDARD_PJ_WEIGHTS["evolve-anything"]
+        total = w_updater + w_evolve
+        expected = (w_updater / total) * 0.5 + (w_evolve / total) * 0.1
+        assert out["rate"] == pytest.approx(expected)
+        assert out["coverage"] == pytest.approx(total)
+
+    def test_unpinned_pj_only_is_not_measured(self):
+        counts = {"some-unpinned-pj": {"judged": 100, "tp": 10}}
+        out = correction_rate._standardized_rate(counts)
+        assert out["measured"] is False
+        assert out["rate"] is None
+        assert out["coverage"] == 0.0
+
+    def test_floor_is_not_applied_to_calculation(self):
+        """#690 変更2「計算には tp/judged を直接使い、表示のマスクは維持する」:
+        judged が MIN_PJ_RATE_DENOM 未満（1桁）でも標準化率の計算には使う。"""
+        counts = {"updater-index": {"judged": 3, "tp": 1}}
+        out = correction_rate._standardized_rate(counts)
+        assert out["measured"] is True
+        assert out["rate"] == pytest.approx(1 / 3)
+
+    def test_standard_mix_id_is_reported(self):
+        counts = {"updater-index": {"judged": 10, "tp": 1}}
+        out = correction_rate._standardized_rate(counts)
+        assert out["standard_mix_id"] == correction_rate.STANDARD_MIX_ID
+
+    def test_week_output_includes_standardized_field(self):
+        u1 = _utt("a", pj_slug="evolve-anything")
+        raw = _raw([u1], [_judged(u1)], [_tp(u1)])
+        result = correction_rate.compute_weekly_correction_rate(now=_AFTER_CUTOFF, raw=raw)
+        w = next(w for w in result["weeks"] if w["week_id"] == "2026-W34")
+        assert w["standardized"]["measured"] is True
+        assert w["standardized"]["rate"] == pytest.approx(1.0)
+
+
 # ── #400 A5: カテゴリ内訳（設計 §2.6） ─────────────────────────────
 
 
@@ -821,21 +943,33 @@ class TestBuildCorrectionRateSummary:
     def test_gate_open_lists_measured_weeks_with_worsening_flag(self):
         # 4週分の finalized データを直接 weeks 相当で組み立てるのは大掛かりなので、
         # compute_weekly_correction_rate の出力を模して gate ロジックとの結線だけ確認する。
+        # #690 変更2/3: is_worsening は pooled rate ("rate") ではなく "standardized" の
+        # rate/variance から出す（帯を超えて上がったときだけ真）。
         import correction_rate as cr
+
+        def _std(rate, variance=0.0001):
+            return {
+                "measured": True, "rate": rate, "variance": variance,
+                "coverage": 1.0, "standard_mix_id": "test",
+            }
 
         weeks = [
             {"week_id": "2026-W10", "measured": True, "rate": 0.1, "judged_count": 10,
              "tp_count": 1, "total_population": 10, "coverage": 1.0,
-             "pj_breakdown": {}, "top3_examples": [], "failure_reasons": []},
+             "pj_breakdown": {}, "top3_examples": [], "failure_reasons": [],
+             "standardized": _std(0.10)},
             {"week_id": "2026-W11", "measured": True, "rate": 0.2, "judged_count": 10,
              "tp_count": 2, "total_population": 10, "coverage": 1.0,
-             "pj_breakdown": {}, "top3_examples": [{"text": "x"}], "failure_reasons": []},
+             "pj_breakdown": {}, "top3_examples": [{"text": "x"}], "failure_reasons": [],
+             "standardized": _std(0.20)},
             {"week_id": "2026-W12", "measured": True, "rate": 0.1, "judged_count": 10,
              "tp_count": 1, "total_population": 10, "coverage": 1.0,
-             "pj_breakdown": {}, "top3_examples": [], "failure_reasons": []},
+             "pj_breakdown": {}, "top3_examples": [], "failure_reasons": [],
+             "standardized": _std(0.10)},
             {"week_id": "2026-W13", "measured": True, "rate": 0.05, "judged_count": 10,
              "tp_count": 0, "total_population": 10, "coverage": 1.0,
-             "pj_breakdown": {}, "top3_examples": [], "failure_reasons": []},
+             "pj_breakdown": {}, "top3_examples": [], "failure_reasons": [],
+             "standardized": _std(0.05)},
         ]
 
         def _fake_compute(*, now=None, raw=None, **_ignored):
@@ -855,9 +989,53 @@ class TestBuildCorrectionRateSummary:
         ]
         # W10: 最初の表示週は比較対象なし → 悪化フラグなし
         assert displayed[0]["is_worsening"] is False
-        # W11: 0.1 → 0.2 に悪化（増加）
+        assert displayed[0]["min_detectable_diff"] is None
+        # W11: 標準化率 0.10 → 0.20 に悪化（+0.10pt が帯 ±0.028pt 前後を超える）
         assert displayed[1]["is_worsening"] is True
+        assert displayed[1]["min_detectable_diff"] == pytest.approx(1.96 * (0.0002 ** 0.5))
         assert displayed[1]["top3_examples"] == [{"text": "x"}]
-        # W12: 0.2 → 0.1 は改善（悪化ではない）→ top3 は削られる
+        # W12: 0.20 → 0.10 は改善（悪化ではない）→ top3 は削られる
         assert displayed[2]["is_worsening"] is False
         assert "top3_examples" not in displayed[2] or displayed[2]["top3_examples"] == []
+
+    def test_worsening_suppressed_when_diff_within_min_detectable_band(self):
+        """#690 変更3: 週差が最小検出可能差未満なら、上昇していても悪化と判定しない。"""
+        import correction_rate as cr
+
+        def _std(rate, variance):
+            return {
+                "measured": True, "rate": rate, "variance": variance,
+                "coverage": 1.0, "standard_mix_id": "test",
+            }
+
+        weeks = [
+            {"week_id": f"2026-W{n:02d}", "measured": True, "rate": 0.12, "judged_count": 100,
+             "tp_count": 12, "total_population": 100, "coverage": 1.0,
+             "pj_breakdown": {}, "top3_examples": [], "failure_reasons": [],
+             "standardized": _std(0.12, 0.02)}
+            for n in (8, 9)
+        ] + [
+            {"week_id": "2026-W10", "measured": True, "rate": 0.10, "judged_count": 100,
+             "tp_count": 10, "total_population": 100, "coverage": 1.0,
+             "pj_breakdown": {}, "top3_examples": [], "failure_reasons": [],
+             "standardized": _std(0.10, 0.02)},
+            {"week_id": "2026-W11", "measured": True, "rate": 0.12, "judged_count": 100,
+             "tp_count": 12, "total_population": 100, "coverage": 1.0,
+             "pj_breakdown": {}, "top3_examples": [{"text": "small bump"}], "failure_reasons": [],
+             "standardized": _std(0.12, 0.02)},
+        ]
+
+        def _fake_compute(*, now=None, raw=None, **_ignored):
+            return {"weeks": weeks, "diagnostics": {}, "generated_at": now.isoformat()}
+
+        orig = cr.compute_weekly_correction_rate
+        cr.compute_weekly_correction_rate = _fake_compute
+        try:
+            summary = cr.build_correction_rate_summary(now=_AFTER_CUTOFF, raw={})
+        finally:
+            cr.compute_weekly_correction_rate = orig
+
+        displayed = {w["week_id"]: w for w in summary["displayed_weeks"]}
+        # diff = 0.02、帯 = 1.96*sqrt(0.02+0.02) ≈ 0.392 なので diff は帯未満 → 悪化ではない。
+        assert displayed["2026-W11"]["is_worsening"] is False
+        assert displayed["2026-W11"]["top3_examples"] == []

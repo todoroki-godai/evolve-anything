@@ -268,7 +268,9 @@ _DECLARATIONS: List[StoreDeclaration] = [
         writer="scripts/lib/correction_semantic/batch.py（Phase C ingest 完了発話の物理キー記録）。"
         "hot path（hooks）からは書かない。",
         writer_locus="batch",
-        reader="correction_semantic.batch.emit_judgement_requests が再判定除外に参照（自己消費）。",
+        reader="correction_semantic.batch.emit_judgement_requests が再判定除外に参照（自己消費）。"
+        "correction_rate.read_judged_records が柱3指摘率の分母集計に read（#690。"
+        "自己消費ではない読み方が既に本番で走っている）。",
         retention="permanent",
         classification="workflow_state",
         disposition="drain",
