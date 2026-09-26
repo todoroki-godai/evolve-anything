@@ -3,7 +3,12 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from correction_rate import FREEZE_DELAY_DAYS, GATE_CONSECUTIVE_WEEKS
+from correction_rate import (
+    FREEZE_DELAY_DAYS,
+    GATE_CONSECUTIVE_WEEKS,
+    _UNKNOWN_VERSION_PREFIX,
+    _VERSION_MISMATCH_PREFIX,
+)
 from correction_semantic.prompt import CATEGORY_ENUM, CATEGORY_LABELS_JA
 
 def _category_breakdown_lines(category_breakdown: Optional[Dict[str, Any]]) -> List[str]:
@@ -130,14 +135,31 @@ def _version_label(version: Optional[str]) -> str:
     return version if version is not None else "版なし"
 
 
+def _is_known_version_label(version: Optional[str]) -> bool:
+    """判定基準の版ラベルが既知（None＝版なし、または既知 fingerprint）かを判定する。
+
+    未知版・出所食い違いのバケット（``_UNKNOWN_VERSION_PREFIX`` / ``_VERSION_MISMATCH_PREFIX``
+    始まり）は既知扱いにしない（#690 巡3後 [Must]: これが単独1件でも「版別」行を
+    省略してはならない対象）。
+    """
+    if version is None:
+        return True
+    return not (
+        version.startswith(_UNKNOWN_VERSION_PREFIX)
+        or version.startswith(_VERSION_MISMATCH_PREFIX)
+    )
+
+
 def _version_breakdown_lines(version_breakdown: Optional[Dict[Any, Any]]) -> List[str]:
     """版が混在する週を、単一の値に潰さず版ごとに分けて表示する（#690 変更1・blocking(a)）。
 
-    単一版の週（または内訳が無い週）では何も出さない — 見出し行の rate_label が
-    既にその1版の値そのものなので重複表示にしない。
+    単一の**既知**版の週（または内訳が無い週）では何も出さない — 見出し行の rate_label が
+    既にその1版の値そのものなので重複表示にしない。**単一でも未知版・食い違いのバケットが
+    含まれる場合は省略しない**（#690 巡3後 [Must]: 週全体が未知版1種だけでも、既知版の週と
+    見分けがつかない「ふつうの率」として出てしまう事故を塞ぐ）。
     """
     vb = version_breakdown or {}
-    if len(vb) <= 1:
+    if len(vb) <= 1 and all(_is_known_version_label(v) for v in vb):
         return []
     parts = []
     for version, stats in sorted(vb.items(), key=lambda kv: _version_label(kv[0])):
