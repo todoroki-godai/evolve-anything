@@ -78,7 +78,9 @@ known_ids = {a["id"] for a in RECOMMENDED_ARTIFACTS}
 if artifact_id not in known_ids:
     sys.exit(f"unknown artifact id: {artifact_id!r}（カタログに無い id は記録しない）")
 add_artifact_suppression(artifact_id)
-assert is_artifact_suppressed(artifact_id), "suppression 記録の書込確認に失敗しました"
+if not is_artifact_suppressed(artifact_id):
+    sys.exit("記録に失敗しました")
+print(f"suppressed: {artifact_id}")
 '
 ```
 
