@@ -63,7 +63,10 @@ import os, sys
 _root = os.environ.get("CLAUDE_PLUGIN_ROOT") or os.getcwd()
 sys.path.insert(0, os.path.join(_root, "scripts", "lib"))
 from hypothesis_tracker import load_hypotheses, detect_contradiction
+# session_id は save_hypothesis() で保存したときと同じ値を使うこと（別の値だと常に0件になる）
 hypotheses = load_hypotheses(session_id="<session_id>")
+if not hypotheses:
+    sys.exit("仮説が0件: session_id の取り違えか未保存です")
 pairs = detect_contradiction(hypotheses)
 print(pairs)
 ```

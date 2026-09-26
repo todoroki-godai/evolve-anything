@@ -62,10 +62,10 @@ python3 ${CLAUDE_PLUGIN_ROOT}/skills/evolve-fitness/scripts/fitness_evolution.py
    import os, sys
    _root = os.environ.get("CLAUDE_PLUGIN_ROOT") or os.getcwd()
    sys.path.insert(0, os.path.join(_root, "skills", "evolve-fitness", "scripts"))
-   from fitness_evolution import load_history, analyze_correlations, format_correlation_report
-   history = load_history(project_dir=os.getcwd())
-   correlation = analyze_correlations(history)
-   print(format_correlation_report(correlation))
+   from fitness_evolution import run_fitness_evolution, format_correlation_report
+   result = run_fitness_evolution()  # 引数なし＝Step 1 と同じ slug（load_effective_history）
+   if result["status"] == "ready":
+       print(format_correlation_report(result["correlation"]))
    ```
 2. **欠落評価軸提案**: 同じ rejection_reason が3回以上なら新軸追加を提案（SHALL）
 3. **adversarial probe 結果**: ゲーミング脆弱性の検出
