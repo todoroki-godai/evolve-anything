@@ -154,6 +154,10 @@ def test_holdout_remeasure_instruction_on_validation_failure():
     assert "baseline" in a0["reason"]
 
 
+def test_remeasurement_guidance_covers_every_approved_set():
+    assert set(capture_recall._REMEASURE) == set(capture_recall.APPROVED_EVAL_SETS)
+
+
 def test_holdout_remeasure_instruction_on_missing_results(tmp_path, monkeypatch):
     rows, _ = fixture()
     raw = "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows).encode()
