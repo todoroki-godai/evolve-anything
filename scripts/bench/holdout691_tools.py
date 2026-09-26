@@ -5,11 +5,11 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
+import sys
 from pathlib import Path
 from typing import Any
-
-import duckdb
 
 NEW_SINCE = "2026-08-12T00:00:00Z"
 HERE = Path(__file__).resolve().parent
@@ -17,15 +17,33 @@ REPO = HERE.parent.parent
 MANIFEST = HERE / "holdout691_manifest.json"
 KEY_FIELDS = ("source_path", "line_no", "session_id", "timestamp", "text_sha256")
 ROW_FIELDS = ("source_path", "line_no", "session_id", "timestamp", "text")
+DATA_ROOT = Path.home() / ".claude/evolve-anything/bench/holdout_691"
+POPULATION_WHERE = ("source_kind = 'dialogue' AND source_path NOT LIKE '%/subagents/%' "
+                    "AND timestamp >= ? AND timestamp < ?")
+POPULATION_FILTER = {"sql_where": POPULATION_WHERE, "message_filter": "should_include_message"}
+sys.path.insert(0, str(REPO / "scripts" / "lib"))
 
 
-def _external_output(path: Path) -> Path:
-    path = Path(path).resolve()
-    if path.is_relative_to(REPO):
-        raise ValueError("artifact output must be outside the repository")
-    if not path.parent.is_dir():
-        raise ValueError("artifact output directory does not exist")
-    return path
+def _external_output(path: Path, root: Path = DATA_ROOT) -> Path:
+    """Only an existing directory under the single holdout root may receive artifacts."""
+    root, parent = Path(root), Path(path).parent
+    if not root.is_dir() or not parent.is_dir():
+        raise ValueError("holdout output directory does not exist")
+    if root.is_symlink():
+        raise ValueError("holdout root must be a real directory")
+    actual_parent = parent.resolve()
+    if not any(os.path.samefile(ancestor, root) for ancestor in
+               (actual_parent, *actual_parent.parents)):
+        raise ValueError("artifact output must be under the holdout root")
+    # On case-insensitive volumes samefile alone accepts an alternate spelling.
+    for ancestor in (parent, *parent.parents):
+        if ancestor == ancestor.parent:
+            break
+        if ancestor.name not in os.listdir(ancestor.parent):
+            raise ValueError("artifact output must use the holdout root's actual spelling")
+        if os.path.samefile(ancestor, root):
+            break
+    return Path(path)
 
 
 def _sha256(path: Path) -> str:
@@ -89,17 +107,22 @@ def _identities(key: dict[str, Any]) -> tuple[tuple[Any, ...], tuple[Any, ...]]:
             (key["session_id"], key["timestamp"], key["text_sha256"]))
 
 
-def freeze_population(db_path: Path, output: Path, until: str) -> dict[str, Any]:
+def freeze_population(db_path: Path, output: Path, until: str, *,
+                      root: Path = DATA_ROOT) -> dict[str, Any]:
     """Write the half-open dialogue window once; existing output is never replaced."""
     _window(until)
-    output = _external_output(output)
+    output = _external_output(output, root)
     db_path = Path(db_path)
     if not db_path.is_file():
         raise ValueError("database does not exist")
     count = 0
+    max_timestamp = None
     digest = hashlib.sha256()
     created = False
     try:
+        import duckdb
+        from rl_common.detection import should_include_message
+
         with output.open("xb") as dest:
             created = True
             con = duckdb.connect(str(db_path), read_only=True)
