@@ -46,7 +46,9 @@ FP 較正（実 SKILL.md 全件・skills/*/SKILL.md 25 個・#191 dry-run）で�
      `bootstrap_backlog.mark_done()`・`auto-memory-drain.md` の `ingest_memory_results()`・
      `prune-merge.md` の `add_merge_suppression()` が誤検出された（実行コードが SKILL.md 本体
      ではなく参照先の手順書に書かれている構成）。走査範囲は `dogfood.layer3.find_skill_mds`
-     （Layer 3 が実際に実行検証する木）と同じにし、Layer 3 が見ない `references/` 配下の
+     （Layer 3 が import／存在を検証する木。python は import 検証、bash は
+     `--help`/`--dry-run`/`--version` 付きのみ実行、それ以外は存在検証のみ — 任意のコード
+     本文を実行するわけではない）と同じにし、Layer 3 が見ない `references/` 配下の
      さらに下の階層までは深追いしない（「Layer 3 が検証しない block」を到達可能の根拠に
      しないため）。
 
@@ -76,7 +78,12 @@ FP 較正（実 SKILL.md 全件・skills/*/SKILL.md 25 個・#191 dry-run）で�
 （AST の Name/Attribute 一致、または fenced code block 本文の正規表現一致）で行い、
 呼び出しの意味的な同一性までは見ない。動的呼び出し（h）・別ファイルへの手動コピー・
 本チェックが走査しない場所（`references/` のさらに下の階層等）に置かれた呼び出しは
-検出できない。**このため本チェックは dogfood gate の非ブロッキング advisory としてのみ
+検出できない。**加えて `_skill_md_code_block_callers` の正規表現一致は「呼び出し」と
+「テキスト上の出現」を区別しない**ため、次のいずれも誤って「呼ばれている」と判定する
+（= 偽陰性側の迂回。テストで現状挙動として固定済み）: ①コメント中の `name(...)`
+（例: `# zombie_func() は実行されない`）②文字列リテラル中の `name(...)`（例示コード片の
+埋め込み）③別ファイルでの `def name():` という定義・再定義（呼び出しではない）。
+**このため本チェックは dogfood gate の非ブロッキング advisory としてのみ
 使う**（`dogfood/cli.py` の `_run_skill_reachability_advisory` を参照。exit code に影響しない）。
 blocking 保証には使わない。
 """
@@ -257,7 +264,8 @@ def _skill_md_code_block_callers(repo_root: Path, names: Set[str]) -> Dict[str, 
     """skills/*/SKILL.md + skills/*/references/*.md の fenced code block（python/bash）本文の
     candidate 名一致を集める。
 
-    Layer 3 が同じ block の実行検証を担うため、ここでは静的テキスト一致のみ（e の設計判断）。
+    Layer 3 が同じ block の import／存在検証を担うため、ここでは静的テキスト一致のみ
+    （e の設計判断）。
 
     **references/*.md も走査する**（#191 FP 再発防止）: SKILL.md 本体は「概要 + 参照先パス」
     だけを書き、実行コード自体は `references/*.md` の fenced block に置く構成が実コーパスに
@@ -265,11 +273,17 @@ def _skill_md_code_block_callers(repo_root: Path, names: Set[str]) -> Dict[str, 
     `auto-memory-drain.md` の `ingest_memory_results()`、`prune-merge.md` の
     `add_merge_suppression()`）。これらは SKILL.md 直下しか見ない実装では到達不能の偽陽性になる。
     列挙は `dogfood.layer3.find_skill_mds` と同じ glob（`skills/*/SKILL.md` +
-    `skills/*/references/*.md`）を再利用し、Layer 3 が「実際に検証対象とする」木と一致させる
-    （二重管理を避ける・単一ソース）。**references のさらに下の階層（`references/sub/*.md` 等）は
-    対象外** — Layer 3（`find_skill_mds`）自身がその階層まで見ない設計であり、ここだけ `**` で
-    深追いすると「Layer 3 が検証していない block」を到達可能の根拠にしてしまう
-    （caller 判定の対象は Layer 3 が実際に実行検証する範囲と一致させるのが e の設計判断の前提）。
+    `skills/*/references/*.md`）を再利用し、Layer 3 が import／存在を検証する対象とする木と
+    一致させる（二重管理を避ける・単一ソース）。**references のさらに下の階層
+    （`references/sub/*.md` 等）は対象外** — Layer 3（`find_skill_mds`）自身がその階層まで
+    見ない設計であり、ここだけ `**` で深追いすると「Layer 3 が検証していない block」を
+    到達可能の根拠にしてしまう（caller 判定の対象は Layer 3 が import／存在を検証する範囲と
+    一致させるのが e の設計判断の前提）。
+
+    **既知の迂回（正規表現の性質上・修正対象外）**: コメント中の `name(...)`／文字列リテラル中の
+    `name(...)`／別ファイルでの `def name():` という定義・再定義は、いずれも呼び出しでないのに
+    caller と誤判定する（テストで現状挙動として固定済み。モジュール docstring の
+    「既知の限界」参照）。
     """
     root = Path(repo_root)
     out: Dict[str, Set[str]] = {}
