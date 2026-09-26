@@ -1175,6 +1175,42 @@ def test_build_proposal_prompt_silent_when_no_context():
     assert "確認済み" not in msg
 
 
+def test_build_proposal_prompt_includes_relative_date_warning_with_uttered_date():
+    """#441 正常系E2E: 文面に相対日付表現を含む提案を digest 描画まで通すと、警告行と
+    発話日（曜日つき）が「N日前の発話」の近くに出る。2026-09-10 は木曜日。
+    """
+    ts = "2026-09-10T03:00:00+00:00"
+    g = _group_with_meta(["k1"], rep="来週やる案", uttered_at=ts)
+    msg = pd.build_proposal_prompt([g], "pj-a")
+    assert "相対日付あり" in msg
+    assert "2026-09-10" in msg
+    assert "(木)" in msg
+    assert "基準で読むこと" in msg
+
+
+def test_build_proposal_prompt_no_relative_date_warning_when_text_is_plain():
+    """陽性対照: 相対日付を含まない提案では警告が出ない。"""
+    ts = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
+    g = _group_with_meta(["k1"], rep="テストを追加する案", uttered_at=ts)
+    msg = pd.build_proposal_prompt([g], "pj-a")
+    assert "相対日付あり" not in msg
+
+
+def test_build_proposal_prompt_relative_date_warning_unparsable_uttered_at():
+    """発話時刻が parse 不能なとき、発話日不明の文言が出る。"""
+    g = _group_with_meta(["k1"], rep="来週やる案", uttered_at="not-a-date")
+    msg = pd.build_proposal_prompt([g], "pj-a")
+    assert "発話日不明のため日付を確認すること" in msg
+
+
+def test_build_proposal_prompt_relative_date_warning_no_false_positive_proper_noun():
+    """陽性対照: 「明日香」のような固有名詞は誤爆しない（#441 指定ケース）。"""
+    ts = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
+    g = _group_with_meta(["k1"], rep="明日香さんに確認する案", uttered_at=ts)
+    msg = pd.build_proposal_prompt([g], "pj-a")
+    assert "相対日付あり" not in msg
+
+
 def test_build_proposal_systemmessage_includes_top_group_context():
     ts = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
     g = _group_with_meta(["k1"], rep="rep1", detected_at=ts, cross_pj_confirmed=["amamo"])

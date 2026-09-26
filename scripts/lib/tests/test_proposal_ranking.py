@@ -323,3 +323,63 @@ def test_cross_pj_note_global_takes_priority_over_confirmed():
     note = pr.cross_pj_note(g, "pj-a")
     assert "amamo" in note
     assert "確認済み" not in note
+
+
+# ─────────────────────────────────────────────────────────────────
+# relative_date_warning（#441: 相対日付・曜日表現の陳腐化警告）
+# ─────────────────────────────────────────────────────────────────
+def test_relative_date_warning_none_when_no_relative_expression():
+    assert pr.relative_date_warning("普通の改善提案です", _now_iso()) is None
+
+
+def test_relative_date_warning_includes_uttered_date_and_weekday():
+    # 2026-09-10 は木曜日。
+    ts = "2026-09-10T03:00:00+00:00"
+    warning = pr.relative_date_warning("来週やること", ts)
+    assert warning is not None
+    assert "2026-09-10" in warning
+    assert "(木)" in warning
+
+
+def test_relative_date_warning_uses_jst_date_not_utc_date():
+    """UTC 深夜（JST では日付が繰り上がる）の発話は JST の日付・曜日で出す（UTC 固定は誤り）。
+
+    2026-09-09T16:00:00+00:00 は UTC では 9/9（水）だが JST（+9h）では 9/10（木）になる。
+    """
+    ts = "2026-09-09T16:00:00+00:00"
+    warning = pr.relative_date_warning("明日までにやる", ts)
+    assert warning is not None
+    assert "2026-09-10" in warning
+    assert "(木)" in warning
+    assert "2026-09-09" not in warning
+
+
+def test_relative_date_warning_unparsable_uttered_at():
+    warning = pr.relative_date_warning("来週やること", "not-a-date")
+    assert warning == "⚠ 相対日付あり：発話日不明のため日付を確認すること"
+    assert pr.relative_date_warning("来週やること", None) == warning
+
+
+def test_relative_date_warning_none_for_none_or_empty_text():
+    assert pr.relative_date_warning(None, _now_iso()) is None
+    assert pr.relative_date_warning("", _now_iso()) is None
+
+
+# 陽性対照: 相対日付を含まない・含んでよい文面
+def test_relative_date_warning_positive_control_plain_text_no_warning():
+    assert pr.relative_date_warning("テストを追加してください", _now_iso()) is None
+
+
+def test_relative_date_warning_positive_control_weekday_past_reference_may_fire():
+    """「月曜日に作った」のような過去言及は相対性が薄いが、表示用補助のため過検出を許容する。"""
+    assert pr.relative_date_warning("月曜日に作ったファイルを直す", _now_iso()) is not None
+
+
+# 陽性対照: 固有名詞の誤爆を避ける（既知の除外のみ・#441 の指定ケース）
+def test_relative_date_warning_positive_control_proper_noun_asuka_no_false_positive():
+    assert pr.relative_date_warning("明日香さんに確認する", _now_iso()) is None
+
+
+def test_relative_date_warning_positive_control_proper_noun_hizuki_no_false_positive():
+    """「日月」のような固有名詞（人名・地名の一部）は本パターン（曜日等の複合語）に該当しない。"""
+    assert pr.relative_date_warning("日月さんのレビュー待ち", _now_iso()) is None

@@ -39,7 +39,8 @@ map 構築に成功したが個別の signal_key の物理キーが見つから�
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import re
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
@@ -238,6 +239,42 @@ def relative_time_label(
     if delta_days < 60:
         return f"{int(delta_days // 7)}週間前の発話"
     return f"{max(1, int(delta_days // 30))}ヶ月前の発話"
+
+
+# ─────────────────────────────────────────────────────────────────
+# 相対日付警告（#441: 再提案の文面をアシスタントが「今日基準」で誤補完するのを防ぐ）
+# ─────────────────────────────────────────────────────────────────
+_JST = timezone(timedelta(hours=9))
+_WEEKDAY_JA = ("月", "火", "水", "木", "金", "土", "日")
+# 長い表現を先に置く（alternation は最左最長でなく最初に一致した枝を採る）。
+# `明日(?!香)` は固有名詞「明日香」の誤爆（#441 陽性対照）を避けるための既知の除外。
+_RELATIVE_DATE_PATTERN = re.compile(
+    r"明後日|一昨日|明日(?!香)|昨日|今日"
+    r"|来週|先週|今週|来月|先月|今月"
+    r"|月曜日|火曜日|水曜日|木曜日|金曜日|土曜日|日曜日"
+    r"|月曜|火曜|水曜|木曜|金曜|土曜|日曜"
+)
+
+
+def relative_date_warning(text: Optional[str], uttered_at: Optional[str]) -> Optional[str]:
+    """提案文面に相対日付・曜日表現があれば、発話日（JST）基準で読むよう警告を返す（#441）。
+
+    **既知の表現のみを文字列（正規表現）で検出する表示用の補助であり、blocking ではない**
+    （見落とし・迂回がありうる）。文面に該当表現が無ければ None（過検出は許容 — 「月曜日に
+    作った」のような相対性の薄い言及も表示用の安全弁として警告してよい）。
+    該当表現があるのに ``uttered_at`` が parse 不能なときは発話日不明の文言を返す。
+    発話日は JST（ローカル表示の日付）で出す — UTC のまま出すと深夜の発話で1日ずれる。
+    """
+    if not text or not isinstance(text, str):
+        return None
+    if not _RELATIVE_DATE_PATTERN.search(text):
+        return None
+    epoch = _parse_iso_epoch(uttered_at)
+    if epoch is None:
+        return "⚠ 相対日付あり：発話日不明のため日付を確認すること"
+    dt_jst = datetime.fromtimestamp(epoch, tz=_JST)
+    weekday = _WEEKDAY_JA[dt_jst.weekday()]
+    return f"⚠ 相対日付あり：発話日 {dt_jst:%Y-%m-%d}({weekday}) 基準で読むこと"
 
 
 def group_freshness_iso(group: Dict[str, Any]) -> Optional[str]:
