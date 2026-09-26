@@ -90,6 +90,86 @@ def test_named_union_reader_rejects_holdout_results_as_a0(tmp_path, monkeypatch)
     assert capture_recall.load_capture_union([eval_path], result_path, eval_set_name="holdout682")["measured"] is True
 
 
+def test_holdout_input_rewrite_and_order_changes_are_detected(tmp_path, monkeypatch):
+    """A shuffled valid result remains measurable; content or provenance rewrites do not."""
+    import judge_eval
+    rows, results = fixture()
+    for result in results:
+        result["meta"]["eval_set"] = "holdout682"
+    raw = "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows).encode()
+    eval_path = tmp_path / "holdout.jsonl"
+    eval_path.write_bytes(raw)
+    result_path = tmp_path / "results.jsonl"
+    result_path.write_text("".join(json.dumps(row) + "\n" for row in reversed(results)))
+    monkeypatch.setitem(capture_recall.APPROVED_EVAL_SETS, "holdout682", (len(rows), hashlib.sha256(raw).hexdigest()))
+    monkeypatch.setattr(judge_eval, "compute_harness_sha", lambda: "version")
+    assert capture_recall.load_capture_union([eval_path], result_path, eval_set_name="holdout682")["measured"] is True
+
+    rewritten = raw.replace("ありがとう".encode(), "どうも".encode())
+    eval_path.write_bytes(rewritten)
+    assert capture_recall.load_capture_union([eval_path], result_path, eval_set_name="holdout682")["reason"] == "評価セット不一致"
+    eval_path.write_bytes(raw)
+    results[0]["meta"]["harness_sha"] = "versioN"
+    result_path.write_text("".join(json.dumps(row) + "\n" for row in results))
+    out = capture_recall.load_capture_union([eval_path], result_path, eval_set_name="holdout682")
+    assert out["measured"] is False
+    assert "来歴が現行条件と不一致" in out["reason"]
+
+
+def test_holdout_alternate_candidate_order_and_zero_hits(tmp_path, monkeypatch):
+    """A mismatched first candidate cannot shadow a valid second path."""
+    import judge_eval
+    rows, results = fixture()
+    for result in results:
+        result["meta"]["eval_set"] = "holdout682"
+    raw = "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows).encode()
+    bad = tmp_path / "stale.jsonl"
+    bad.write_text("{}\n")
+    valid = tmp_path / "valid.jsonl"
+    valid.write_bytes(raw)
+    result_path = tmp_path / "results.jsonl"
+    result_path.write_text("".join(json.dumps(row) + "\n" for row in results))
+    monkeypatch.setitem(capture_recall.APPROVED_EVAL_SETS, "holdout682", (len(rows), hashlib.sha256(raw).hexdigest()))
+    monkeypatch.setattr(judge_eval, "compute_harness_sha", lambda: "version")
+    assert capture_recall.load_capture_union([bad, valid], result_path, eval_set_name="holdout682")["measured"] is True
+    assert capture_recall.load_capture_union([valid, bad], result_path, eval_set_name="holdout682")["measured"] is True
+    for result in results:
+        result["meta"]["predicted"] = False
+    from rl_common import detection
+    monkeypatch.setattr(detection, "_detect_correction", lambda *args, **kwargs: None)
+    result_path.write_text("".join(json.dumps(row) + "\n" for row in results))
+    out = capture_recall.load_capture_union([valid], result_path, eval_set_name="holdout682")
+    assert out["measured"] is False
+    assert "合計の分母・検出数が不足" in out["reason"]
+
+
+def test_holdout_remeasure_instruction_on_validation_failure():
+    rows, results = fixture()
+    results[0]["meta"]["harness_sha"] = "stale"
+    out = evaluate_capture_union(rows, results, "version", "haiku", 30, eval_set_name="holdout682")
+    assert out["measured"] is False
+    assert "新しい確認用セットを作って測る" in out["reason"]
+    assert "baseline" not in out["reason"]
+    a0 = evaluate_capture_union(rows, results, "version", "haiku", 30)
+    assert "baseline" in a0["reason"]
+
+
+def test_remeasurement_guidance_covers_every_approved_set():
+    assert set(capture_recall._REMEASURE) == set(capture_recall.APPROVED_EVAL_SETS)
+
+
+def test_holdout_remeasure_instruction_on_missing_results(tmp_path, monkeypatch):
+    rows, _ = fixture()
+    raw = "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows).encode()
+    eval_path = tmp_path / "holdout.jsonl"
+    eval_path.write_bytes(raw)
+    monkeypatch.setitem(capture_recall.APPROVED_EVAL_SETS, "holdout682", (len(rows), hashlib.sha256(raw).hexdigest()))
+    out = capture_recall.load_capture_union([eval_path], tmp_path / "missing-results.jsonl", eval_set_name="holdout682")
+    assert out["measured"] is False
+    assert "新しい確認用セットを作って測る" in out["reason"]
+    assert "baseline" not in out["reason"]
+
+
 def test_advisory_union_valid_positive_control():
     rows, results = fixture()
     out = measure(rows, results)
@@ -190,8 +270,9 @@ def test_advisory_union_shared_data_dir_only_positive_control(tmp_path, monkeypa
     board = {"slug": "fixture", "decisions": {"accepted": 0, "rejected": 0, "pending": 0, "excluded": 0},
              "accepted_list": [], "withdrawal_candidates": [], "capture_union": out}
     text = "\n".join(render_results_board(board))
-    assert "柱1 捕捉率（評価セット・2経路）: 2/2 = 100.0%" in text
-    assert "正規表現 1/2・AI 候補（朝の y/n 前・未保存）1/2" in text
+    assert "柱1 捕捉率（確認用セット・調整に不使用）: 測定不能" in text
+    assert "参考: 調整に使った評価セットでの値 2/2 = 100.0%" in text
+    assert "到達の根拠にしない" in text
 
 
 @pytest.mark.parametrize("change", [

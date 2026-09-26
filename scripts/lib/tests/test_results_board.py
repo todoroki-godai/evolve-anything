@@ -858,6 +858,65 @@ class TestRenderResultsBoard:
         base.update(overrides)
         return base
 
+    def _union(self, caught=60, positives=80):
+        return {"measured": True, "caught": caught, "positives": positives,
+                "recall": caught / positives, "recall_ci": (0.645, 0.832),
+                "precision": 0.55, "regex_caught": 6, "judge_caught": 57,
+                "generated_at": "2026-09-25T00:00:00+00:00",
+                "harness_sha": "abcdefgh1234", "model": "haiku", "batch_size": 30}
+
+    def test_holdout_main_and_a0_reference_positive_controls(self):
+        text = "\n".join(results_board.render_results_board(self._board(
+            capture_holdout=self._union(), capture_union=self._union(42, 47))))
+        assert "柱1 捕捉率（確認用セット・調整に不使用）: 60/80 = 75.0%" in text
+        assert "柱1の主指標" in text
+        assert "参考: 調整に使った評価セットでの値 42/47 = 89.4%" in text
+        assert "上振れするため到達の根拠にしない" in text
+        assert "L1捕捉率: 21/47 = 44.7%" in text
+
+    @pytest.mark.parametrize("holdout", [None,
+        {"measured": False, "reason": "評価セットなし"},
+        {"measured": False, "display": False, "reason": "AI 判定結果なし"}])
+    def test_holdout_unmeasured_never_promotes_a0(self, holdout):
+        board = self._board(capture_union=self._union(42, 47))
+        if holdout is not None:
+            board["capture_holdout"] = holdout
+        text = "\n".join(results_board.render_results_board(board))
+        assert "柱1 捕捉率（確認用セット・調整に不使用）: 測定不能" in text
+        assert "柱1 捕捉率（確認用セット・調整に不使用）: 42/47" not in text
+        assert "参考: 調整に使った評価セットでの値 42/47 = 89.4%" in text
+        assert "到達の根拠にしない" in text
+
+    def test_holdout_display_false_blocks_even_measured_payload(self):
+        holdout = {**self._union(), "display": False, "reason": "表示不可"}
+        text = "\n".join(results_board.render_results_board(self._board(
+            capture_holdout=holdout, capture_union=self._union(42, 47))))
+        assert "柱1 捕捉率（確認用セット・調整に不使用）: 測定不能（表示不可）" in text
+        assert "柱1 捕捉率（確認用セット・調整に不使用）: 60/80" not in text
+
+    def test_stale_harness_for_both_sets_does_not_show_a0_remeasurement(self):
+        import hashlib
+        from capture_recall import evaluate_capture_union
+
+        rows = [{"eval_id": "synthetic", "text": "ここを直して", "label": "TP"}]
+        results = [{"prompt_id": "synthetic", "status": "ok", "meta": {
+            "rep": 0, "expected": True, "predicted": True,
+            "prompt_sha256": hashlib.sha256(rows[0]["text"].encode()).hexdigest(),
+            "harness_sha": "old", "model": "haiku", "batch_size_config": 30,
+            "generated_at": "2026-09-25T00:00:00+00:00"}}]
+        holdout = evaluate_capture_union(rows, results, "current", "haiku", 30,
+                                         eval_set_name="holdout682")
+        a0 = evaluate_capture_union(rows, results, "current", "haiku", 30)
+        assert not holdout["measured"] and not a0["measured"]
+        assert "baseline" in a0["reason"]
+        text = "\n".join(results_board.render_results_board(self._board(
+            capture_holdout=holdout, capture_union=a0)))
+        assert "柱1 捕捉率（確認用セット・調整に不使用）: 測定不能" in text
+        assert "参考: 調整に使った評価セットでの値 測定不能" in text
+        assert "baseline" not in text
+        assert "--approve-harness" not in text
+        assert "。。" not in text
+
     def test_header_present(self):
         lines = results_board.render_results_board(self._board())
         assert lines[0] == "## 🏆 戦果ボード"
@@ -875,8 +934,8 @@ class TestRenderResultsBoard:
                  "regex_caught": 21, "judge_caught": 23,
                  "generated_at": "2026-09-25T00:00:00+00:00", "harness_sha": "abcdefgh1234",
                  "model": "haiku", "batch_size": 30}
-        text = "\n".join(results_board.render_results_board(self._board(capture_union=union)))
-        assert "柱1 捕捉率（評価セット・2経路）: 31/47 = 66.0%" in text
+        text = "\n".join(results_board.render_results_board(self._board(capture_holdout=union)))
+        assert "柱1 捕捉率（確認用セット・調整に不使用）: 31/47 = 66.0%" in text
         assert "柱1の主指標" in text
         assert "正規表現 21/47・AI 候補（朝の y/n 前・未保存）23/47" in text
         assert "2026-09-25 09:00 JST・版 abcdefgh・モデル別名 haiku・バッチ設定 30" in text
@@ -889,6 +948,53 @@ class TestRenderResultsBoard:
         board = results_board.build_results_board("fixture", judge_results_path=tmp_path / "results.jsonl")
         assert board["capture_union"] == {"measured": False, "reason": "判定結果の読込失敗"}
         assert "戦果ボード" in "\n".join(results_board.render_results_board(board))
+
+    def test_holdout_reader_failure_does_not_promote_measured_a0(self, monkeypatch, tmp_path):
+        def fake_load(_candidates, _path, eval_set_name="a0"):
+            if eval_set_name == "holdout682":
+                raise ValueError("synthetic holdout read failure")
+            return self._union(42, 47)
+
+        monkeypatch.setattr(results_board, "load_capture_union", fake_load)
+        board = results_board.build_results_board("fixture", now=_NOW,
+                                                 judge_results_path=tmp_path / "a0.jsonl")
+        assert board["capture_union"]["measured"] is True
+        assert board["capture_holdout"] == {"measured": False, "reason": "確認用セットの読込失敗"}
+        lines = results_board.render_results_board(board)
+        assert "柱1 捕捉率（確認用セット・調整に不使用）: 測定不能（確認用セットの読込失敗）" in lines[2]
+        assert "42/47" not in lines[2]
+        assert any("参考: 調整に使った評価セットでの値 42/47" in line for line in lines)
+
+    def test_builder_uses_named_holdout_from_call_time_data_dir(self, monkeypatch, tmp_path):
+        import rl_common
+        monkeypatch.setattr(rl_common, "DATA_DIR", tmp_path)
+        calls = []
+
+        def fake_load(candidates, path, eval_set_name="a0"):
+            calls.append((list(candidates), path, eval_set_name))
+            return {"measured": False, "reason": eval_set_name}
+
+        monkeypatch.setattr(results_board, "load_capture_union", fake_load)
+        board = results_board.build_results_board("fixture", now=_NOW,
+                                                 judge_results_path=tmp_path / "a0.jsonl")
+        assert calls[0][2] == "a0"
+        assert calls[1][0] == [tmp_path / "bench/holdout_682/holdout_682_eval_set.jsonl"]
+        assert calls[1][1].as_posix().endswith(".claude/hillclimb/correction-judge/holdout682-after/results.jsonl")
+        assert calls[1][2] == "holdout682"
+        assert board["capture_holdout"] == {"measured": False, "reason": "holdout682"}
+
+    def test_missing_holdout_file_is_unmeasured_even_with_measured_a0(self, monkeypatch, tmp_path):
+        import rl_common
+        monkeypatch.setattr(rl_common, "DATA_DIR", tmp_path)
+        monkeypatch.setattr(results_board, "_capture_eval_candidates", lambda: [tmp_path / "a0-missing"])
+        board = results_board.build_results_board("fixture", now=_NOW,
+                                                 judge_results_path=tmp_path / "a0-results.jsonl")
+        assert board["capture_holdout"]["measured"] is False
+        assert board["capture_holdout"]["reason"] == "評価セットなし"
+        board["capture_union"] = self._union(42, 47)
+        text = "\n".join(results_board.render_results_board(board))
+        assert "柱1 捕捉率（確認用セット・調整に不使用）: 測定不能（評価セットなし）" in text
+        assert "参考: 調整に使った評価セットでの値 42/47" in text
 
     def test_default_judge_results_ignores_checkout_result(self, monkeypatch, tmp_path):
         """来歴つき結果が実配置に現れても、暗黙の読み取りは隔離する。"""
@@ -923,8 +1029,8 @@ class TestRenderResultsBoard:
 
     def test_advisory_union_unmeasured_reason_keeps_legacy_l1(self):
         text = "\n".join(results_board.render_results_board(self._board(
-            capture_union={"measured": False, "reason": "来歴なし"})))
-        assert "柱1 捕捉率（評価セット・2経路）: 測定不能（来歴なし）" in text
+            capture_holdout={"measured": False, "reason": "来歴なし"})))
+        assert "柱1 捕捉率（確認用セット・調整に不使用）: 測定不能（来歴なし）" in text
         assert "L1捕捉率: 21/47 = 44.7%" in text
 
     def test_capture_recall_missing_eval_set_is_explicit(self):

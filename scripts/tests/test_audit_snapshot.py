@@ -188,7 +188,7 @@ def test_advisory_capture_union_board_snapshot():
                                 "recall": 21 / 47, "recall_ci": (0.314, 0.588),
                                 "hits": 23, "precision": 21 / 23,
                                 "precision_ci": (0.732, 0.976), "pattern_version": 2}}
-    actual = "\n".join(render_results_board(board)[2:5]) + "\n"
+    actual = "\n".join(render_results_board(board)[2:6]) + "\n"
     _assert_snapshot(actual, "audit_capture_union_board.txt")
 
 
