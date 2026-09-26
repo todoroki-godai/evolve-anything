@@ -5,10 +5,9 @@
 ここは記録するレコードのフィールド定義とコード。
 
 ```python
-import datetime, os, pathlib, sys
+import datetime, os, sys
 
-plugin_root = pathlib.Path(os.environ["CLAUDE_PLUGIN_ROOT"])
-sys.path.insert(0, str(plugin_root / "scripts" / "lib"))
+sys.path.insert(0, "${CLAUDE_PLUGIN_ROOT}/scripts/lib")
 from rl_common import store_write
 
 record = {
