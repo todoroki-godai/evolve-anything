@@ -16,13 +16,14 @@ revert イベント追記、を1つの関数にまとめる。**手順3〜5 は�
 """
 from __future__ import annotations
 
+import difflib
 import hashlib
 import os
 import uuid
 import zlib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import optimize_history_store as _store
 from evolve_decision_ids import (
@@ -31,7 +32,7 @@ from evolve_decision_ids import (
     revert_event_id,
     sha256,
 )
-from reflect_apply_match import check_line_applied
+from reflect_apply_match import match_draft_line_in_lines
 from rl_common.file_lock import file_lock, seqlock_read
 
 from ._entry import find_entry
@@ -62,6 +63,7 @@ REASON_BEFORE_UNAVAILABLE = "before_unavailable"
 REASON_AFTER_SHA_MISSING = "after_sha_missing"
 REASON_METADATA_LOSS = "metadata_loss"
 REASON_DRIFT = "drift"
+REASON_BEFORE_EQUALS_AFTER = "before_equals_after"
 
 
 @dataclass(frozen=True)
@@ -224,35 +226,77 @@ def _restore_normal(
             tmp_path.unlink()
 
 
+def _diff_added_lines(before_lines: List[str], after_lines: List[str]) -> List[str]:
+    """before→after の行差分のうち「追加された側」（insert/replace の after 側）の
+    行だけを集める（#696 レビュー Must1）。
+
+    ``difflib.SequenceMatcher`` の LCS ベース diff は、内容が変わっていない行を
+    ``equal`` として畳み込む。そのため次の3パターンはいずれも「実際にはこの編集で
+    新しく足された行ではない」として ``equal`` 側に残り、ここには出てこない:
+
+      - 行の移動（同じ行が別の位置へ移っただけ）—— 移動元/移動先の周辺行が
+        一致する限り、移動された行自体は独立した insert/delete のペアとして
+        現れる（=このペアの insert 側に乗るので、後段の一致判定では「新しく
+        足された」ものとして扱われる。これは意図どおり: 起草行の文言が
+        移動によって新しい位置に現れたことは、その位置の diff としては
+        正しく "追加" である）。
+      - 既存行と同じ文言をもう1か所に足す —— 元の occurrence は ``equal`` に
+        残り、新しい occurrence だけが ``insert`` として現れる。
+      - コードブロック内などに同じ文言が既にある —— そちらは ``equal`` の
+        まま変わらず、実際に新しく足された occurrence だけが拾われる。
+
+    差分計算そのものが「実際に足された行」を特定する唯一のロジックであり、
+    ここでは再実装しない（標準ライブラリ ``difflib`` に委譲）。
+    """
+    matcher = difflib.SequenceMatcher(None, before_lines, after_lines)
+    added: List[str] = []
+    for tag, _i1, _i2, j1, j2 in matcher.get_opcodes():
+        if tag in ("insert", "replace"):
+            added.extend(after_lines[j1:j2])
+    return added
+
+
 def detect_stale_before_snapshot(
     before_path: Path, after_content: str, draft_line: str,
 ) -> Optional[str]:
     """#696: `--apply` の書込み前に、`--before-content-file` が編集後の内容に
     見えないかを判定する（write 前ゲート・``reflect.py`` から呼ぶ）。
 
-    次のどちらかに当たれば「編集前でなく編集後の控え」と判定する:
+    判定軸は「before→after の差分で実際に追加された行の中に、起草行（draft_line）
+    が（正規化後）存在するか」の1本（#696 レビュー Must1: 旧版は「起草行が控えに
+    存在するか」を素朴に見ており、行の移動・既存行と同じ文言の別位置への追加・
+    コードブロック内の同一文言、のいずれでも誤検知していた）。追加行の抽出は
+    ``_diff_added_lines``（標準ライブラリ ``difflib``）、正規化・一致判定は
+    ``reflect_apply_match.match_draft_line_in_lines``（反映先ファイルへの実在確認
+    ``check_line_applied`` と同じ正規化・同じ関数）を再利用する——別実装しない。
 
-      (a) 起草行（draft_line）が控えの中に既に実在する — 反映先ファイルに
-          「実在するか」を確認する既存の正規化・関数
-          （``reflect_apply_match.check_line_applied``）を、控えファイルに
-          対してそのまま使う（#696 依頼の指定どおり別実装しない）。
-      (b) 控えの内容が反映先の現在の内容と完全一致する（sha256 比較）。
+    追加行が1つも無い場合（before と after が実質同一——完全一致に限らず、
+    改行や空行の増減だけの差分も含む）は、当然どの draft_line も「追加された行」
+    には含まれないため、この1本の判定に自然に畳み込まれる（旧版の「(b) 完全一致」
+    は独立した分岐ではなくこの一般形の特殊ケース）。
 
     新規ファイル作成（before が空文字列）は対象外——常に None を返す
     （#475 §8.2「やらないこと」との整合。before が無いので比較のしようがない）。
 
+    検出できない既知の限界（#696 レビュー Nit8）:
+      - Read ツールの行番号付き出力（``  42\tfoo``）をそのまま控えにした場合、
+        本来の行内容と一致しないため常に「追加されていない」と誤判定しうる
+        （逆方向の誤検知——本当は編集前の控えなのに拒否される）。
+      - 編集後の内容を控えたあとで、さらに起草行の文言そのものを手で書き換えた
+        場合（控え側の起草行が draft_line と正規化後も一致しない）は検出できない
+        （本判定は「draft_line が新規追加行に含まれるか」だけを見ており、控え
+        全体が編集後の内容であること自体は before→after の diff からは分からない）。
+
     Returns:
-        該当すれば理由コード（``"draft_line_already_present"`` |
-        ``"before_equals_after"``）、該当しなければ ``None``。
+        該当すれば理由コード ``"draft_line_not_added"``、該当しなければ ``None``。
     """
     before_content = before_path.read_text(encoding="utf-8")
     if before_content == "":
         return None
-    match = check_line_applied(before_path, draft_line)
-    if match["matched"]:
-        return "draft_line_already_present"
-    if sha256(before_content) == sha256(after_content):
-        return "before_equals_after"
+    added_lines = _diff_added_lines(before_content.splitlines(), after_content.splitlines())
+    match = match_draft_line_in_lines(added_lines, draft_line)
+    if not match["matched"]:
+        return "draft_line_not_added"
     return None
 
 
@@ -355,6 +399,21 @@ def apply_revert(
             message=(
                 "この entry には after_sha が記録されていないため revert できません"
                 "（schema が古い可能性があります）。"
+            ),
+        )
+
+    # #696 レビュー Should3: before/after が記録時点で既に同一（記録の不具合）な
+    # entry は、対象ファイルの現在の状態を見るまでもなく戻す意味が無い。dry-run
+    # でも同じ判定にする（対象を一切解決せず書込みもしない read-only 判定なので、
+    # dry-run 純度は崩さない）。listing（``bin/evolve-revert --list``）と同じ
+    # ``detect_before_after_identical`` を再利用し、理由コードも揃える。
+    if detect_before_after_identical(entry):
+        return ApplyResult(
+            ok=False, dry_run=dry_run, entry_id=entry_id, slug=result_slug,
+            reason=REASON_BEFORE_EQUALS_AFTER,
+            message=(
+                "変更前の控えが編集後に取られていたため戻せません"
+                "（記録の不具合・#696）。"
             ),
         )
 

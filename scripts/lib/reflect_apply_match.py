@@ -64,6 +64,24 @@ def check_line_applied(target_path: Path, draft_line: str) -> Dict[str, Optional
         return {"matched": False, "reason": "file_not_found"}
 
     lines = target_path.read_text(encoding="utf-8").splitlines()
+    return match_draft_line_in_lines(lines, draft_line)
+
+
+def match_draft_line_in_lines(lines: List[str], draft_line: str) -> Dict[str, Optional[str]]:
+    """draft_line が lines の中に正規化後完全一致で存在するかを判定する（ファイル I/O なし）。
+
+    ``check_line_applied`` の判定コア（正規化規則そのもの）を、ファイル全体ではなく
+    任意の行リストに対しても適用できるよう切り出したもの（#696: evolve_revert._apply
+    の ``detect_stale_before_snapshot`` が、diff で抽出した「追加された行」のリストに
+    対して同じ正規化・同じ関数を再利用するために追加。別実装しない）。
+
+    Returns:
+        {"matched": bool, "reason": str | None}。reason は matched=False のときのみ
+        設定する（"unknown_line_prefix" / "no_match"）。
+    """
+    if _UNKNOWN_PREFIX_RE.match(draft_line.strip()):
+        return {"matched": False, "reason": "unknown_line_prefix"}
+
     kind = classify_file(lines)
     normalize = _normalize_bullet if kind == "bullet" else _normalize_plain
     target_norm = normalize(draft_line)

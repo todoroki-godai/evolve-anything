@@ -91,6 +91,21 @@ def build_revert_listing(slug: Optional[str] = None) -> List[Dict[str, Any]]:
     return MeasuredList(items, **history_measurement)
 
 
+def is_revertible(item: Dict[str, Any]) -> bool:
+    """entry が「戻せる」に数えられるかの単一判定（#696 レビュー Must2）。
+
+    ``render_revert_listing`` の「戻せる N 件」表示と ``weekly_board.build_weekly_board``
+    の柱4 集計（``pillar4_count``）の両方がこの関数を呼ぶ。判定式を2箇所に別々に
+    書くと、どちらかだけ更新して食い違う（#696 の stale_before_snapshot 追加時に
+    weekly_board 側が追従せず柱4 の数字が ``--list`` と食い違った、という実例）。
+    """
+    return bool(
+        item.get("revert_available")
+        and not item.get("subsequent_change")
+        and not item.get("stale_before_snapshot")
+    )
+
+
 def render_revert_listing(items: List[Dict[str, Any]]) -> List[str]:
     """人間向けテキスト表示を生成する（``bin/evolve-revert --list`` の既定出力）。"""
     if not bool(getattr(items, "measured", True)):
@@ -100,13 +115,9 @@ def render_revert_listing(items: List[Dict[str, Any]]) -> List[str]:
 
     # 「戻せる」件数は後続変更ありの entry と、記録の before/after が同一の
     # entry（#696・記録の不具合）を除く（§8.2: 同ファイルへの後続変更があると
-    # conflict で戻せなくなるため、集計もそれを反映する）。
-    revertible_count = sum(
-        1 for it in items
-        if it["revert_available"]
-        and not it.get("subsequent_change")
-        and not it.get("stale_before_snapshot")
-    )
+    # conflict で戻せなくなるため、集計もそれを反映する）。判定式は is_revertible
+    # に一本化（weekly_board と共有・#696 レビュー Must2）。
+    revertible_count = sum(1 for it in items if is_revertible(it))
     unavailable_count = len(items) - revertible_count
 
     lines = [

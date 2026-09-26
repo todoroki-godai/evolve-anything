@@ -1488,65 +1488,181 @@ class TestRuleRevertRecording:
 
     # --- #696: --before-content-file が編集後の内容に見える場合の書込み前ゲート ---
 
-    def test_apply_cli_rejects_before_content_containing_draft_line(self, tmp_path, capsys):
-        """#696 (a): 控えに起草行が既に含まれている → attempt 追記・status 更新・
-        revert 記録のいずれも書き込む前に拒否する。"""
+    def _apply_cli_stale_check(
+        self, tmp_path, capsys, *, target_name, target_content,
+        draft_line, before_content,
+    ):
+        """#696 の書込み前ゲートを CLI 経由で1回実行し、(exit_code, output, 副作用の
+        有無を確認するための events_file パス) を返す共通ヘルパー。"""
         corr = _make_correction(reflect_status="promoted", session_id="sess1", timestamp="2026-08-17T00:00:00Z")
         filepath = _write_corrections(tmp_path, [corr])
         before_bytes = filepath.read_bytes()
-        target = Path.home() / ".claude" / "rules" / "stale-a.md"
+        target = Path.home() / ".claude" / "rules" / target_name
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text("- 既存行\n- 起草した行\n- 追加行\n", encoding="utf-8")
+        target.write_text(target_content, encoding="utf-8")
         draft_line_file = tmp_path / "draft.txt"
-        draft_line_file.write_text("起草した行", encoding="utf-8")
-        before_content_file = tmp_path / "before-stale-a.txt"
-        # 編集後の内容をそのまま控えてしまった想定（起草行を含む）。
-        before_content_file.write_text("- 既存行\n- 起草した行\n", encoding="utf-8")
+        draft_line_file.write_text(draft_line, encoding="utf-8")
+        before_content_file = tmp_path / f"before-{target_name}.txt"
+        before_content_file.write_text(before_content, encoding="utf-8")
         source_id = reflect.make_source_correction_id("sess1", "2026-08-17T00:00:00Z")
 
-        import rl_common
-        events_file = Path(rl_common.DATA_DIR) / "reflect_apply_events.jsonl"
-
-        with mock.patch("sys.argv", [
+        argv = [
             "reflect.py", "--apply", source_id,
             "--target-path", str(target),
             "--draft-line-file", str(draft_line_file),
             "--before-content-file", str(before_content_file),
             "--corrections-file", str(filepath),
-        ]):
-            with pytest.raises(SystemExit) as exc_info:
+        ]
+        exc_info = None
+        with mock.patch("sys.argv", argv):
+            try:
                 reflect.main()
-
-        assert exc_info.value.code == 1
+            except SystemExit as exc:
+                exc_info = exc
         output = json.loads(capsys.readouterr().out)
+        return exc_info, output, filepath, before_bytes
+
+    def test_apply_cli_rejects_before_content_containing_draft_line(self, tmp_path, capsys):
+        """陰性: draft_line が before にも既にあり、before→after の diff 上
+        「追加された行」には含まれていない（追加されたのは別の行だけ）
+        → attempt 追記・status 更新・revert 記録のいずれも書き込む前に拒否する。
+        """
+        import rl_common
+        events_file = Path(rl_common.DATA_DIR) / "reflect_apply_events.jsonl"
+
+        exc, output, filepath, before_bytes = self._apply_cli_stale_check(
+            tmp_path, capsys,
+            target_name="stale-a.md",
+            target_content="- 既存行\n- 起草した行\n- 追加行\n",
+            draft_line="起草した行",
+            # 編集後の内容をそのまま控えてしまった想定（起草行を含む）。
+            before_content="- 既存行\n- 起草した行\n",
+        )
+
+        assert exc is not None and exc.code == 1
         assert output["status"] == "error"
-        assert output["reason"] == "draft_line_already_present"
+        assert output["reason"] == "draft_line_not_added"
         # 3つの永続化先のどれにも一切追記されていない（副作用ゼロ）。
         assert filepath.read_bytes() == before_bytes
         assert not events_file.exists()
         assert not (Path(rl_common.DATA_DIR) / "optimize_history").exists()
 
     def test_apply_cli_rejects_before_content_identical_to_after(self, tmp_path, capsys):
-        """#696 (b): 控えと反映先の現在の内容が完全一致 → 書込み前に拒否する。
+        """陰性: 控え＝編集後（控えと反映先の現在の内容が完全一致）→ diff に
+        追加行が1つも無いため書込み前に拒否する。"""
+        import rl_common
+        events_file = Path(rl_common.DATA_DIR) / "reflect_apply_events.jsonl"
 
-        draft_line は check_line_applied が「未知の行頭記号」として一致判定しない
-        番号付き行にして、(a) の分岐を経由せず (b) 単独で発火することを確認する。
-        """
+        shared_content = "- 既存行\n- 起草した行\n"
+        exc, output, filepath, before_bytes = self._apply_cli_stale_check(
+            tmp_path, capsys,
+            target_name="stale-b.md",
+            target_content=shared_content,
+            draft_line="起草した行",
+            before_content=shared_content,
+        )
+
+        assert exc is not None and exc.code == 1
+        assert output["status"] == "error"
+        assert output["reason"] == "draft_line_not_added"
+        assert filepath.read_bytes() == before_bytes
+        assert not events_file.exists()
+        assert not (Path(rl_common.DATA_DIR) / "optimize_history").exists()
+
+    def test_apply_cli_rejects_trailing_newline_only_difference(self, tmp_path, capsys):
+        """陰性: 末尾改行違い——控えと反映先が実質同一（末尾の空行が増えただけ）
+        の場合も、緩い比較への抜け道にせず引き続き拒否する（#696 レビュー）。"""
+        import rl_common
+        events_file = Path(rl_common.DATA_DIR) / "reflect_apply_events.jsonl"
+
+        exc, output, filepath, before_bytes = self._apply_cli_stale_check(
+            tmp_path, capsys,
+            target_name="stale-newline.md",
+            target_content="- 既存行\n- 起草した行\n\n",
+            draft_line="起草した行",
+            before_content="- 既存行\n- 起草した行\n",
+        )
+
+        assert exc is not None and exc.code == 1
+        assert output["status"] == "error"
+        assert output["reason"] == "draft_line_not_added"
+        assert filepath.read_bytes() == before_bytes
+        assert not events_file.exists()
+        assert not (Path(rl_common.DATA_DIR) / "optimize_history").exists()
+
+    def test_apply_cli_similar_but_different_before_line_does_not_block(self, tmp_path, capsys):
+        """陽性対照: draft_line と似ているだけの別の行が控えにあるだけでは止めない。"""
+        _exc, output, _filepath, _before_bytes = self._apply_cli_stale_check(
+            tmp_path, capsys,
+            target_name="similar-line.md",
+            target_content="- 既存行\n- 起草した行\n",
+            draft_line="起草した行",
+            before_content="- 既存行\n- 似た起草した行だが違う\n",
+        )
+
+        assert output["status"] == "applied"
+        assert output["revert_recorded"] is True
+
+    # --- #696 レビュー Must1: CLI 陽性対照3件（現行コード fc313785 で赤になること
+    #     を確認済み。旧版「控えに draft_line が在るか」は正当な入力を誤って止めていた）
+
+    def test_apply_cli_does_not_block_when_line_moved(self, tmp_path, capsys):
+        """陽性対照: 行の移動——draft_line と同じ文言の行が元々 before にあり、
+        それを別の位置へ移しただけ（新規追加ではない）でも止めない。"""
+        _exc, output, _filepath, _before_bytes = self._apply_cli_stale_check(
+            tmp_path, capsys,
+            target_name="moved-line.md",
+            target_content="- 起草した行\n- A\n- C\n",
+            draft_line="起草した行",
+            before_content="- A\n- 起草した行\n- C\n",
+        )
+
+        assert output["status"] == "applied"
+        assert output["revert_recorded"] is True
+
+    def test_apply_cli_does_not_block_when_existing_line_duplicated_elsewhere(self, tmp_path, capsys):
+        """陽性対照: 既存行と同じ文言をもう1か所に足す——draft_line と同じ文言が
+        既に別の位置に存在していても、新しく足された2つ目の occurrence は
+        止めない。"""
+        _exc, output, _filepath, _before_bytes = self._apply_cli_stale_check(
+            tmp_path, capsys,
+            target_name="duplicated-line.md",
+            target_content="- X\n- Y\n- X\n",
+            draft_line="X",
+            before_content="- X\n- Y\n",
+        )
+
+        assert output["status"] == "applied"
+        assert output["revert_recorded"] is True
+
+    def test_apply_cli_does_not_block_when_same_text_inside_code_block(self, tmp_path, capsys):
+        """陽性対照: コードブロック内に同文言——draft_line と同じ文言がコード
+        ブロック内の例示として既に存在していても、実際に新しく足された行は
+        止めない。"""
+        _exc, output, _filepath, _before_bytes = self._apply_cli_stale_check(
+            tmp_path, capsys,
+            target_name="codeblock-line.md",
+            target_content="```\n- draft line\n```\n- draft line\n",
+            draft_line="draft line",
+            before_content="```\n- draft line\n```\n",
+        )
+
+        assert output["status"] == "applied"
+        assert output["revert_recorded"] is True
+
+    def test_apply_cli_rejects_missing_target_path_for_rule_scope(self, tmp_path, capsys):
+        """#696 レビュー Should4: 反映先ファイルが無いと read_text が traceback する
+        代わりに、before-content-file と同じ形の JSON エラーを返す。"""
         corr = _make_correction(reflect_status="promoted", session_id="sess1", timestamp="2026-08-17T00:00:00Z")
         filepath = _write_corrections(tmp_path, [corr])
         before_bytes = filepath.read_bytes()
-        shared_content = "- 既存行\n1. 番号付き行\n"
-        target = Path.home() / ".claude" / "rules" / "stale-b.md"
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(shared_content, encoding="utf-8")
+        target = Path.home() / ".claude" / "rules" / "missing-target.md"
+        # target を書き込まない（存在しない状態のまま）。
         draft_line_file = tmp_path / "draft.txt"
-        draft_line_file.write_text("1. 番号付き行", encoding="utf-8")
-        before_content_file = tmp_path / "before-stale-b.txt"
-        before_content_file.write_text(shared_content, encoding="utf-8")
+        draft_line_file.write_text("起草した行", encoding="utf-8")
+        before_content_file = tmp_path / "before-missing-target.txt"
+        before_content_file.write_text("- 既存行\n", encoding="utf-8")
         source_id = reflect.make_source_correction_id("sess1", "2026-08-17T00:00:00Z")
-
-        import rl_common
-        events_file = Path(rl_common.DATA_DIR) / "reflect_apply_events.jsonl"
 
         with mock.patch("sys.argv", [
             "reflect.py", "--apply", source_id,
@@ -1561,22 +1677,22 @@ class TestRuleRevertRecording:
         assert exc_info.value.code == 1
         output = json.loads(capsys.readouterr().out)
         assert output["status"] == "error"
-        assert output["reason"] == "before_equals_after"
+        assert str(target) in output["message"]
         assert filepath.read_bytes() == before_bytes
-        assert not events_file.exists()
-        assert not (Path(rl_common.DATA_DIR) / "optimize_history").exists()
 
-    def test_apply_cli_similar_but_different_before_line_does_not_block(self, tmp_path, capsys):
-        """陽性対照: draft_line と似ているだけの別の行が控えにあるだけでは止めない。"""
+    def test_apply_cli_rejects_empty_draft_line(self, tmp_path, capsys):
+        """#696 レビュー Nit6: 空の起草行はゲートより前に専用エラーで弾く
+        （「追加された行に見つからない」という紛らわしい理由に落とさない）。"""
         corr = _make_correction(reflect_status="promoted", session_id="sess1", timestamp="2026-08-17T00:00:00Z")
         filepath = _write_corrections(tmp_path, [corr])
-        target = Path.home() / ".claude" / "rules" / "similar-line.md"
+        before_bytes = filepath.read_bytes()
+        target = Path.home() / ".claude" / "rules" / "empty-draft.md"
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text("- 既存行\n- 起草した行\n", encoding="utf-8")
-        draft_line_file = tmp_path / "draft.txt"
-        draft_line_file.write_text("起草した行", encoding="utf-8")
-        before_content_file = tmp_path / "before-similar.txt"
-        before_content_file.write_text("- 既存行\n- 似た起草した行だが違う\n", encoding="utf-8")
+        target.write_text("- 既存行\n", encoding="utf-8")
+        draft_line_file = tmp_path / "draft-empty.txt"
+        draft_line_file.write_text("   \n", encoding="utf-8")
+        before_content_file = tmp_path / "before-empty-draft.txt"
+        before_content_file.write_text("- 既存行\n", encoding="utf-8")
         source_id = reflect.make_source_correction_id("sess1", "2026-08-17T00:00:00Z")
 
         with mock.patch("sys.argv", [
@@ -1586,11 +1702,44 @@ class TestRuleRevertRecording:
             "--before-content-file", str(before_content_file),
             "--corrections-file", str(filepath),
         ]):
-            reflect.main()
+            with pytest.raises(SystemExit) as exc_info:
+                reflect.main()
 
+        assert exc_info.value.code == 1
         output = json.loads(capsys.readouterr().out)
-        assert output["status"] == "applied"
-        assert output["revert_recorded"] is True
+        assert output["status"] == "error"
+        assert "空です" in output["message"]
+        assert "reason" not in output
+        assert filepath.read_bytes() == before_bytes
+
+    def test_apply_cli_dry_run_also_rejects_stale_before_content(self, tmp_path, capsys):
+        """#696 レビュー Nit7: --dry-run でも書込み前ゲートは効く（何も書かない
+        という dry-run の約束は崩さず、試し実行でも控えの不備に気づける）。"""
+        corr = _make_correction(reflect_status="promoted", session_id="sess1", timestamp="2026-08-17T00:00:00Z")
+        filepath = _write_corrections(tmp_path, [corr])
+        target = Path.home() / ".claude" / "rules" / "dry-run-stale.md"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("- 既存行\n- 起草した行\n", encoding="utf-8")
+        draft_line_file = tmp_path / "draft.txt"
+        draft_line_file.write_text("起草した行", encoding="utf-8")
+        before_content_file = tmp_path / "before-dry-run-stale.txt"
+        before_content_file.write_text("- 既存行\n- 起草した行\n", encoding="utf-8")
+        source_id = reflect.make_source_correction_id("sess1", "2026-08-17T00:00:00Z")
+
+        with mock.patch("sys.argv", [
+            "reflect.py", "--dry-run", "--apply", source_id,
+            "--target-path", str(target),
+            "--draft-line-file", str(draft_line_file),
+            "--before-content-file", str(before_content_file),
+            "--corrections-file", str(filepath),
+        ]):
+            with pytest.raises(SystemExit) as exc_info:
+                reflect.main()
+
+        assert exc_info.value.code == 1
+        output = json.loads(capsys.readouterr().out)
+        assert output["status"] == "error"
+        assert output["reason"] == "draft_line_not_added"
 
 
 # --- Test: weak_signals レーンは view-only 診断・昇格は evolve へ委譲（#117） ---

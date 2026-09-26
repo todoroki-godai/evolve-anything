@@ -248,6 +248,55 @@ def test_conflict_branch_message_includes_dump_before_and_apply_commands(tmp_pat
     assert "x1 --apply" in result.message
 
 
+# ─── before==after（#696 レビュー Should3: 記録の不具合を通常分岐で通さない）──
+
+
+def test_before_equals_after_entry_is_rejected(tmp_path, monkeypatch):
+    """記録の before/after が同一（記録の不具合）の entry は、対象の現在の内容が
+    after_sha と一致していても、何も変えずに『戻した』と revert イベントを書かない。
+    """
+    canonical = _setup(tmp_path, monkeypatch)
+    target = _make_target(tmp_path, "same-content\n")
+    entry = _accept_entry("x1", "same-content\n", "same-content\n", target)
+    _write_history(canonical, "proj", [entry])
+
+    result = apply_revert("x1", slug="proj", dry_run=False)
+
+    assert result.ok is False
+    assert result.reason == "before_equals_after"
+    assert target.read_text(encoding="utf-8") == "same-content\n"
+    assert store.load_revert_events("proj") == []
+
+
+def test_before_equals_after_entry_is_rejected_in_dry_run_too(tmp_path, monkeypatch):
+    """dry-run でも同じ理由で拒否する（書込みの有無に関わらず判定は同じ）。"""
+    canonical = _setup(tmp_path, monkeypatch)
+    target = _make_target(tmp_path, "same-content\n")
+    entry = _accept_entry("x1", "same-content\n", "same-content\n", target)
+    _write_history(canonical, "proj", [entry])
+
+    result = apply_revert("x1", slug="proj", dry_run=True)
+
+    assert result.ok is False
+    assert result.reason == "before_equals_after"
+
+
+def test_before_equals_after_entry_is_rejected_before_resolving_target(tmp_path, monkeypatch):
+    """対象パスの解決より前に拒否する（対象が存在しなくても同じ理由で拒否される
+    ことで、判定順が「解決前」であることを確認する）。"""
+    canonical = _setup(tmp_path, monkeypatch)
+    entry = _accept_entry(
+        "x1", "same-content\n", "same-content\n",
+        Path(tmp_path / "does-not-exist" / "SKILL.md"),
+    )
+    _write_history(canonical, "proj", [entry])
+
+    result = apply_revert("x1", slug="proj", dry_run=False)
+
+    assert result.ok is False
+    assert result.reason == "before_equals_after"
+
+
 # ─── 未発見・schema gap ────────────────────────────────────────────────────
 
 
@@ -660,35 +709,48 @@ def test_detect_stale_before_snapshot_none_for_new_file(tmp_path):
     assert detect_stale_before_snapshot(before_path, "- 起草した行\n", "起草した行") is None
 
 
-def test_detect_stale_before_snapshot_flags_draft_line_already_in_before(tmp_path):
-    """(a) 起草行が控えに既に含まれている → 編集後の内容に見える。"""
+def test_detect_stale_before_snapshot_whitespace_only_before_is_not_treated_as_new_file(tmp_path):
+    """新規ファイルのバイパスは「完全な空文字列」のみに限る——空白だけの控えは
+    別物として扱い、通常の diff 判定にかける（``record_rule_revert_entry`` 側の
+    ``before_content == ""`` という厳密な条件とここでの新規ファイル判定基準を
+    一致させないと、"before が空白のみ" というケースだけ挙動が食い違う）。
+    """
+    before_path = tmp_path / "before.txt"
+    before_path.write_text("   \n", encoding="utf-8")
+
+    reason = detect_stale_before_snapshot(before_path, "   \n", "起草した行")
+    assert reason == "draft_line_not_added"
+
+
+def test_detect_stale_before_snapshot_flags_when_draft_line_not_newly_added(tmp_path):
+    """draft_line が before にも既にあり、before→after の diff 上「追加された行」
+    には含まれていない（after で新しく足されたのは別の行だけ）→ 編集後の内容に見える。
+    """
     before_path = tmp_path / "before.txt"
     before_path.write_text("- 既存行\n- 起草した行\n", encoding="utf-8")
 
     reason = detect_stale_before_snapshot(
         before_path, "- 既存行\n- 起草した行\n- 追加行\n", "起草した行",
     )
-    assert reason == "draft_line_already_present"
+    assert reason == "draft_line_not_added"
 
 
 def test_detect_stale_before_snapshot_flags_identical_content(tmp_path):
-    """(b) 控えと反映先の現在の内容が完全一致 → 編集後の内容に見える。
-
-    draft_line は check_line_applied が「未知の行頭記号」として一致判定しない
-    番号付き行にして、(a) の分岐を経由せず (b) 単独で発火することを確認する。
+    """控えと反映先の現在の内容が完全一致 → diff に追加行が1つも無く、
+    どの draft_line も「追加された行」に含まれえないため編集後の内容に見える。
     """
-    shared_content = "- 既存行\n1. 番号付き行\n"
+    shared_content = "- 既存行\n- 起草した行\n"
     before_path = tmp_path / "before.txt"
     before_path.write_text(shared_content, encoding="utf-8")
 
-    reason = detect_stale_before_snapshot(
-        before_path, shared_content, "1. 番号付き行",
-    )
-    assert reason == "before_equals_after"
+    reason = detect_stale_before_snapshot(before_path, shared_content, "起草した行")
+    assert reason == "draft_line_not_added"
 
 
 def test_detect_stale_before_snapshot_none_when_similar_line_only(tmp_path):
-    """陽性対照: draft_line と似ているだけの別の行が控えにあるだけでは止めない。"""
+    """陽性対照: draft_line と似ているだけの別の行が控えにあるだけでは止めない
+    （その行は diff 上 replace の追加側として現れ、draft_line と正規化後一致する）。
+    """
     before_path = tmp_path / "before.txt"
     before_path.write_text("- 既存行\n- 似た起草した行だが違う\n", encoding="utf-8")
 
@@ -698,31 +760,74 @@ def test_detect_stale_before_snapshot_none_when_similar_line_only(tmp_path):
     assert reason is None
 
 
-def test_detect_stale_before_snapshot_none_when_only_whitespace_differs(tmp_path):
-    """(b) の比較は完全一致（sha256）のみ——前後の空白だけ違う場合まで
-    「同一」と緩めない（strip 等の緩い比較への回避を塞ぐ・#696 依頼の指定どおり
-    ``evolve_decision_ids.sha256`` の完全一致で比較する）。draft_line は
-    check_line_applied が一致判定しない番号付き行にして (a) を経由させない。
+def test_detect_stale_before_snapshot_flags_whitespace_only_addition(tmp_path):
+    """#696 レビュー陰性対照「末尾改行違い」: 控えと反映先が実質同一（末尾の空行
+    が増えただけ）の場合、その空行だけが diff 上「追加された行」になり draft_line
+    とは一致しないため、依然として編集後の内容に見える（緩い比較への抜け道にしない）。
     """
     before_path = tmp_path / "before.txt"
-    before_path.write_text("- 既存行\n1. 番号付き行\n", encoding="utf-8")
+    before_path.write_text("- 既存行\n- 起草した行\n", encoding="utf-8")
 
     reason = detect_stale_before_snapshot(
-        before_path, "- 既存行\n1. 番号付き行\n\n", "1. 番号付き行",
+        before_path, "- 既存行\n- 起草した行\n\n", "起草した行",
+    )
+    assert reason == "draft_line_not_added"
+
+
+def test_detect_stale_before_snapshot_reuses_bullet_normalization(tmp_path):
+    """新しく追加された行の判定が check_line_applied と同じ正規化を使うことを
+    確認する（行頭の `- ` とインデント・前後空白の書式ノイズだけで
+    誤って「追加されていない」と判定しない）。"""
+    before_path = tmp_path / "before.txt"
+    before_path.write_text("- 既存行\n", encoding="utf-8")
+
+    reason = detect_stale_before_snapshot(
+        before_path, "- 既存行\n  -   起草した行  \n", "起草した行",
     )
     assert reason is None
 
 
-def test_detect_stale_before_snapshot_reuses_bullet_normalization(tmp_path):
-    """控え側の判定が check_line_applied と同じ正規化を使うことを確認する
-    （行頭の `- ` とインデント・前後空白だけが異なる行を同一視する）。"""
+# ─── #696 レビュー Must1: CLI 陽性対照3件と対応する単体レベルの回帰 ─────────
+#     （行の移動／既存行と同じ文言の別位置への追加／コードブロック内の同一文言。
+#     旧版「控えに draft_line が在るか」は正当な入力をいずれも誤って止めていた）
+
+
+def test_detect_stale_before_snapshot_none_when_line_moved(tmp_path):
+    """行の移動: draft_line と同じ文言の行が元々 before にあり、それを別の位置へ
+    移しただけ（内容としては新規追加ではない）でも、diff は移動元/移動先を
+    insert/delete のペアとして表すため、移動先（追加側）としてちゃんと検出される。
+    """
     before_path = tmp_path / "before.txt"
-    before_path.write_text("  -   起草した行  \n", encoding="utf-8")
+    before_path.write_text("- A\n- 起草した行\n- C\n", encoding="utf-8")
 
     reason = detect_stale_before_snapshot(
-        before_path, "- 既存行\n- 起草した行\n", "起草した行",
+        before_path, "- 起草した行\n- A\n- C\n", "起草した行",
     )
-    assert reason == "draft_line_already_present"
+    assert reason is None
+
+
+def test_detect_stale_before_snapshot_none_when_existing_line_duplicated_elsewhere(tmp_path):
+    """既存行と同じ文言をもう1か所に足す: draft_line と同じ文言の行が既に別の
+    位置に存在していても、新しく追加された2つ目の occurrence は diff 上
+    正しく「追加された行」として現れる。"""
+    before_path = tmp_path / "before.txt"
+    before_path.write_text("- X\n- Y\n", encoding="utf-8")
+
+    reason = detect_stale_before_snapshot(before_path, "- X\n- Y\n- X\n", "X")
+    assert reason is None
+
+
+def test_detect_stale_before_snapshot_none_when_same_text_inside_code_block(tmp_path):
+    """コードブロック内に同文言: draft_line と同じ文言がコードブロック内の例示
+    として既に存在していても、コードブロック外に新しく足された実際の追加行は
+    diff 上そちらだけが「追加された行」として現れる。"""
+    before_path = tmp_path / "before.txt"
+    before_path.write_text("```\n- draft line\n```\n", encoding="utf-8")
+
+    reason = detect_stale_before_snapshot(
+        before_path, "```\n- draft line\n```\n- draft line\n", "draft line",
+    )
+    assert reason is None
 
 
 # ─── ロック（C4/C26: 手順3〜5 は同一 history lock 内）───────────────────────
