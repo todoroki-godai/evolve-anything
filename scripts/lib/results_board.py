@@ -48,6 +48,11 @@ _WINDOW_DAYS = 30
 _CAPTURE_EVAL_FILENAME = "a0_eval_set.jsonl"
 _CAPTURE_EVAL_PATH = Path(__file__).resolve().parents[1] / "bench" / _CAPTURE_EVAL_FILENAME
 _JUDGE_RESULTS_PATH = Path(__file__).resolve().parents[2] / ".claude/hillclimb/correction-judge/baseline/results.jsonl"
+_HOLDOUT_EVAL_SET = (
+    "holdout682",
+    "bench/holdout_682/holdout_682_eval_set.jsonl",
+    ".claude/hillclimb/correction-judge/holdout682-after/results.jsonl",
+)
 
 
 def _capture_eval_candidates() -> List[Path]:
@@ -352,6 +357,16 @@ def build_results_board(
         capture_union = load_capture_union(_capture_eval_candidates(), judge_results_path)
     except Exception:
         capture_union = {"measured": False, "reason": "判定結果の読込失敗"}
+    try:
+        import rl_common
+        holdout_name, eval_relative, results_relative = _HOLDOUT_EVAL_SET
+        capture_holdout = load_capture_union(
+            [Path(rl_common.DATA_DIR) / eval_relative],
+            Path(__file__).resolve().parents[2] / results_relative,
+            eval_set_name=holdout_name,
+        )
+    except Exception:
+        capture_holdout = {"measured": False, "reason": "確認用セットの読込失敗"}
 
     pillar2_fallback = {
         "count": 0,
@@ -449,6 +464,7 @@ def build_results_board(
         "correction_rate": correction_rate,
         "capture_recall": capture_recall,
         "capture_union": capture_union,
+        "capture_holdout": capture_holdout,
         "pillar2": pillar2,
         "measurement_scopes": scopes,
         "measurements": measurements,
@@ -472,16 +488,23 @@ def render_results_board(board: Dict[str, Any]) -> List[str]:
     scopes = board.get("measurement_scopes") or pillar_scopes(board.get("slug", "(unknown)"))
     measurements = board.get("measurements") or {}
 
-    union = board.get("capture_union") or {"display": False}
+    holdout = board.get("capture_holdout") or {"measured": False, "reason": "確認用セットの測定値なし"}
+    if holdout.get("measured") and holdout.get("display", True):
+        low, high = holdout["recall_ci"]
+        jst_time = "〜".join(datetime.fromisoformat(t).astimezone(timezone(timedelta(hours=9))).strftime("%Y-%m-%d %H:%M JST") for t in holdout["generated_at"].split("〜"))
+        lines.append(f"**柱1 捕捉率（確認用セット・調整に不使用）: {holdout['caught']}/{holdout['positives']} = {holdout['recall']:.1%}** "
+                     f"（Wilson 95% CI {low:.1%}–{high:.1%}・精度 {holdout['precision']:.1%}）柱1の主指標")
+        lines.append(f"内訳: 正規表現 {holdout['regex_caught']}/{holdout['positives']}・AI 候補（朝の y/n 前・未保存）{holdout['judge_caught']}/{holdout['positives']} "
+                     f"／ AI 判定の来歴: {jst_time}・版 {holdout['harness_sha'][:8]}・モデル別名 {holdout['model']}・バッチ設定 {holdout['batch_size']}")
+    else:
+        lines.append(f"**柱1 捕捉率（確認用セット・調整に不使用）: 測定不能（{holdout.get('reason', '来歴不明')}）**")
+    union = board.get("capture_union") or {"measured": False, "reason": "a0 の測定値なし"}
     if union.get("measured"):
-        low, high = union["recall_ci"]
         jst_time = "〜".join(datetime.fromisoformat(t).astimezone(timezone(timedelta(hours=9))).strftime("%Y-%m-%d %H:%M JST") for t in union["generated_at"].split("〜"))
-        lines.append(f"**柱1 捕捉率（評価セット・2経路）: {union['caught']}/{union['positives']} = {union['recall']:.1%}** "
-                     f"（Wilson 95% CI {low:.1%}–{high:.1%}・精度 {union['precision']:.1%}）柱1の主指標")
-        lines.append(f"内訳: 正規表現 {union['regex_caught']}/{union['positives']}・AI 候補（朝の y/n 前・未保存）{union['judge_caught']}/{union['positives']} "
-                     f"／ AI 判定の来歴: {jst_time}・版 {union['harness_sha'][:8]}・モデル別名 {union['model']}・バッチ設定 {union['batch_size']}")
-    elif union.get("display", True):
-        lines.append(f"**柱1 捕捉率（評価セット・2経路）: 測定不能（{union.get('reason', '来歴不明')}）**")
+        lines.append(f"参考: 調整に使った評価セットでの値 {union['caught']}/{union['positives']} = {union['recall']:.1%}（上振れするため到達の根拠にしない）")
+        lines.append(f"a0 の AI 判定の来歴: {jst_time}・版 {union['harness_sha'][:8]}・モデル別名 {union['model']}・バッチ設定 {union['batch_size']}")
+    else:
+        lines.append(f"参考: 調整に使った評価セットでの値 測定不能（{union.get('reason', '来歴不明')}。到達の根拠にしない）")
     capture = board.get("capture_recall") or {"measured": False, "reason": "評価セットなし"}
     if capture.get("measured"):
         recall_low, recall_high = capture["recall_ci"]
