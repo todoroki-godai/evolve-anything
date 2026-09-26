@@ -84,6 +84,35 @@ class TestVersionMixedWeekRendering:
         assert "10.0%" in text
         assert "版別" not in text  # 単一版週は重複表示しない
 
+    def test_positive_control_single_known_version_week_output_is_unchanged(self):
+        """陽性対照: 既知版1種だけの週では、未知版/食い違い検出の追加行は1行も出ない
+        （version_breakdown が無い週と markdown 出力が完全一致する）。"""
+        vb = {"28c25437f34a": {"judged": 10, "tp": 1, "rate": 0.1}}
+        w_with_vb = _week(rate=0.1, judged=10, tp=1, version_breakdown=vb)
+        w_without_vb = _week(rate=0.1, judged=10, tp=1, version_breakdown={})
+        lines_with = rr._render_correction_rate(_correction_rate([w_with_vb]))
+        lines_without = rr._render_correction_rate(_correction_rate([w_without_vb]))
+        assert lines_with == lines_without
+
+    def test_single_unknown_version_week_shows_label_and_fingerprint(self):
+        """#690 巡3後 [Must]: 週全体が未知版1種だけでも「ふつうの率」として黙って
+        並ばない。版ラベル（未知版:プレフィクス）と fingerprint が同じ描画結果に現れる。"""
+        vb = {"未知版:e6a3814e11e7": {"judged": 10, "tp": 1, "rate": 0.1}}
+        w = _week(rate=0.1, judged=10, tp=1, version_breakdown=vb)
+        lines = rr._render_correction_rate(_correction_rate([w]))
+        text = "\n".join(lines)
+        assert "未知版" in text
+        assert "e6a3814e11e7" in text
+
+    def test_single_mismatch_version_week_shows_label(self):
+        vb = {"食い違い:28c25437f34a/53c3982a2738": {"judged": 10, "tp": 1, "rate": 0.1}}
+        w = _week(rate=0.1, judged=10, tp=1, version_breakdown=vb)
+        lines = rr._render_correction_rate(_correction_rate([w]))
+        text = "\n".join(lines)
+        assert "食い違い" in text
+        assert "28c25437f34a" in text
+        assert "53c3982a2738" in text
+
     def test_no_version_breakdown_falls_back_to_plain_rendering(self):
         """既存呼び出し（version_breakdown を持たない旧フォーマット）は壊れない。"""
         w = {
