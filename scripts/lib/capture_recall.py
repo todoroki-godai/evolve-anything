@@ -93,11 +93,12 @@ def evaluate_capture_recall(
     }
 
 
-_REMEASURE = ("既存 .claude/hillclimb/correction-judge/baseline を "
+_REMEASURE = {"a0": ("既存 .claude/hillclimb/correction-judge/baseline を "
               ".claude/hillclimb/correction-judge/baseline-<YYYYMMDD> へ退避後、"
               "python3 scripts/bench/judge_eval.py --run --approve-harness --variant baseline。"
               "共有 checkout ではなく worktree で実行し、新しい baseline/results.jsonl と _state.json を commit して PR にする。"
-              "退避した baseline-<YYYYMMDD>/ は commit せず削除する（旧結果は git 履歴に残る）。")
+              "退避した baseline-<YYYYMMDD>/ は commit せず削除する（旧結果は git 履歴に残る）。"),
+              "holdout682": "確認用セットは1回使用済みで取り直さない。判定を変えたら新しい確認用セットを作って測る（#682）"}
 
 
 def evaluate_capture_union(
@@ -106,7 +107,7 @@ def evaluate_capture_union(
 ) -> dict[str, Any]:
     """Advisory only: detect known ID/content/provenance mismatches, then count both lanes."""
     def unavailable(reason: str) -> dict[str, Any]:
-        return {"measured": False, "reason": f"{reason}。再測: {_REMEASURE}"}
+        return {"measured": False, "reason": f"{reason}。再測: {_REMEASURE[eval_set_name]}"}
 
     examples, results = list(eval_rows), list(result_rows)
     eval_by_id: dict[str, dict[str, Any]] = {}
@@ -200,7 +201,7 @@ def load_capture_union(eval_candidates: Iterable[Path], results_path: Path,
     if rows is None:
         return {"measured": False, "reason": "評価セット不一致" if mismatch else "評価セットなし", "display": results_path.exists()}
     if not results_path.exists():
-        return {"measured": False, "reason": f"AI 判定結果なし。再測: {_REMEASURE}"}
+        return {"measured": False, "reason": f"AI 判定結果なし。再測: {_REMEASURE[eval_set_name]}"}
     try:
         results = [json.loads(line) for line in results_path.read_text(encoding="utf-8").splitlines() if line.strip()]
     except (OSError, ValueError):

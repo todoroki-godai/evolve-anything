@@ -143,6 +143,29 @@ def test_holdout_alternate_candidate_order_and_zero_hits(tmp_path, monkeypatch):
     assert "合計の分母・検出数が不足" in out["reason"]
 
 
+def test_holdout_remeasure_instruction_on_validation_failure():
+    rows, results = fixture()
+    results[0]["meta"]["harness_sha"] = "stale"
+    out = evaluate_capture_union(rows, results, "version", "haiku", 30, eval_set_name="holdout682")
+    assert out["measured"] is False
+    assert "新しい確認用セットを作って測る" in out["reason"]
+    assert "baseline" not in out["reason"]
+    a0 = evaluate_capture_union(rows, results, "version", "haiku", 30)
+    assert "baseline" in a0["reason"]
+
+
+def test_holdout_remeasure_instruction_on_missing_results(tmp_path, monkeypatch):
+    rows, _ = fixture()
+    raw = "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows).encode()
+    eval_path = tmp_path / "holdout.jsonl"
+    eval_path.write_bytes(raw)
+    monkeypatch.setitem(capture_recall.APPROVED_EVAL_SETS, "holdout682", (len(rows), hashlib.sha256(raw).hexdigest()))
+    out = capture_recall.load_capture_union([eval_path], tmp_path / "missing-results.jsonl", eval_set_name="holdout682")
+    assert out["measured"] is False
+    assert "新しい確認用セットを作って測る" in out["reason"]
+    assert "baseline" not in out["reason"]
+
+
 def test_advisory_union_valid_positive_control():
     rows, results = fixture()
     out = measure(rows, results)
