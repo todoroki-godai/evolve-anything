@@ -34,13 +34,21 @@ FP 較正（実 SKILL.md 全件・skills/*/SKILL.md 25 個・#191 dry-run）で�
      静的に一意特定できないため、誤帰属（本来無関係な定義を reachable と誤認 / zombie と
      誤認）を避けて precision を優先する。
 
-  e) **caller 判定は scripts/**.py の AST 参照 + SKILL.md の fenced code block テキスト一致の
-     両方を見る**。当初 scripts/**.py の Name/Attribute 参照のみで設計したところ、
+  e) **caller 判定は scripts/**.py の AST 参照 + SKILL.md / references/*.md の fenced code block
+     テキスト一致の両方を見る**。当初 scripts/**.py の Name/Attribute 参照のみで設計したところ、
      agent-brushup の `check_quality()`（SKILL.md の python code block から実際に呼ばれている）
      や prune の `archive_file(...)`（同様）が誤って「到達不能」と判定された。SKILL.md の
      code block はユーザー（エージェント）が実際に実行する起動経路であり、Layer 3 が
      その block 自体の実行可否を検証するため、ここでは静的テキスト一致で「呼ばれている
      ことになっている」ことだけ確認すれば十分（実行はしない）。
+     **さらに `references/*.md` も同じ扱いにする**（#191 再較正）: 当初 SKILL.md 本体の
+     fenced block しか見ておらず、`skills/evolve/references/correction-review.md` の
+     `bootstrap_backlog.mark_done()`・`auto-memory-drain.md` の `ingest_memory_results()`・
+     `prune-merge.md` の `add_merge_suppression()` が誤検出された（実行コードが SKILL.md 本体
+     ではなく参照先の手順書に書かれている構成）。走査範囲は `dogfood.layer3.find_skill_mds`
+     （Layer 3 が実際に実行検証する木）と同じにし、Layer 3 が見ない `references/` 配下の
+     さらに下の階層までは深追いしない（「Layer 3 が検証しない block」を到達可能の根拠に
+     しないため）。
 
   f) **`import X as Y` エイリアス越しの呼び出しも caller として解決する**。
      `from suppression_ledger import reconcile_surfaced as _reconcile` の後 `_reconcile(...)`
@@ -63,6 +71,14 @@ FP 較正（実 SKILL.md 全件・skills/*/SKILL.md 25 個・#191 dry-run）で�
   i) **`tests/` 配下にしか定義が無い candidate は「自コードベースの実関数」と認めない**
      （unresolved 扱い）。production 関数の宣言チェックであり、test helper の偶然の名前衝突を
      拾わないため。
+
+**既知の限界（迂回可能・`no-denylist-checks.md`）**: caller 判定は identifier の文字列一致
+（AST の Name/Attribute 一致、または fenced code block 本文の正規表現一致）で行い、
+呼び出しの意味的な同一性までは見ない。動的呼び出し（h）・別ファイルへの手動コピー・
+本チェックが走査しない場所（`references/` のさらに下の階層等）に置かれた呼び出しは
+検出できない。**このため本チェックは dogfood gate の非ブロッキング advisory としてのみ
+使う**（`dogfood/cli.py` の `_run_skill_reachability_advisory` を参照。exit code に影響しない）。
+blocking 保証には使わない。
 """
 from __future__ import annotations
 
@@ -238,16 +254,30 @@ def build_call_graph_index(repo_root: Path, names: Set[str]) -> CallGraphIndex:
 
 
 def _skill_md_code_block_callers(repo_root: Path, names: Set[str]) -> Dict[str, Set[str]]:
-    """skills/*/SKILL.md の fenced code block（python/bash）本文の candidate 名一致を集める。
+    """skills/*/SKILL.md + skills/*/references/*.md の fenced code block（python/bash）本文の
+    candidate 名一致を集める。
 
     Layer 3 が同じ block の実行検証を担うため、ここでは静的テキスト一致のみ（e の設計判断）。
+
+    **references/*.md も走査する**（#191 FP 再発防止）: SKILL.md 本体は「概要 + 参照先パス」
+    だけを書き、実行コード自体は `references/*.md` の fenced block に置く構成が実コーパスに
+    複数あった（`skills/evolve/references/correction-review.md` の `mark_done()`、
+    `auto-memory-drain.md` の `ingest_memory_results()`、`prune-merge.md` の
+    `add_merge_suppression()`）。これらは SKILL.md 直下しか見ない実装では到達不能の偽陽性になる。
+    列挙は `dogfood.layer3.find_skill_mds` と同じ glob（`skills/*/SKILL.md` +
+    `skills/*/references/*.md`）を再利用し、Layer 3 が「実際に検証対象とする」木と一致させる
+    （二重管理を避ける・単一ソース）。**references のさらに下の階層（`references/sub/*.md` 等）は
+    対象外** — Layer 3（`find_skill_mds`）自身がその階層まで見ない設計であり、ここだけ `**` で
+    深追いすると「Layer 3 が検証していない block」を到達可能の根拠にしてしまう
+    （caller 判定の対象は Layer 3 が実際に実行検証する範囲と一致させるのが e の設計判断の前提）。
     """
     root = Path(repo_root)
     out: Dict[str, Set[str]] = {}
 
     from dogfood import skill_blocks  # 遅延 import（循環回避・dogfood 未解決環境への耐性）
+    from dogfood.layer3 import find_skill_mds  # SKILL.md + references/*.md の単一ソース
 
-    for md in sorted(root.glob("skills/*/SKILL.md")):
+    for md in find_skill_mds(root):
         rel = md.relative_to(root).as_posix()
         for block in skill_blocks.extract_code_blocks(md):
             if block["lang"] not in _MD_FENCE_LANGS:

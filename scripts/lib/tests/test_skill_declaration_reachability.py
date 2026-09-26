@@ -17,6 +17,10 @@
 - 複数モジュールに同名定義がある candidate は誤帰属回避のため判定対象から除外する（ambiguous）。
 - 自コードベースに定義が無い candidate（Python 標準関数・外部ライブラリ・CLI コマンド形）は
   対象外（unresolved）。
+- caller 判定は SKILL.md 本体だけでなく `references/*.md` の fenced code block も見る
+  （`dogfood.layer3.find_skill_mds` と同じ走査範囲）。ただし識別子の文字列一致による検出
+  であり、**既知の形のみ検出・迂回可能**（`no-denylist-checks.md`）。dogfood gate では
+  非ブロッキング advisory としてのみ使う。
 """
 from __future__ import annotations
 
@@ -175,6 +179,44 @@ def test_reachable_via_skill_md_code_block(tmp_path: Path) -> None:
     )
     report = sdr.detect_unreachable_declarations(root)
     assert report.unreachable == []
+
+
+def test_reachable_via_references_code_block(tmp_path: Path) -> None:
+    """SKILL.md 本体でなく `references/*.md` の fenced code block だけに呼び出しがある場合も
+    到達可能と判定する（#191 FP 再発防止 — correction-review.md 型の `mark_done()` 等、
+    実行コードが SKILL.md から参照される references/ の手順書に書かれているケース）。"""
+    root = _make_repo(tmp_path)
+    _write(root / "scripts/lib/bootstrap_backlog.py", "def mark_done(slug, dry_run=False):\n    return {}\n")
+    _write(
+        root / "skills/evolve/SKILL.md",
+        "Step 6.1 の完了 marker は `bootstrap_backlog.mark_done(slug, dry_run=dry_run)` で立てる。\n"
+        "詳細手順は references/correction-review.md を参照。\n",
+    )
+    _write(
+        root / "skills/evolve/references/correction-review.md",
+        "```python\n"
+        "from correction_semantic import bootstrap_backlog\n"
+        "res = bootstrap_backlog.mark_done(slug, dry_run=dry_run)\n"
+        "```\n",
+    )
+    report = sdr.detect_unreachable_declarations(root)
+    assert report.unreachable == []
+
+
+def test_still_unreachable_when_no_caller_anywhere_including_references(tmp_path: Path) -> None:
+    """陽性対照: references/*.md を走査対象に加えても、実際に呼び出しが無ければ
+    到達不能のまま検出される（references 追加が過検出側に倒れていないことの確認）。"""
+    root = _make_repo(tmp_path)
+    _write(root / "scripts/lib/foo.py", "def zombie_func():\n    return 1\n")
+    _write(root / "skills/demo/SKILL.md", "`zombie_func()` を実行する。\n")
+    _write(
+        root / "skills/demo/references/unrelated.md",
+        "```python\n"
+        "print('zombie_func is mentioned as text but not called: zombie_func')\n"
+        "```\n",
+    )
+    report = sdr.detect_unreachable_declarations(root)
+    assert [u.name for u in report.unreachable] == ["zombie_func"]
 
 
 def test_call_only_from_tests_dir_stays_unreachable(tmp_path: Path) -> None:
