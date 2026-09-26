@@ -1,0 +1,350 @@
+#!/usr/bin/env python3
+"""Freeze and sample the #691 holdout without exposing utterance text in reports."""
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import re
+import sys
+from pathlib import Path
+from typing import Any
+
+NEW_SINCE = "2026-08-12T00:00:00Z"
+HERE = Path(__file__).resolve().parent
+REPO = HERE.parent.parent
+MANIFEST = HERE / "holdout691_manifest.json"
+KEY_FIELDS = ("source_path", "line_no", "session_id", "timestamp", "text_sha256")
+ROW_FIELDS = ("source_path", "line_no", "session_id", "timestamp", "text")
+DATA_ROOT = Path.home() / ".claude/evolve-anything/bench/holdout_691"
+POPULATION_WHERE = ("source_kind = 'dialogue' AND source_path NOT LIKE '%/subagents/%' "
+                    "AND timestamp >= ? AND timestamp < ?")
+POPULATION_FILTER = {"sql_where": POPULATION_WHERE}
+sys.path.insert(0, str(REPO / "scripts" / "lib"))
+
+
+def _external_output(path: Path, root: Path = DATA_ROOT) -> Path:
+    """Only an existing directory under the single holdout root may receive artifacts."""
+    root, parent = Path(root), Path(path).parent
+    if not root.is_dir() or not parent.is_dir():
+        raise ValueError("holdout output directory does not exist")
+    if any(ancestor.is_symlink() for ancestor in (root, *root.parents)):
+        raise ValueError("holdout root must be a real directory")
+    actual_parent = parent.resolve()
+    if not any(os.path.samefile(ancestor, root) for ancestor in
+               (actual_parent, *actual_parent.parents)):
+        raise ValueError("artifact output must be under the holdout root")
+    # On case-insensitive volumes samefile alone accepts an alternate spelling.
+    for ancestor in (parent, *parent.parents):
+        if ancestor == ancestor.parent:
+            break
+        if ancestor.name not in os.listdir(ancestor.parent):
+            raise ValueError("artifact output must use the holdout root's actual spelling")
+        if os.path.samefile(ancestor, root):
+            break
+    return Path(path)
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as source:
+        for chunk in iter(lambda: source.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _window(until: str) -> None:
+    if not isinstance(until, str) or not re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z", until):
+        raise ValueError("until must be a UTC timestamp")
+    from datetime import datetime
+
+    try:
+        parsed = datetime.fromisoformat(until.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError("invalid until timestamp") from exc
+    if parsed <= datetime.fromisoformat(NEW_SINCE.replace("Z", "+00:00")):
+        raise ValueError("until must follow since")
+
+
+def _latest_timestamp(current: str | None, candidate: str) -> str:
+    """Compare UTC timestamps even when fractional-second precision differs."""
+    from datetime import datetime
+
+    parsed = datetime.fromisoformat(candidate.replace("Z", "+00:00"))
+    if current is None or parsed > datetime.fromisoformat(current.replace("Z", "+00:00")):
+        return candidate
+    return current
+
+
+def _json_lines(path: Path):
+    with Path(path).open("r", encoding="utf-8") as source:
+        for line_no, line in enumerate(source, 1):
+            try:
+                value = json.loads(line)
+            except (json.JSONDecodeError, UnicodeError) as exc:
+                raise ValueError(f"invalid JSON at line {line_no}") from exc
+            if not isinstance(value, dict):
+                raise ValueError(f"invalid object at line {line_no}")
+            yield value
+
+
+def _key(row: dict[str, Any], *, has_text: bool) -> dict[str, Any]:
+    fields = ROW_FIELDS if has_text else KEY_FIELDS
+    if any(field not in row for field in fields):
+        raise ValueError("missing required field")
+    if (not isinstance(row["source_path"], str) or not row["source_path"]
+            or type(row["line_no"]) is not int or row["line_no"] < 0
+            or not isinstance(row["session_id"], str) or not row["session_id"]
+            or not isinstance(row["timestamp"], str) or not row["timestamp"]):
+        raise ValueError("invalid key field")
+    if has_text:
+        if not isinstance(row["text"], str):
+            raise ValueError("invalid text field")
+        text_sha256 = hashlib.sha256(row["text"].encode("utf-8")).hexdigest()
+    else:
+        text_sha256 = row["text_sha256"]
+        if not isinstance(text_sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", text_sha256):
+            raise ValueError("invalid text hash")
+    return {"source_path": row["source_path"], "line_no": row["line_no"],
+            "session_id": row["session_id"], "timestamp": row["timestamp"],
+            "text_sha256": text_sha256}
+
+
+def _identities(key: dict[str, Any]) -> tuple[tuple[Any, ...], tuple[Any, ...]]:
+    return ((key["source_path"], key["line_no"]),
+            (key["session_id"], key["timestamp"], key["text_sha256"]))
+
+
+def freeze_population(db_path: Path, output: Path, until: str, *,
+                      root: Path = DATA_ROOT) -> dict[str, Any]:
+    """Write the half-open dialogue window once; existing output is never replaced."""
+    _window(until)
+    output = _external_output(output, root)
+    db_path = Path(db_path)
+    if not db_path.is_file():
+        raise ValueError("database does not exist")
+    count = 0
+    max_timestamp = None
+    digest = hashlib.sha256()
+    created = False
+    try:
+        import duckdb
+        with output.open("xb") as dest:
+            created = True
+            con = duckdb.connect(str(db_path), read_only=True)
+            try:
+                cursor = con.execute(
+                    "SELECT source_path, line_no, pj_slug, session_id, timestamp, text, prev_action "
+                    f"FROM utterances WHERE {POPULATION_WHERE} "
+                    "ORDER BY session_id, timestamp, line_no, source_path",
+                    [NEW_SINCE, until],
+                )
+                names = ("source_path", "line_no", "pj_slug", "session_id", "timestamp",
+                         "text", "prev_action")
+                while batch := cursor.fetchmany(256):
+                    for record in batch:
+                        row = dict(zip(names, record))
+                        max_timestamp = _latest_timestamp(max_timestamp, row["timestamp"])
+                        payload = (json.dumps(row, ensure_ascii=False)
+                                   + "\n").encode("utf-8")
+                        dest.write(payload)
+                        digest.update(payload)
+                        count += 1
+            finally:
+                con.close()
+            snapshot = {"sha256": _sha256(db_path), "size_bytes": db_path.stat().st_size}
+    except Exception:
+        if created:
+            output.unlink()
+        raise
+    return {"population_rows": count, "population_dump_sha256": digest.hexdigest(),
+            "db_snapshot": snapshot, "max_timestamp": max_timestamp,
+            "population_filter": POPULATION_FILTER}
+
+
+def extract_keys(source: Path, output: Path, *, root: Path = DATA_ROOT) -> dict[str, Any]:
+    """Stream strict JSONL to five-field key JSONL; never write or print text."""
+    output = _external_output(output, root)
+    if not os.path.samefile(output.parent, root):
+        raise ValueError("key output must be directly in the holdout root")
+    if not output.name.endswith(".keys.jsonl"):
+        raise ValueError("key output must end in .keys.jsonl")
+    count = 0
+    created = False
+    try:
+        with output.open("x", encoding="utf-8") as dest:
+            created = True
+            for row in _json_lines(source):
+                dest.write(json.dumps(_key(row, has_text=True), ensure_ascii=False) + "\n")
+                count += 1
+    except Exception:
+        if created:
+            output.unlink()
+        raise
+    return {"rows": count, "source_sha256": _sha256(source)}
+
+
+def _read_key_sets(paths: list[Path]) -> tuple[set, set, list[dict[str, Any]]]:
+    physical, logical = set(), set()
+    summaries = []
+    for path in paths:
+        rows, max_timestamp = 0, None
+        for row in _json_lines(path):
+            p, l = _identities(_key(row, has_text=False))
+            physical.add(p)
+            logical.add(l)
+            rows += 1
+            max_timestamp = _latest_timestamp(max_timestamp, row["timestamp"])
+        summaries.append({"file": path.name, "sha256": _sha256(path),
+                          "rows": rows, "max_timestamp": max_timestamp})
+    return physical, logical, summaries
+
+
+def count_duplicates(new: Path, existing: list[Path]) -> dict[str, int]:
+    """Count only duplicates involving the new set, including within the new set."""
+    physical, logical, _ = _read_key_sets(existing)
+    counts = {"physical": 0, "logical": 0}
+    for row in _json_lines(new):
+        p, l = _identities(_key(row, has_text=False))
+        counts["physical"] += p in physical
+        counts["logical"] += l in logical
+        physical.add(p)
+        logical.add(l)
+    return counts
+
+
+def sample_population(population: Path, output: Path, *, n: int, seed: int,
+                      population_sha256: str, root: Path = DATA_ROOT) -> dict[str, Any]:
+    """Exclude adopted keys before calling the existing random sampler."""
+    output = _external_output(output, root)
+    if type(n) is not int or n < 1 or type(seed) is not int:
+        raise ValueError("n must be positive and seed must be an integer")
+    if _sha256(population) != population_sha256:
+        raise ValueError("frozen population hash mismatch")
+    key_files = sorted(Path(root).glob("*.keys.jsonl"))
+    if not key_files:
+        raise ValueError("no adopted key files in holdout root")
+    physical, logical, summaries = _read_key_sets(key_files)
+    candidates = []
+    excluded = {"physical": 0, "logical": 0}
+    for row in _json_lines(population):
+        p, l = _identities(_key(row, has_text=True))
+        hit_p, hit_l = p in physical, l in logical
+        excluded["physical"] += hit_p
+        excluded["logical"] += hit_l
+        if not (hit_p or hit_l):
+            candidates.append(row)
+    from a0_capture_replay import sample_random_plus_machinery_oversample
+
+    selected, _ = sample_random_plus_machinery_oversample(candidates, n, seed)
+    key_output = _external_output(Path(root) / f"{output.name}.keys.jsonl", root)
+    if output.exists() or key_output.exists():
+        raise FileExistsError("sample or key output already exists")
+    created = []
+    try:
+        with output.open("x", encoding="utf-8") as dest:
+            created.append(output)
+            for row in selected:
+                dest.write(json.dumps(row, ensure_ascii=False) + "\n")
+        with key_output.open("x", encoding="utf-8") as dest:
+            created.append(key_output)
+            for row in selected:
+                dest.write(json.dumps(_key(row, has_text=True), ensure_ascii=False) + "\n")
+    except Exception:
+        for path in created:
+            path.unlink()
+        raise
+    return {"remaining": len(candidates), "sampled": len(selected),
+            "excluded_keys_summary": excluded, "key_files": summaries}
+
+
+def write_manifest(path: Path = MANIFEST, *, until: str, freeze: dict[str, Any],
+                   seed_log: list[dict[str, int]], excluded_keys_summary: dict[str, int],
+                   key_files: list[dict[str, Any]]) -> None:
+    """Write only aggregate and hash values to the tracked manifest."""
+    _window(until)
+    if set(freeze) != {"population_rows", "population_dump_sha256", "db_snapshot",
+                       "max_timestamp", "population_filter"}:
+        raise ValueError("invalid freeze summary")
+    if (type(freeze["population_rows"]) is not int or freeze["population_rows"] < 0
+            or not re.fullmatch(r"[0-9a-f]{64}", freeze["population_dump_sha256"])
+            or set(freeze["db_snapshot"]) != {"sha256", "size_bytes"}
+            or not re.fullmatch(r"[0-9a-f]{64}", freeze["db_snapshot"]["sha256"])
+            or type(freeze["db_snapshot"]["size_bytes"]) is not int
+            or freeze["population_filter"] != POPULATION_FILTER
+            or (freeze["max_timestamp"] is not None and
+                not isinstance(freeze["max_timestamp"], str))
+            or any(set(item) != {"seed", "n"} or
+                   type(item["seed"]) is not int or type(item["n"]) is not int for item in seed_log)
+            or set(excluded_keys_summary) != {"physical", "logical"}
+            or any(type(x) is not int or x < 0 for x in excluded_keys_summary.values())
+            or not key_files
+            or any(set(item) != {"file", "sha256", "rows", "max_timestamp"}
+                   or not item["file"].endswith(".keys.jsonl")
+                   or not re.fullmatch(r"[0-9a-f]{64}", item["sha256"])
+                   or type(item["rows"]) is not int or item["rows"] < 0
+                   or (item["max_timestamp"] is not None and
+                       not isinstance(item["max_timestamp"], str)) for item in key_files)):
+        raise ValueError("invalid manifest summary")
+    data = {"since": NEW_SINCE, "until": until, "source_kind": "dialogue", **freeze,
+            "seed_log": seed_log, "excluded_keys_summary": excluded_keys_summary,
+            "key_files": key_files}
+    Path(path).write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    sub = parser.add_subparsers(dest="command", required=True)
+    freeze = sub.add_parser("freeze")
+    freeze.add_argument("--db", type=Path, required=True)
+    freeze.add_argument("--out", type=Path, required=True)
+    freeze.add_argument("--until", required=True)
+    keys = sub.add_parser("keys")
+    keys.add_argument("--source", type=Path, required=True)
+    keys.add_argument("--out", type=Path, required=True)
+    sample = sub.add_parser("sample")
+    sample.add_argument("--population", type=Path, required=True)
+    sample.add_argument("--population-sha256", required=True)
+    sample.add_argument("--out", type=Path, required=True)
+    sample.add_argument("--n", type=int, required=True)
+    sample.add_argument("--seed", type=int, required=True)
+    verify = sub.add_parser("verify-keys")
+    verify.add_argument("--new", type=Path, required=True)
+    verify.add_argument("--existing", type=Path, nargs="+", required=True)
+    manifest = sub.add_parser("write-manifest")
+    manifest.add_argument("--out", type=Path, default=MANIFEST)
+    manifest.add_argument("--until", required=True)
+    manifest.add_argument("--freeze-result", type=Path, required=True)
+    manifest.add_argument("--sample-result", type=Path, required=True)
+    manifest.add_argument("--seed", type=int, required=True)
+    manifest.add_argument("--n", type=int, required=True)
+    args = parser.parse_args()
+    try:
+        if args.command == "freeze":
+            result = freeze_population(args.db, args.out, args.until)
+        elif args.command == "keys":
+            result = extract_keys(args.source, args.out)
+        elif args.command == "sample":
+            result = sample_population(args.population, args.out, n=args.n, seed=args.seed,
+                                       population_sha256=args.population_sha256)
+        elif args.command == "verify-keys":
+            result = count_duplicates(args.new, args.existing)
+            if any(result.values()):
+                print(json.dumps(result, sort_keys=True))
+                parser.exit(1)
+        else:
+            freeze_result = json.loads(args.freeze_result.read_text())
+            sample_result = json.loads(args.sample_result.read_text())
+            write_manifest(args.out, until=args.until, freeze=freeze_result,
+                           seed_log=[{"seed": args.seed, "n": args.n}],
+                           excluded_keys_summary=sample_result["excluded_keys_summary"],
+                           key_files=sample_result["key_files"])
+            result = {"manifest": str(args.out)}
+    except Exception as exc:
+        parser.exit(1, f"holdout691: {type(exc).__name__}\n")
+    print(json.dumps(result, sort_keys=True))
+
+
+if __name__ == "__main__":
+    main()
