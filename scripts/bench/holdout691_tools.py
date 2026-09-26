@@ -67,6 +67,16 @@ def _window(until: str) -> None:
         raise ValueError("until must follow since")
 
 
+def _latest_timestamp(current: str | None, candidate: str) -> str:
+    """Compare UTC timestamps even when fractional-second precision differs."""
+    from datetime import datetime
+
+    parsed = datetime.fromisoformat(candidate.replace("Z", "+00:00"))
+    if current is None or parsed > datetime.fromisoformat(current.replace("Z", "+00:00")):
+        return candidate
+    return current
+
+
 def _json_lines(path: Path):
     with Path(path).open("r", encoding="utf-8") as source:
         for line_no, line in enumerate(source, 1):
@@ -144,8 +154,7 @@ def freeze_population(db_path: Path, output: Path, until: str, *,
                         dest.write(payload)
                         digest.update(payload)
                         count += 1
-                        if max_timestamp is None or row["timestamp"] > max_timestamp:
-                            max_timestamp = row["timestamp"]
+                        max_timestamp = _latest_timestamp(max_timestamp, row["timestamp"])
             finally:
                 con.close()
             snapshot = {"sha256": _sha256(db_path), "size_bytes": db_path.stat().st_size}
@@ -188,8 +197,7 @@ def _read_key_sets(paths: list[Path]) -> tuple[set, set, list[dict[str, Any]]]:
             physical.add(p)
             logical.add(l)
             rows += 1
-            if max_timestamp is None or row["timestamp"] > max_timestamp:
-                max_timestamp = row["timestamp"]
+            max_timestamp = _latest_timestamp(max_timestamp, row["timestamp"])
         summaries.append({"file": path.name, "sha256": _sha256(path),
                           "rows": rows, "max_timestamp": max_timestamp})
     return physical, logical, summaries
