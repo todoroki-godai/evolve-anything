@@ -77,18 +77,34 @@ LLM_JUDGE_CHANNEL = "llm_judge"
 # ─────────────────────────────────────────────────────────────────
 # 版の切替は生涯で2回のみ・単調・交互出現なし（2026-09-26 実測・#690 issue 本文の表。
 # weak_signals.jsonl の provenance.prompt_fingerprint 実測値と correction_judged.jsonl の
-# judged_at 分布から導出した固定値）。新しい切替が起きたら、この定数に1行追記する
-# （動的検出はしない — provenance は TP のみに付くため 0-TP 区間を検出できない盲点がある）。
+# judged_at 分布から導出した固定値）。
+#
+# **保守契約（巡2後 [Must] 是正）**: この固定テーブルは「更新しないと静かに腐る」。
+# 新しい fingerprint が本番の weak_signals.jsonl に現れたら（＝下記 _resolve_judge_version
+# が「未知版」バケットを返す週が観測されたら）、この定数に1行追記して直近の switch_at を
+# 実測すること。追記を怠っても表示は壊れない（後述のとおり未知版として分離表示される）ので
+# 安全側に倒れているが、系列としては読みにくいまま残る。
 _VERSION_SWITCHES: List["tuple[datetime, str]"] = [
     (datetime(2026, 8, 14, 0, 8, 48, tzinfo=timezone.utc), "28c25437f34a"),
     (datetime(2026, 9, 6, 0, 7, 45, tzinfo=timezone.utc), "53c3982a2738"),
 ]
+
+# _VERSION_SWITCHES に載っている既知ラベルの集合（None は「版なし」を表す既知の状態
+# なので含めない）。未知版検出（_resolve_judge_version）の単一ソース。
+_KNOWN_VERSION_LABELS = frozenset(label for _, label in _VERSION_SWITCHES)
+
+_UNKNOWN_VERSION_PREFIX = "未知版:"
+_VERSION_MISMATCH_PREFIX = "食い違い:"
 
 
 def _judge_version_for_judged_at(judged_at: Optional[datetime]) -> Optional[str]:
     """``judged_at`` から判定器の版ラベルを read 時に導出する（分母側の版・新ストア不要）。
 
     初回切替（2026-08-14）より前は版の記録が無い期間を表す ``None``（"版なし"）を返す。
+    **単独では判定基準の同一性に対して閉じていない**（時刻の範囲でしか判定していないため、
+    新しい版が来ても直前の既知ラベルに黙って丸め込む）。TP のみに付く
+    ``provenance.prompt_fingerprint``（producer 時点の実測値）と併用し、
+    ``_resolve_judge_version`` で食い違い・未知版を検出する。
     """
     if judged_at is None:
         return None
@@ -99,6 +115,30 @@ def _judge_version_for_judged_at(judged_at: Optional[datetime]) -> Optional[str]
         else:
             break
     return version
+
+
+def _resolve_judge_version(
+    judged_at_derived: Optional[str],
+    provenance_fingerprint: Optional[str],
+) -> Optional[str]:
+    """judged_at 由来（全 judged key に存在）と provenance（TP のみ・実測値）を両方見て
+    版ラベルを解決する（巡2後 [Must]: 未知版を黙って既知版として扱わない）。
+
+    - provenance が無い（非TP・旧レコード）: judged_at 由来をそのまま返す（0-TP 区間の
+      担保は judged_at 側が引き続き持つ）。
+    - provenance があり ``_KNOWN_VERSION_LABELS`` に無い（未知版）: 既知ラベルへ丸め込まず
+      ``"未知版:<fingerprint>"`` の専用バケットを返す（系列に単一値として混ぜない）。
+    - provenance があり既知だが judged_at 由来と食い違う: ``"食い違い:<judged>/<fp>"`` の
+      専用バケットを返す（どちらの出所を信じるか黙って選ばない）。
+    - 一致する場合はそのまま返す（通常系）。
+    """
+    if provenance_fingerprint is None:
+        return judged_at_derived
+    if provenance_fingerprint not in _KNOWN_VERSION_LABELS:
+        return f"{_UNKNOWN_VERSION_PREFIX}{provenance_fingerprint}"
+    if provenance_fingerprint != judged_at_derived:
+        return f"{_VERSION_MISMATCH_PREFIX}{judged_at_derived}/{provenance_fingerprint}"
+    return provenance_fingerprint
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -461,6 +501,11 @@ def compute_weekly_correction_rate(
         "conflict_keys": 0,
         # #400 A5: 同一 physical key に複数 category が付いた件数（週横断の合計）。
         "category_conflict_keys": 0,
+        # #690 巡2後 [Must]: _VERSION_SWITCHES に無い fingerprint を持つ TP の件数
+        # （週横断の合計。silence != evaluated — 0件でも必ず出す）。
+        "version_unknown_tp_count": 0,
+        # judged_at 由来の版と provenance.prompt_fingerprint が食い違う TP の件数。
+        "version_mismatch_tp_count": 0,
     }
 
     # ── judged_at_by_key（最古の有効判定を採用・§2.2 競合解決） ──────
@@ -484,8 +529,12 @@ def compute_weekly_correction_rate(
             if jat < existing:
                 judged_at_by_key[key] = jat
 
-    # #690 変更1: 版は judged_at から一意に導出する（single source・TP provenance の
-    # prompt_fingerprint は使わない — 0-TP 期間を検出できない盲点があるため）。
+    # #690 変更1: 版は judged_at から一意に導出する（single source・全 judged key に
+    # 存在し、0-TP 区間も検出できる）。**巡2後 [Must] 是正**: この導出だけでは
+    # 「時刻の範囲」で判定基準の同一性を代用しているため閉じていない（新しい版が来ても
+    # 直前の既知ラベルに黙って丸め込む）。TP の provenance.prompt_fingerprint
+    # （producer 時点の実測値）と週次集計の中で突合し、未知版・食い違いを
+    # ``_resolve_judge_version`` で検出する（下記の tp_provenance_fingerprint 経由）。
     version_by_key: Dict[str, Optional[str]] = {
         key: _judge_version_for_judged_at(jat) for key, jat in judged_at_by_key.items()
     }
@@ -580,6 +629,9 @@ def compute_weekly_correction_rate(
         failure_reasons: List[str] = list(source_failure_reasons)
         tp_keys: List[str] = []
         top3_source: List[Dict[str, Any]] = []
+        # #690 巡2後 [Must]: TP の provenance.prompt_fingerprint を judged_at 由来の版と
+        # 突合するため、key ごとに保持する（0-TP の judged key には無い＝TP限定）。
+        tp_provenance_fingerprint: Dict[str, Optional[str]] = {}
         for key in population_keys:
             recs = tp_records_by_key.get(key)
             if not recs:
@@ -600,6 +652,7 @@ def compute_weekly_correction_rate(
             tp_keys.append(key)
             latest = max(valid_recs, key=lambda r: r["detected_at"])
             top3_source.append({"detected_at": latest["detected_at"], "record": latest})
+            tp_provenance_fingerprint[key] = latest["provenance"].get("prompt_fingerprint")
         tp_count = len(tp_keys)
 
         coverage = (judged_count / total_population) if total_population > 0 else 0.0
@@ -612,8 +665,26 @@ def compute_weekly_correction_rate(
         category_breakdown = _category_breakdown(tp_keys, tp_records_by_key, cutoff)
         diagnostics["category_conflict_keys"] += category_breakdown["conflict_keys"]
 
+        # #690 巡2後 [Must]: judged_at 由来（全 judged key）に TP の provenance 実測値を
+        # 突合して解決した版ラベルへ差し替える（非TP judged key はそのまま judged_at 由来）。
+        # 未知版・食い違いは既知ラベルへ丸め込まず専用バケットへ分離するため、
+        # version_breakdown が自動的に「混在週」として分割表示される（blocking(a) の対象）。
+        effective_version_by_key: Dict[str, Optional[str]] = {}
+        for key in judged_keys:
+            if key in tp_provenance_fingerprint:
+                resolved = _resolve_judge_version(
+                    version_by_key.get(key), tp_provenance_fingerprint[key],
+                )
+                effective_version_by_key[key] = resolved
+                if resolved is not None and resolved.startswith(_UNKNOWN_VERSION_PREFIX):
+                    diagnostics["version_unknown_tp_count"] += 1
+                elif resolved is not None and resolved.startswith(_VERSION_MISMATCH_PREFIX):
+                    diagnostics["version_mismatch_tp_count"] += 1
+            else:
+                effective_version_by_key[key] = version_by_key.get(key)
+
         # #690 変更1: 判定基準の版で内訳集計する（混在週の分割表示用）。
-        version_breakdown = _version_breakdown(judged_keys, set(tp_keys), version_by_key)
+        version_breakdown = _version_breakdown(judged_keys, set(tp_keys), effective_version_by_key)
         # #690 変更2: 固定 PJ 構成で重み付けした標準化率（is_worsening の判定はこちらを使う）。
         pj_raw_counts = _pj_raw_counts(population_keys, judged_key_set, set(tp_keys), utterances_by_key)
         standardized = _standardized_rate(pj_raw_counts)
