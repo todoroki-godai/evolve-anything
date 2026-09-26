@@ -1211,6 +1211,47 @@ def test_build_proposal_prompt_relative_date_warning_no_false_positive_proper_no
     assert "相対日付あり" not in msg
 
 
+def test_build_proposal_prompt_relative_date_warning_uses_representative_key_not_freshness_max():
+    """#441 レビュー[Must]2 正常系E2E: group の残存キーの最新時刻（freshness）と代表文
+    （signal_keys[0]）の発話時刻がずれていても、警告の発話日は代表文自身の発話日を出す。
+    """
+    g = {
+        "signal_keys": ["k1", "k2"],
+        "representative": "来週やる案",
+        "evidence_text": "来週やる案",
+        "signal_meta_by_key": {
+            "k1": {"uttered_at": "2026-09-10T03:00:00+00:00", "detected_at": None, "cross_pj": []},
+            "k2": {
+                "uttered_at": (datetime.now(timezone.utc) - timedelta(days=1)).isoformat(),
+                "detected_at": None, "cross_pj": [],
+            },
+        },
+        "cross_pj_confirmed": [],
+    }
+    msg = pd.build_proposal_prompt([g], "pj-a")
+    assert "2026-09-10" in msg
+    assert "(木)" in msg
+
+
+def test_build_proposal_prompt_relative_date_warning_scans_all_representatives():
+    """#441 レビュー[Should]3 正常系E2E: merge 済み提案は表示が all_representatives の
+    全代表文なので、先頭以外の代表文に含まれる相対日付表現も検出して警告する。
+    """
+    g = {
+        "signal_keys": ["k1"],
+        "representative": "普通の提案",
+        "evidence_text": "普通の提案",
+        "all_representatives": ["普通の提案", "来週やる別提案"],
+        "signal_meta_by_key": {
+            "k1": {"uttered_at": "2026-09-10T03:00:00+00:00", "detected_at": None, "cross_pj": []},
+        },
+        "cross_pj_confirmed": [],
+    }
+    msg = pd.build_proposal_prompt([g], "pj-a")
+    assert "相対日付あり" in msg
+    assert "2026-09-10" in msg
+
+
 def test_build_proposal_systemmessage_includes_top_group_context():
     ts = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
     g = _group_with_meta(["k1"], rep="rep1", detected_at=ts, cross_pj_confirmed=["amamo"])

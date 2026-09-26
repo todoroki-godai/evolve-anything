@@ -276,6 +276,22 @@ def test_relative_time_label_none_when_unparsable():
     assert pr.relative_time_label("not-a-date") is None
 
 
+def test_relative_time_label_late_night_utterance_shown_next_morning_is_yesterday():
+    """#441 レビュー[Must]1: JST 23:00 の発話を翌朝 JST 09:00（経過10時間・24時間未満）に
+    表示すると、経過時間の24時間切り捨てでは「今日の発話」に化けるが、JST 暦日で
+    「昨日の発話」と正しく出て、``relative_date_warning`` が出す発話日（暦日）と矛盾しない。
+    """
+    uttered_iso = "2026-09-25T14:00:00+00:00"  # 2026-09-25T23:00 JST
+    now = datetime(2026, 9, 26, 0, 0, 0, tzinfo=timezone.utc)  # 2026-09-26T09:00 JST
+    assert pr.relative_time_label(uttered_iso, now=now) == "昨日の発話"
+
+
+def test_relative_time_label_same_jst_calendar_day_is_today():
+    uttered_iso = "2026-09-26T00:30:00+00:00"  # 2026-09-26T09:30 JST
+    now = datetime(2026, 9, 26, 1, 0, 0, tzinfo=timezone.utc)  # 2026-09-26T10:00 JST 同日
+    assert pr.relative_time_label(uttered_iso, now=now) == "今日の発話"
+
+
 # ─────────────────────────────────────────────────────────────────
 # group_freshness_iso / cross_pj_note（PR2-d 提示文の判断材料）
 # ─────────────────────────────────────────────────────────────────
@@ -380,6 +396,81 @@ def test_relative_date_warning_positive_control_proper_noun_asuka_no_false_posit
     assert pr.relative_date_warning("明日香さんに確認する", _now_iso()) is None
 
 
-def test_relative_date_warning_positive_control_proper_noun_hizuki_no_false_positive():
-    """「日月」のような固有名詞（人名・地名の一部）は本パターン（曜日等の複合語）に該当しない。"""
-    assert pr.relative_date_warning("日月さんのレビュー待ち", _now_iso()) is None
+def test_relative_date_warning_positive_control_weekday_compound_word_may_fire():
+    """「日曜大工」のような曜日を含む一般語は本パターンにも一致する。
+
+    固有名詞の誤爆（明日香）は既知の除外で塞ぐが、それ以外の曜日複合語まで塞ぐと
+    正規表現が閉じない除外リスト化する。過検出は表示用補助として許容する方針
+    （#441 レビュー[Nit]5・relative_date_warning docstring 参照）なので、ここでは
+    「出ないこと」でなく「出てよいこと」を陽性対照として確認する。
+    """
+    assert pr.relative_date_warning("日曜大工の道具を買う話", _now_iso()) is not None
+
+
+# ─────────────────────────────────────────────────────────────────
+# representative_uttered_at / relative_date_warning_for_group
+# （#441 レビュー[Must]2・[Should]3: 代表文自身の発話時刻を使い、merge 済み全代表文を検出する）
+# ─────────────────────────────────────────────────────────────────
+def test_representative_uttered_at_uses_first_signal_key_not_max():
+    """代表文（signal_keys[0]）の uttered_at を返す。group_freshness_iso（最新時刻）とは
+    値が異なってよい — 実データで21日ずれた群があった（#441 レビュー[Must]2）。
+    """
+    g = _group(
+        ["k1", "k2"],
+        {"k1": _meta(uttered_at=_iso(21)), "k2": _meta(uttered_at=_iso(1))},
+    )
+    assert pr.representative_uttered_at(g) == g["signal_meta_by_key"]["k1"]["uttered_at"]
+    assert pr.representative_uttered_at(g) != pr.group_freshness_iso(g)
+
+
+def test_representative_uttered_at_none_when_first_key_meta_missing():
+    """既読差し引きで signal_keys[0] の meta が残っていなければ None（発話日不明扱い）。"""
+    g = {"signal_keys": ["k1"], "signal_meta_by_key": {}}
+    assert pr.representative_uttered_at(g) is None
+
+
+def test_representative_uttered_at_none_when_only_detected_at():
+    """uttered_at が無く detected_at しか無い場合は None（detected_at を発話日と呼ばない）。"""
+    g = _group(["k1"], {"k1": _meta(detected_at=_iso(1))})
+    assert pr.representative_uttered_at(g) is None
+
+
+def test_representative_uttered_at_none_when_no_signal_keys():
+    assert pr.representative_uttered_at({"signal_keys": []}) is None
+
+
+def test_relative_date_warning_for_group_uses_representative_key_time_not_freshness_max():
+    """freshness（最新時刻・k2）ではなく代表文の時刻（signal_keys[0]・k1）で発話日を出す。"""
+    ts_rep = "2026-09-10T03:00:00+00:00"  # 木曜
+    g = _group(
+        ["k1", "k2"],
+        {"k1": _meta(uttered_at=ts_rep), "k2": _meta(uttered_at=_iso(1))},
+    )
+    g["representative"] = "来週やる案"
+    warning = pr.relative_date_warning_for_group(g)
+    assert warning is not None
+    assert "2026-09-10" in warning
+    assert "(木)" in warning
+
+
+def test_relative_date_warning_for_group_scans_all_representatives():
+    """[Should]3: all_representatives が複数あれば、先頭以外の代表文も検出対象にする。"""
+    g = {
+        "signal_keys": ["k1"],
+        "representative": "普通の提案",
+        "all_representatives": ["普通の提案", "来週やる別提案"],
+        "signal_meta_by_key": {"k1": {"uttered_at": "2026-09-10T03:00:00+00:00", "detected_at": None}},
+    }
+    warning = pr.relative_date_warning_for_group(g)
+    assert warning is not None
+    assert "2026-09-10" in warning
+
+
+def test_relative_date_warning_for_group_none_when_no_representatives_match():
+    g = {
+        "signal_keys": ["k1"],
+        "representative": "普通の提案",
+        "all_representatives": ["普通の提案", "別の普通の提案"],
+        "signal_meta_by_key": {"k1": {"uttered_at": _now_iso(), "detected_at": None}},
+    }
+    assert pr.relative_date_warning_for_group(g) is None

@@ -565,7 +565,7 @@ def _context_suffix(g: Dict[str, Any], pj_slug: str) -> str:
         label = _ranking.relative_time_label(freshness_iso)
         if label:
             parts.append(label)
-    warning = _ranking.relative_date_warning(g.get("representative") or g.get("evidence_text") or "", freshness_iso)
+    warning = _ranking.relative_date_warning_for_group(g)
     if warning:
         parts.append(warning)
     note = _ranking.cross_pj_note(g, pj_slug)
