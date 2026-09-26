@@ -94,13 +94,25 @@ def evaluate_capture_recall(
     }
 
 
-_REMEASURE = {"a0": ("既存 .claude/hillclimb/correction-judge/baseline を "
+_A0_REMEASURE = ("既存 .claude/hillclimb/correction-judge/baseline を "
               ".claude/hillclimb/correction-judge/baseline-<YYYYMMDD> へ退避後、"
               "python3 scripts/bench/judge_eval.py --run --approve-harness --variant baseline。"
               "共有 checkout ではなく worktree で実行し、新しい baseline/results.jsonl と _state.json を commit して PR にする。"
-              "退避した baseline-<YYYYMMDD>/ は commit せず削除する（旧結果は git 履歴に残る）。"),
-              "holdout682": "確認用セットは1回使用済みで取り直さない。判定を変えたら新しい確認用セットを作って測る（#682）",
-              "holdout691": "確認用セットは未使用。初回の判定実行後は1回使用済みとなり、以後は判定を変えたら新しい確認用セットを作って測る（#682/#691）"}
+              "退避した baseline-<YYYYMMDD>/ は commit せず削除する（旧結果は git 履歴に残る）。")
+_HOLDOUT682_REMEASURE = "確認用セットは1回使用済みで取り直さない。判定を変えたら新しい確認用セットを作って測る（#682）"
+
+# 各値は (結果ファイルが無い時の案内, 結果はあるが来歴不一致など無効な時の案内) の2要素タプル。
+# a0・holdout682 は両状態で同じ案内文でよい。holdout691 は「未使用」と「使用済み」で
+# 案内が変わる（結果が既にある状態を「未使用」と案内しないため・レビュー指摘）。
+_REMEASURE = {
+    "a0": (_A0_REMEASURE, _A0_REMEASURE),
+    "holdout682": (_HOLDOUT682_REMEASURE, _HOLDOUT682_REMEASURE),
+    "holdout691": (
+        "確認用セットは未使用。現行の判定で1回だけ測る。以後は取り直さず、"
+        "判定を変えたら新しい確認用セットを作って測る（#682/#691）",
+        "確認用セットは使用済みで取り直さない。判定を変えたら新しい確認用セットを作って測る（#682/#691）",
+    ),
+}
 
 
 def evaluate_capture_union(
@@ -109,7 +121,7 @@ def evaluate_capture_union(
 ) -> dict[str, Any]:
     """Advisory only: detect known ID/content/provenance mismatches, then count both lanes."""
     def unavailable(reason: str) -> dict[str, Any]:
-        return {"measured": False, "reason": f"{reason}。再測: {_REMEASURE[eval_set_name]}"}
+        return {"measured": False, "reason": f"{reason}。再測: {_REMEASURE[eval_set_name][1]}"}
 
     examples, results = list(eval_rows), list(result_rows)
     eval_by_id: dict[str, dict[str, Any]] = {}
@@ -203,7 +215,7 @@ def load_capture_union(eval_candidates: Iterable[Path], results_path: Path,
     if rows is None:
         return {"measured": False, "reason": "評価セット不一致" if mismatch else "評価セットなし", "display": results_path.exists()}
     if not results_path.exists():
-        return {"measured": False, "reason": f"AI 判定結果なし。再測: {_REMEASURE[eval_set_name]}"}
+        return {"measured": False, "reason": f"AI 判定結果なし。再測: {_REMEASURE[eval_set_name][0]}"}
     try:
         results = [json.loads(line) for line in results_path.read_text(encoding="utf-8").splitlines() if line.strip()]
     except (OSError, ValueError):

@@ -281,14 +281,37 @@ def test_holdout691_is_registered_with_expected_rows_and_hash():
     )
 
 
-def test_holdout691_remeasure_text_says_unused_and_differs_from_holdout682():
-    holdout691_text = capture_recall._REMEASURE["holdout691"]
-    holdout682_text = capture_recall._REMEASURE["holdout682"]
-    assert "未使用" in holdout691_text
-    assert holdout691_text != holdout682_text
+def test_holdout691_remeasure_no_results_path_says_unused_and_one_time(tmp_path, monkeypatch):
+    """load_capture_union's missing-results branch must not say 'used up' before any run."""
+    rows = [{"eval_id": "a", "text": "t", "label": "TP"}]
+    raw = "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows).encode()
+    eval_path = tmp_path / "holdout691.jsonl"
+    eval_path.write_bytes(raw)
+    monkeypatch.setitem(
+        capture_recall.APPROVED_EVAL_SETS, "holdout691", (len(rows), hashlib.sha256(raw).hexdigest())
+    )
+    out = capture_recall.load_capture_union(
+        [eval_path], tmp_path / "missing-results.jsonl", eval_set_name="holdout691"
+    )
+    assert out["measured"] is False
+    assert "未使用" in out["reason"]
+    assert "1回だけ" in out["reason"]
 
 
-def test_holdout691_identify_eval_set_matches_only_on_exact_rows_and_hash(tmp_path, monkeypatch):
+def test_holdout691_remeasure_has_results_path_says_used_up_not_unused(monkeypatch):
+    """evaluate_capture_union's invalid-result branch must not claim the set is still unused."""
+    rows, results = fixture()
+    monkeypatch.setitem(capture_recall.APPROVED_EVAL_SETS, "holdout691", (len(rows), "irrelevant-for-this-path"))
+    results[0]["meta"]["harness_sha"] = "stale"
+    out = evaluate_capture_union(rows, results, "version", "haiku", 30, eval_set_name="holdout691")
+    assert out["measured"] is False
+    assert "未使用" not in out["reason"]
+    assert "取り直さない" in out["reason"]
+    assert "新しい確認用セットを作って測る" in out["reason"]
+
+
+def test_holdout691_identify_eval_set_positive_control_and_hash_mismatch(tmp_path, monkeypatch):
+    """Byte-level tamper changes the digest, so this only exercises the hash-mismatch branch."""
     rows = [{"eval_id": str(i), "text": f"t{i}", "label": "TP"} for i in range(3)]
     raw = "".join(json.dumps(row) + "\n" for row in rows).encode()
     monkeypatch.setitem(
@@ -298,12 +321,19 @@ def test_holdout691_identify_eval_set_matches_only_on_exact_rows_and_hash(tmp_pa
     path.write_bytes(raw)
     assert capture_recall.identify_eval_set(path) == "holdout691"
 
-    path.write_bytes(raw + b'{"eval_id": "3", "text": "t3", "label": "TP"}\n')
-    with pytest.raises(capture_recall.CaptureEvalIntegrityError):
+    path.write_bytes(raw.replace(b'"eval_id": "0"', b'"eval_id": "9"', 1))
+    with pytest.raises(capture_recall.CaptureEvalIntegrityError, match="hash mismatch"):
         capture_recall.identify_eval_set(path)
 
-    path.write_bytes(raw.replace(b'"eval_id": "0"', b'"eval_id": "9"', 1))
-    with pytest.raises(capture_recall.CaptureEvalIntegrityError):
+
+def test_holdout691_identify_eval_set_rejects_wrong_row_count_even_with_approved_hash(tmp_path, monkeypatch):
+    """Mirrors test_named_corpus_rejects_wrong_row_count_even_with_approved_hash for holdout691:
+    the digest matches the (mis-)registered hash, so this actually reaches the row-count check."""
+    raw = b'{"eval_id": "one"}\n'
+    monkeypatch.setitem(capture_recall.APPROVED_EVAL_SETS, "holdout691", (2, hashlib.sha256(raw).hexdigest()))
+    path = tmp_path / "wrongcount691.jsonl"
+    path.write_bytes(raw)
+    with pytest.raises(capture_recall.CaptureEvalIntegrityError, match="row count"):
         capture_recall.identify_eval_set(path)
 
 
