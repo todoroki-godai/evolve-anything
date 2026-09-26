@@ -25,7 +25,12 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 from optimize_history_store import load_effective_history, resolve_slug
-from evolve_revert import REASON_LABELS, compute_revert_availability, detect_subsequent_change
+from evolve_revert import (
+    REASON_LABELS,
+    compute_revert_availability,
+    detect_before_after_identical,
+    detect_subsequent_change,
+)
 from results_board import classify_decision
 from measurement_result import MeasuredList, read_measurement
 
@@ -38,10 +43,17 @@ def build_revert_listing(slug: Optional[str] = None) -> List[Dict[str, Any]]:
     ``evolve_revert.detect_subsequent_change`` で read-only 判定する
     （``compute_revert_availability`` 自体は変更しない・別レイヤーとして追加）。
 
+    #696: 同じく revert 可能な entry に限り、記録そのものの before/after が
+    同一（＝変更前の控えが編集後に取られていた記録の不具合）かを
+    ``evolve_revert.detect_before_after_identical`` で判定する。こちらは対象
+    ファイルの現在の状態に依存しない記録単体の判定なので、subsequent_change とは
+    独立に立てる（両方 True になりうる）。
+
     Returns:
         各要素 ``{entry_id, skill_name, target, scope, timestamp, revert_available,
-        revert_unavailable_reason, subsequent_change}``。``subsequent_change`` は
-        ``revert_available=False`` の entry では判定対象外のため常に ``None``。
+        revert_unavailable_reason, subsequent_change, stale_before_snapshot}``。
+        ``subsequent_change``/``stale_before_snapshot`` は ``revert_available=False``
+        の entry では判定対象外のため、前者は常に ``None``、後者は常に ``False``。
     """
     if slug is None:
         slug = resolve_slug()
@@ -58,6 +70,9 @@ def build_revert_listing(slug: Optional[str] = None) -> List[Dict[str, Any]]:
             continue
         available, reason = compute_revert_availability(entry)
         subsequent_change = detect_subsequent_change(entry) if available else None
+        stale_before_snapshot = (
+            detect_before_after_identical(entry) if available else False
+        )
         items.append({
             "entry_id": entry.get("id"),
             "skill_name": entry.get("skill_name") or entry.get("target") or "(unknown)",
@@ -67,6 +82,7 @@ def build_revert_listing(slug: Optional[str] = None) -> List[Dict[str, Any]]:
             "revert_available": available,
             "revert_unavailable_reason": reason,
             "subsequent_change": subsequent_change,
+            "stale_before_snapshot": stale_before_snapshot,
         })
 
     # timestamp 欠落は最古扱い（末尾）にする。新しい順（reverse=True）と組合わせ、
@@ -82,10 +98,14 @@ def render_revert_listing(items: List[Dict[str, Any]]) -> List[str]:
     if not items:
         return ["採用の記録はありません（0件）"]
 
-    # 「戻せる」件数は後続変更ありの entry を除く（§8.2: 同ファイルへの後続変更が
-    # あると conflict で戻せなくなるため、集計もそれを反映する）。
+    # 「戻せる」件数は後続変更ありの entry と、記録の before/after が同一の
+    # entry（#696・記録の不具合）を除く（§8.2: 同ファイルへの後続変更があると
+    # conflict で戻せなくなるため、集計もそれを反映する）。
     revertible_count = sum(
-        1 for it in items if it["revert_available"] and not it.get("subsequent_change")
+        1 for it in items
+        if it["revert_available"]
+        and not it.get("subsequent_change")
+        and not it.get("stale_before_snapshot")
     )
     unavailable_count = len(items) - revertible_count
 
@@ -99,7 +119,12 @@ def render_revert_listing(items: List[Dict[str, Any]]) -> List[str]:
         ts = (it.get("timestamp") or "")[:10] or "(日時不明)"
         entry_id = it.get("entry_id") or "(id不明)"
         skill = it.get("skill_name")
-        if it["revert_available"] and it.get("subsequent_change"):
+        if it["revert_available"] and it.get("stale_before_snapshot"):
+            lines.append(
+                f"[戻せません] {entry_id}  {ts}  {skill} — "
+                "変更前の控えが編集後に取られていたため戻せません（記録の不具合・#696）"
+            )
+        elif it["revert_available"] and it.get("subsequent_change"):
             lines.append(
                 f"[戻せません] {entry_id}  {ts}  {skill} — "
                 "このファイルはその後さらに変更されたため後続変更ありで戻せません"

@@ -193,6 +193,50 @@ class TestBuildRevertListingSubsequentChange:
         assert items[0]["subsequent_change"] is None
 
 
+class TestBuildRevertListingStaleBeforeSnapshot:
+    """#696: 記録そのものの before/after が同一（記録の不具合）かの検知。判定ロジック
+    自体は再実装せず ``evolve_revert.detect_before_after_identical`` を listing 時点で
+    呼ぶだけ（分岐網羅は test_evolve_revert_apply.py 側）。
+    """
+
+    def test_available_entry_without_stale_snapshot_is_marked_revertible(
+        self, stub_history, monkeypatch
+    ):
+        stub_history([_full_entry()])
+        monkeypatch.setattr(listing, "detect_before_after_identical", lambda entry: False)
+
+        items = listing.build_revert_listing("evolve-anything")
+
+        assert items[0]["revert_available"] is True
+        assert items[0]["stale_before_snapshot"] is False
+
+    def test_available_entry_with_stale_snapshot_is_marked(self, stub_history, monkeypatch):
+        stub_history([_full_entry()])
+        monkeypatch.setattr(listing, "detect_before_after_identical", lambda entry: True)
+
+        items = listing.build_revert_listing("evolve-anything")
+
+        assert items[0]["revert_available"] is True
+        assert items[0]["stale_before_snapshot"] is True
+
+    def test_unavailable_entry_does_not_call_stale_snapshot_check(self, stub_history, monkeypatch):
+        """revert_available=False の entry は判定対象外（そもそも戻せない理由が別にある）。
+        呼ばれたら壊す。"""
+        stub_history([
+            {"id": "old1", "human_accepted": True, "skill_name": "legacy", "timestamp": _iso(5)},
+        ])
+
+        def _boom(entry):
+            raise AssertionError("unavailable entry で呼ばれるべきでない")
+
+        monkeypatch.setattr(listing, "detect_before_after_identical", _boom)
+
+        items = listing.build_revert_listing("evolve-anything")
+
+        assert items[0]["revert_available"] is False
+        assert items[0]["stale_before_snapshot"] is False
+
+
 class TestRenderRevertListingSubsequentChange:
     def test_subsequent_change_shown_as_not_revertible(self):
         items = [{
@@ -215,6 +259,52 @@ class TestRenderRevertListingSubsequentChange:
         lines = listing.render_revert_listing(items)
         text = "\n".join(lines)
         assert "bin/evolve-revert p1" in text
+
+
+class TestRenderRevertListingStaleBeforeSnapshot:
+    """#696: 記録の before/after が同一の entry は「後続変更あり」と別の理由文言で
+    表示し、「戻せる」件数にも「後続変更あり」件数（＝戻せる以外）にも紛れさせない
+    （事実に合わせた文言・#376）。
+    """
+
+    def test_stale_snapshot_shown_with_dedicated_reason(self):
+        items = [{
+            "entry_id": "p1", "skill_name": "queue", "timestamp": _iso(1),
+            "scope": "project", "revert_available": True, "revert_unavailable_reason": None,
+            "subsequent_change": False, "stale_before_snapshot": True,
+        }]
+        lines = listing.render_revert_listing(items)
+        text = "\n".join(lines)
+        assert "p1" in text
+        assert "記録の不具合" in text
+        assert "#696" in text
+        assert "戻せません" in text
+        # 「後続変更あり」の文言とは混ざらない
+        assert "後続変更" not in text
+
+    def test_stale_snapshot_not_counted_as_revertible(self):
+        items = [{
+            "entry_id": "p1", "skill_name": "queue", "timestamp": _iso(1),
+            "scope": "project", "revert_available": True, "revert_unavailable_reason": None,
+            "subsequent_change": False, "stale_before_snapshot": True,
+        }]
+        lines = listing.render_revert_listing(items)
+        text = "\n".join(lines)
+        assert "戻せる 0 件" in text
+        assert "戻せない 1 件" in text
+
+    def test_stale_snapshot_takes_priority_over_subsequent_change_label(self):
+        """理論上 subsequent_change も True になりうる entry で、表示は #696 の
+        新文言を優先し「後続変更あり」とは重複表示しない。"""
+        items = [{
+            "entry_id": "p1", "skill_name": "queue", "timestamp": _iso(1),
+            "scope": "project", "revert_available": True, "revert_unavailable_reason": None,
+            "subsequent_change": True, "stale_before_snapshot": True,
+        }]
+        lines = listing.render_revert_listing(items)
+        text = "\n".join(lines)
+        assert "記録の不具合" in text
+        assert "後続変更" not in text
 
 
 class TestBuildRevertListingFields:

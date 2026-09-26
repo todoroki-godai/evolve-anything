@@ -19,6 +19,7 @@ from __future__ import annotations
 import hashlib
 import os
 import uuid
+import zlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
@@ -30,6 +31,7 @@ from evolve_decision_ids import (
     revert_event_id,
     sha256,
 )
+from reflect_apply_match import check_line_applied
 from rl_common.file_lock import file_lock, seqlock_read
 
 from ._entry import find_entry
@@ -220,6 +222,63 @@ def _restore_normal(
     finally:
         if tmp_path.exists():
             tmp_path.unlink()
+
+
+def detect_stale_before_snapshot(
+    before_path: Path, after_content: str, draft_line: str,
+) -> Optional[str]:
+    """#696: `--apply` の書込み前に、`--before-content-file` が編集後の内容に
+    見えないかを判定する（write 前ゲート・``reflect.py`` から呼ぶ）。
+
+    次のどちらかに当たれば「編集前でなく編集後の控え」と判定する:
+
+      (a) 起草行（draft_line）が控えの中に既に実在する — 反映先ファイルに
+          「実在するか」を確認する既存の正規化・関数
+          （``reflect_apply_match.check_line_applied``）を、控えファイルに
+          対してそのまま使う（#696 依頼の指定どおり別実装しない）。
+      (b) 控えの内容が反映先の現在の内容と完全一致する（sha256 比較）。
+
+    新規ファイル作成（before が空文字列）は対象外——常に None を返す
+    （#475 §8.2「やらないこと」との整合。before が無いので比較のしようがない）。
+
+    Returns:
+        該当すれば理由コード（``"draft_line_already_present"`` |
+        ``"before_equals_after"``）、該当しなければ ``None``。
+    """
+    before_content = before_path.read_text(encoding="utf-8")
+    if before_content == "":
+        return None
+    match = check_line_applied(before_path, draft_line)
+    if match["matched"]:
+        return "draft_line_already_present"
+    if sha256(before_content) == sha256(after_content):
+        return "before_equals_after"
+    return None
+
+
+def detect_before_after_identical(entry: Dict[str, Any]) -> bool:
+    """#696: 記録そのものが編集前後の内容を持たないバグ入り entry を検知する
+    （read-only・``--list`` 表示用）。
+
+    ``revert_before_b64`` を復元した内容の sha256 が ``after_sha`` と一致する場合、
+    その記録は「編集前の全文」ではなく「編集後の内容」を before として保存して
+    しまっている（``detect_stale_before_snapshot`` の write 前ゲートが無かった
+    時期に作られた記録に混入する・#696）。この状態では戻しても中身が変わらない
+    ため、``detect_subsequent_change`` の「後続変更あり」とは別理由として扱う。
+
+    判定材料が揃わない場合（``revert_before_b64``/``after_sha`` 欠落、または
+    ``revert_before_b64`` が復元不能）は False を返す（``compute_revert_availability``
+    側の pre_extension 判定に譲る／テスト用の未圧縮プレースホルダ値でも壊れない）。
+    """
+    before_b64 = entry.get("revert_before_b64")
+    after_sha = entry.get("after_sha")
+    if not before_b64 or not after_sha:
+        return False
+    try:
+        before_content = decompress_before_content(before_b64)
+    except (zlib.error, ValueError):
+        return False
+    return sha256(before_content) == after_sha
 
 
 def detect_subsequent_change(entry: Dict[str, Any]) -> bool:

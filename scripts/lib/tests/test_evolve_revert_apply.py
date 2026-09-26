@@ -19,7 +19,12 @@ import pytest  # noqa: E402
 
 import evolve_decision_ids as ids  # noqa: E402
 import optimize_history_store as store  # noqa: E402
-from evolve_revert._apply import apply_revert, detect_subsequent_change  # noqa: E402
+from evolve_revert._apply import (  # noqa: E402
+    apply_revert,
+    detect_before_after_identical,
+    detect_stale_before_snapshot,
+    detect_subsequent_change,
+)
 
 
 def _write_history(dir_: Path, slug: str, records: list) -> None:
@@ -581,6 +586,143 @@ def test_detect_subsequent_change_true_when_before_b64_missing(tmp_path, monkeyp
     del entry["revert_before_b64"]
 
     assert detect_subsequent_change(entry) is True
+
+
+# ─── detect_before_after_identical（#696: 記録単体の before/after 同一検知・
+#     --list 表示用・read-only）────────────────────────────────────────────
+
+
+def test_detect_before_after_identical_true_when_before_sha_equals_after_sha(tmp_path, monkeypatch):
+    """before を復元した内容の sha256 が after_sha と一致 → 記録の不具合（True）。"""
+    _setup(tmp_path, monkeypatch)
+    target = _make_target(tmp_path, "content\n")
+    entry = _accept_entry("x1", "content\n", "content\n", target)
+
+    assert detect_before_after_identical(entry) is True
+
+
+def test_detect_before_after_identical_false_when_before_differs_from_after(tmp_path, monkeypatch):
+    """通常の記録（before != after）は False。"""
+    _setup(tmp_path, monkeypatch)
+    target = _make_target(tmp_path, "after-content\n")
+    entry = _accept_entry("x1", "before-content\n", "after-content\n", target)
+
+    assert detect_before_after_identical(entry) is False
+
+
+def test_detect_before_after_identical_false_when_after_sha_missing(tmp_path, monkeypatch):
+    _setup(tmp_path, monkeypatch)
+    target = _make_target(tmp_path, "content\n")
+    entry = _accept_entry("x1", "content\n", "content\n", target)
+    del entry["after_sha"]
+
+    assert detect_before_after_identical(entry) is False
+
+
+def test_detect_before_after_identical_false_when_before_b64_missing(tmp_path, monkeypatch):
+    _setup(tmp_path, monkeypatch)
+    target = _make_target(tmp_path, "content\n")
+    entry = _accept_entry("x1", "content\n", "content\n", target)
+    del entry["revert_before_b64"]
+
+    assert detect_before_after_identical(entry) is False
+
+
+def test_detect_before_after_identical_false_when_before_b64_undecodable(tmp_path, monkeypatch):
+    """テスト fixture 等の未圧縮プレースホルダ値（"eJw..."）で例外にせず False に倒す。"""
+    _setup(tmp_path, monkeypatch)
+    target = _make_target(tmp_path, "content\n")
+    entry = _accept_entry("x1", "content\n", "content\n", target)
+    entry["revert_before_b64"] = "eJw..."
+
+    assert detect_before_after_identical(entry) is False
+
+
+def test_detect_before_after_identical_does_not_touch_filesystem(tmp_path, monkeypatch):
+    """対象ファイルの解決を一切行わない（記録単体の判定・read-only）ことを確認する。"""
+    _setup(tmp_path, monkeypatch)
+    entry = _accept_entry(
+        "x1", "content\n", "content\n",
+        Path(tmp_path / "does-not-exist" / "SKILL.md"),
+    )
+
+    assert detect_before_after_identical(entry) is True
+
+
+# ─── detect_stale_before_snapshot（#696: --apply 書込み前ゲート）───────────
+
+
+def test_detect_stale_before_snapshot_none_for_new_file(tmp_path):
+    """新規ファイル作成（before 空）は #475 §8.2 どおり対象外・常に None。"""
+    before_path = tmp_path / "before.txt"
+    before_path.write_text("", encoding="utf-8")
+
+    assert detect_stale_before_snapshot(before_path, "- 起草した行\n", "起草した行") is None
+
+
+def test_detect_stale_before_snapshot_flags_draft_line_already_in_before(tmp_path):
+    """(a) 起草行が控えに既に含まれている → 編集後の内容に見える。"""
+    before_path = tmp_path / "before.txt"
+    before_path.write_text("- 既存行\n- 起草した行\n", encoding="utf-8")
+
+    reason = detect_stale_before_snapshot(
+        before_path, "- 既存行\n- 起草した行\n- 追加行\n", "起草した行",
+    )
+    assert reason == "draft_line_already_present"
+
+
+def test_detect_stale_before_snapshot_flags_identical_content(tmp_path):
+    """(b) 控えと反映先の現在の内容が完全一致 → 編集後の内容に見える。
+
+    draft_line は check_line_applied が「未知の行頭記号」として一致判定しない
+    番号付き行にして、(a) の分岐を経由せず (b) 単独で発火することを確認する。
+    """
+    shared_content = "- 既存行\n1. 番号付き行\n"
+    before_path = tmp_path / "before.txt"
+    before_path.write_text(shared_content, encoding="utf-8")
+
+    reason = detect_stale_before_snapshot(
+        before_path, shared_content, "1. 番号付き行",
+    )
+    assert reason == "before_equals_after"
+
+
+def test_detect_stale_before_snapshot_none_when_similar_line_only(tmp_path):
+    """陽性対照: draft_line と似ているだけの別の行が控えにあるだけでは止めない。"""
+    before_path = tmp_path / "before.txt"
+    before_path.write_text("- 既存行\n- 似た起草した行だが違う\n", encoding="utf-8")
+
+    reason = detect_stale_before_snapshot(
+        before_path, "- 既存行\n- 起草した行\n", "起草した行",
+    )
+    assert reason is None
+
+
+def test_detect_stale_before_snapshot_none_when_only_whitespace_differs(tmp_path):
+    """(b) の比較は完全一致（sha256）のみ——前後の空白だけ違う場合まで
+    「同一」と緩めない（strip 等の緩い比較への回避を塞ぐ・#696 依頼の指定どおり
+    ``evolve_decision_ids.sha256`` の完全一致で比較する）。draft_line は
+    check_line_applied が一致判定しない番号付き行にして (a) を経由させない。
+    """
+    before_path = tmp_path / "before.txt"
+    before_path.write_text("- 既存行\n1. 番号付き行\n", encoding="utf-8")
+
+    reason = detect_stale_before_snapshot(
+        before_path, "- 既存行\n1. 番号付き行\n\n", "1. 番号付き行",
+    )
+    assert reason is None
+
+
+def test_detect_stale_before_snapshot_reuses_bullet_normalization(tmp_path):
+    """控え側の判定が check_line_applied と同じ正規化を使うことを確認する
+    （行頭の `- ` とインデント・前後空白だけが異なる行を同一視する）。"""
+    before_path = tmp_path / "before.txt"
+    before_path.write_text("  -   起草した行  \n", encoding="utf-8")
+
+    reason = detect_stale_before_snapshot(
+        before_path, "- 既存行\n- 起草した行\n", "起草した行",
+    )
+    assert reason == "draft_line_already_present"
 
 
 # ─── ロック（C4/C26: 手順3〜5 は同一 history lock 内）───────────────────────

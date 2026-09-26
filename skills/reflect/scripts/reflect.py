@@ -26,6 +26,7 @@ from reflect_apply_match import (
     classify_reflect_target_kind,
     normalize_reflect_target_path,
 )
+from evolve_revert import detect_stale_before_snapshot
 from reflect_fold import _hash_correction_message, _parse_iso8601_utc, fold_corrections
 from pillar2_metrics import pillar2_count_key
 from reflect_utils import (
@@ -1540,6 +1541,34 @@ def main():
                 "source_correction_id": args.apply,
             }, ensure_ascii=False, indent=2))
             return
+
+        # #696: rules 配下への反映は、attempt 追記・status 更新・revert 記録の
+        # どれも書き込む前に、--before-content-file が編集後の内容に見えないかを
+        # 確認する。ここで止めれば reflect_apply_events.jsonl / corrections.jsonl /
+        # optimize_history のいずれにも一切追記されない。
+        if rule_identity is not None:
+            before_path = Path(args.before_content_file)
+            if not before_path.exists():
+                print(json.dumps({
+                    "status": "error",
+                    "message": f"--before-content-file が見つかりません: {before_path}",
+                }, ensure_ascii=False))
+                sys.exit(1)
+            stale_reason = detect_stale_before_snapshot(
+                before_path,
+                Path(args.target_path).read_text(encoding="utf-8"),
+                draft_line,
+            )
+            if stale_reason is not None:
+                print(json.dumps({
+                    "status": "error",
+                    "message": (
+                        "--before-content-file が編集後の内容に見えます。"
+                        "Edit 前の全文を控え直してから再実行してください（#696）"
+                    ),
+                    "reason": stale_reason,
+                }, ensure_ascii=False))
+                sys.exit(1)
 
         correction_message_sha256 = _hash_correction_message(
             all_records[target_index]
