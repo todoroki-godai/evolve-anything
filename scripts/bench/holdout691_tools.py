@@ -20,7 +20,7 @@ ROW_FIELDS = ("source_path", "line_no", "session_id", "timestamp", "text")
 DATA_ROOT = Path.home() / ".claude/evolve-anything/bench/holdout_691"
 POPULATION_WHERE = ("source_kind = 'dialogue' AND source_path NOT LIKE '%/subagents/%' "
                     "AND timestamp >= ? AND timestamp < ?")
-POPULATION_FILTER = {"sql_where": POPULATION_WHERE, "message_filter": "should_include_message"}
+POPULATION_FILTER = {"sql_where": POPULATION_WHERE}
 sys.path.insert(0, str(REPO / "scripts" / "lib"))
 
 
@@ -130,8 +130,6 @@ def freeze_population(db_path: Path, output: Path, until: str, *,
     created = False
     try:
         import duckdb
-        from rl_common.detection import should_include_message
-
         with output.open("xb") as dest:
             created = True
             con = duckdb.connect(str(db_path), read_only=True)
@@ -148,8 +146,6 @@ def freeze_population(db_path: Path, output: Path, until: str, *,
                     for record in batch:
                         row = dict(zip(names, record))
                         max_timestamp = _latest_timestamp(max_timestamp, row["timestamp"])
-                        if not should_include_message(row["text"]):
-                            continue
                         payload = (json.dumps(row, ensure_ascii=False)
                                    + "\n").encode("utf-8")
                         dest.write(payload)
@@ -170,6 +166,8 @@ def freeze_population(db_path: Path, output: Path, until: str, *,
 def extract_keys(source: Path, output: Path, *, root: Path = DATA_ROOT) -> dict[str, Any]:
     """Stream strict JSONL to five-field key JSONL; never write or print text."""
     output = _external_output(output, root)
+    if not os.path.samefile(output.parent, root):
+        raise ValueError("key output must be directly in the holdout root")
     if not output.name.endswith(".keys.jsonl"):
         raise ValueError("key output must end in .keys.jsonl")
     count = 0
@@ -240,15 +238,22 @@ def sample_population(population: Path, output: Path, *, n: int, seed: int,
     from a0_capture_replay import sample_random_plus_machinery_oversample
 
     selected, _ = sample_random_plus_machinery_oversample(candidates, n, seed)
-    created = False
+    key_output = _external_output(Path(root) / f"{output.name}.keys.jsonl", root)
+    if output.exists() or key_output.exists():
+        raise FileExistsError("sample or key output already exists")
+    created = []
     try:
         with output.open("x", encoding="utf-8") as dest:
-            created = True
+            created.append(output)
             for row in selected:
                 dest.write(json.dumps(row, ensure_ascii=False) + "\n")
+        with key_output.open("x", encoding="utf-8") as dest:
+            created.append(key_output)
+            for row in selected:
+                dest.write(json.dumps(_key(row, has_text=True), ensure_ascii=False) + "\n")
     except Exception:
-        if created:
-            output.unlink()
+        for path in created:
+            path.unlink()
         raise
     return {"remaining": len(candidates), "sampled": len(selected),
             "excluded_keys_summary": excluded, "key_files": summaries}
@@ -326,7 +331,8 @@ def main() -> None:
         elif args.command == "verify-keys":
             result = count_duplicates(args.new, args.existing)
             if any(result.values()):
-                raise ValueError("duplicate keys found")
+                print(json.dumps(result, sort_keys=True))
+                parser.exit(1)
         else:
             freeze_result = json.loads(args.freeze_result.read_text())
             sample_result = json.loads(args.sample_result.read_text())
@@ -335,8 +341,8 @@ def main() -> None:
                            excluded_keys_summary=sample_result["excluded_keys_summary"],
                            key_files=sample_result["key_files"])
             result = {"manifest": str(args.out)}
-    except (ValueError, OSError, KeyError, TypeError) as exc:
-        parser.exit(1, f"holdout691: {type(exc).__name__}: {exc}\n")
+    except Exception as exc:
+        parser.exit(1, f"holdout691: {type(exc).__name__}\n")
     print(json.dumps(result, sort_keys=True))
 
 

@@ -1,6 +1,7 @@
 """Only synthetic rows and temporary output roots are used here."""
 import hashlib
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -93,6 +94,31 @@ def test_verify_keys_cli_counts_new_overlap_and_internal_duplicates_only(tmp_pat
     assert cli("verify-keys", "--new", clean, "--existing", existing_a, existing_b).returncode == 0
 
 
+@pytest.mark.parametrize("kind,internal", [("physical", False), ("logical", False),
+                                            ("physical", True), ("logical", True)])
+def test_verify_keys_distinguishes_each_identity(tmp_path, monkeypatch, capsys, kind, internal):
+    old = keys(tmp_path, "old", [row(0)])
+    if kind == "physical":
+        duplicate = row(0, session_id="different", text="different")
+    else:
+        duplicate = row(0, source_path="/different", line_no=99)
+    new_rows = [duplicate]
+    if internal:
+        old = keys(tmp_path, "unrelated", [row(8)])
+        base = row(1)
+        new_rows = [base, row(1, **({"session_id": "different", "text": "different"}
+                                        if kind == "physical" else
+                                        {"source_path": "/different", "line_no": 99}))]
+    new = keys(tmp_path, "new", new_rows)
+    monkeypatch.setattr(sys, "argv", [str(tool.__file__), "verify-keys", "--new", str(new),
+                                       "--existing", str(old)])
+    with pytest.raises(SystemExit) as failure:
+        tool.main()
+    assert failure.value.code == 1
+    assert json.loads(capsys.readouterr().out) == {"physical": int(kind == "physical"),
+                                                   "logical": int(kind == "logical")}
+
+
 def test_sample_excludes_both_keys_uses_all_files_and_seed(tmp_path):
     pop = [row(i) for i in range(12)]
     pop[3]["text"] += " === report end ==="
@@ -100,7 +126,11 @@ def test_sample_excludes_both_keys_uses_all_files_and_seed(tmp_path):
     first_key = keys(tmp_path, "a0", [row(0, session_id="other", text="other")])
     second_key = keys(tmp_path, "holdout682", [row(1, source_path="/other", line_no=99)])
     first = sample(tmp_path, population, tmp_path / "sample1.jsonl")
+    first_bytes = (tmp_path / "sample1.jsonl").read_bytes()
+    (tmp_path / "sample1.jsonl.keys.jsonl").unlink()
     second = sample(tmp_path, population, tmp_path / "sample2.jsonl")
+    second_bytes = (tmp_path / "sample2.jsonl").read_bytes()
+    (tmp_path / "sample2.jsonl.keys.jsonl").unlink()
     sample(tmp_path, population, tmp_path / "sample3.jsonl", seed=14)
     assert first["remaining"] == 10
     assert first["sampled"] == 4
@@ -110,12 +140,43 @@ def test_sample_excludes_both_keys_uses_all_files_and_seed(tmp_path):
         {"file": p.name, "sha256": hashlib.sha256(p.read_bytes()).hexdigest(),
          "rows": 1, "max_timestamp": row(i)["timestamp"]}
         for p, i in [(first_key, 0), (second_key, 1)]]
-    assert (tmp_path / "sample1.jsonl").read_bytes() == (tmp_path / "sample2.jsonl").read_bytes()
-    assert (tmp_path / "sample1.jsonl").read_bytes() != (tmp_path / "sample3.jsonl").read_bytes()
+    assert first_bytes == second_bytes
+    assert first_bytes != (tmp_path / "sample3.jsonl").read_bytes()
     selected = [json.loads(x) for x in (tmp_path / "sample1.jsonl").read_text().splitlines()]
     assert len(selected) == 4
     assert all(x["source_path"] not in {"/fixture/0", "/fixture/1"} for x in selected)
-    assert any("=== report end ===" in x["text"] for x in pop)
+
+
+def test_sample_writes_selected_keys_and_next_sample_excludes_them(tmp_path):
+    population = jsonl(tmp_path / "population.jsonl", [row(i) for i in range(5)])
+    keys(tmp_path, "a0", [row(9)])
+    first = tmp_path / "first.jsonl"
+    sample(tmp_path, population, first, n=2)
+    companion = tmp_path / "first.jsonl.keys.jsonl"
+    selected = [json.loads(line) for line in first.read_text().splitlines()]
+    saved = [json.loads(line) for line in companion.read_text().splitlines()]
+    assert saved == [tool._key(item, has_text=True) for item in selected]
+    second = tmp_path / "second.jsonl"
+    result = sample(tmp_path, population, second, n=3)
+    assert result["remaining"] == 3
+    assert {json.loads(line)["source_path"] for line in second.read_text().splitlines()}.isdisjoint(
+        {item["source_path"] for item in selected})
+
+
+def test_sample_removes_both_outputs_if_key_writing_fails(tmp_path, monkeypatch):
+    population = jsonl(tmp_path / "population.jsonl", [row(0)])
+    keys(tmp_path, "a0", [row(9)])
+    output = tmp_path / "sample.jsonl"
+    original = tool._key
+    def fail(row, *, has_text):
+        if has_text:
+            raise ValueError("synthetic failure")
+        return original(row, has_text=has_text)
+    monkeypatch.setattr(tool, "_key", fail)
+    with pytest.raises(ValueError, match="synthetic failure"):
+        sample(tmp_path, population, output, n=1)
+    assert not output.exists()
+    assert not (tmp_path / "sample.jsonl.keys.jsonl").exists()
 
 
 def test_key_file_max_timestamp_handles_fractional_seconds(tmp_path):
@@ -162,7 +223,7 @@ def test_sample_bad_key_file_fails_without_output(tmp_path, bad):
     assert not out.exists()
 
 
-def test_freeze_filters_using_production_function_and_records_window(tmp_path, monkeypatch):
+def test_freeze_keeps_all_dialogue_rows_in_window_and_records_filter(tmp_path, monkeypatch):
     db = tmp_path / "synthetic.db"
     con = duckdb.connect(str(db))
     con.execute("CREATE TABLE utterances (source_path TEXT, line_no INTEGER, pj_slug TEXT, "
@@ -187,11 +248,11 @@ def test_freeze_filters_using_production_function_and_records_window(tmp_path, m
     dump = tmp_path / "dump.jsonl"
     result = tool.freeze_population(db, dump, "2026-08-13T00:00:00Z", root=tmp_path)
     assert seen == [{"read_only": True}]
-    assert result["population_rows"] == 2
+    assert result["population_rows"] == 4
     assert result["max_timestamp"] == "2026-08-12T00:00:02Z"
     assert result["population_filter"] == tool.POPULATION_FILTER
     assert result["population_dump_sha256"] == hashlib.sha256(dump.read_bytes()).hexdigest()
-    assert [json.loads(x)["text"] for x in dump.read_text().splitlines()] == [row(0)["text"], row(5)["text"]]
+    assert [json.loads(x)["text"] for x in dump.read_text().splitlines()] == [row(0)["text"], "", row(5)["text"], ""]
     with pytest.raises(FileExistsError):
         tool.freeze_population(db, dump, "2026-08-13T00:00:00Z", root=tmp_path)
     key = keys(tmp_path, "a0", [row(9)])
@@ -210,14 +271,13 @@ def test_freeze_filters_using_production_function_and_records_window(tmp_path, m
 def test_output_guard_rejects_other_locations_for_all_three_writers(tmp_path):
     root = tmp_path / "holdout_691"
     root.mkdir()
-    alias = tmp_path / "HOLDOUT_691"
     checkout = tmp_path / "shared_checkout"
     checkout.mkdir()
     db = tmp_path / "missing.db"
     source = jsonl(tmp_path / "source.jsonl", [row(0)])
     population = source
     keys(root, "a0", [row(1)])
-    for parent in (tmp_path, alias, checkout, Path(tool.__file__).parent):
+    for parent in (tmp_path, checkout, Path(tool.__file__).parent):
         with pytest.raises(ValueError, match="holdout root"):
             tool.freeze_population(db, parent / "dump.jsonl", "2026-08-13T00:00:00Z", root=root)
         with pytest.raises(ValueError, match="holdout root"):
@@ -246,6 +306,35 @@ def test_output_guard_rejects_symlink_escape_and_symlink_root(tmp_path):
     with pytest.raises(ValueError, match="real directory"):
         tool.extract_keys(tmp_path / "unused", parent_alias / "holdout_691" / "a.keys.jsonl",
                           root=parent_alias / "holdout_691")
+
+
+def test_output_guard_rejects_sibling_with_root_prefix(tmp_path):
+    root = tmp_path / "holdout_691"
+    root.mkdir()
+    sibling = tmp_path / "holdout_691_x"
+    sibling.mkdir()
+    with pytest.raises(ValueError, match="holdout root"):
+        tool.freeze_population(tmp_path / "unused.db", sibling / "dump.jsonl",
+                               "2026-08-13T00:00:00Z", root=root)
+    with pytest.raises(ValueError, match="holdout root"):
+        tool.extract_keys(tmp_path / "unused", sibling / "a.keys.jsonl", root=root)
+
+
+def test_keys_must_be_directly_in_root(tmp_path):
+    nested = tmp_path / "nested"
+    nested.mkdir()
+    with pytest.raises(ValueError, match="holdout root"):
+        tool.extract_keys(tmp_path / "unused", nested / "a.keys.jsonl", root=tmp_path)
+
+
+def test_case_alias_only_on_case_insensitive_filesystem(tmp_path):
+    root = tmp_path / "holdout_691"
+    root.mkdir()
+    alias = tmp_path / "HOLDOUT_691"
+    if not alias.exists() or not os.path.samefile(root, alias):
+        pytest.skip("filesystem distinguishes case")
+    with pytest.raises(ValueError, match="actual spelling"):
+        tool.extract_keys(tmp_path / "unused", alias / "a.keys.jsonl", root=root)
 
 
 def test_cli_cannot_override_artifact_root(tmp_path):
@@ -297,6 +386,7 @@ def test_cli_failures_hide_text_and_write_manifest(tmp_path, monkeypatch, capsys
     assert failure.value.code == 1
     captured = capsys.readouterr()
     assert "SYNTHETIC-SECRET" not in captured.out + captured.err
+    assert captured.err == "holdout691: ValueError\n"
     assert not out.exists()
     monkeypatch.setattr(tool, "extract_keys", original)
     freeze = {"population_rows": 0, "population_dump_sha256": "0" * 64,
@@ -314,3 +404,24 @@ def test_cli_failures_hide_text_and_write_manifest(tmp_path, monkeypatch, capsys
                  "--freeze-result", freeze_path, "--sample-result", sample_path, "--seed", 13, "--n", 1)
     assert result.returncode == 0, result.stderr
     assert json.loads(manifest.read_text())["key_files"][0]["rows"] == 1
+
+
+@pytest.mark.parametrize("command,error", [("freeze", "value"), ("freeze", "duckdb"),
+                                               ("sample", "value")])
+def test_cli_freeze_and_sample_hide_exception_message(tmp_path, monkeypatch, capsys, command, error):
+    exc = duckdb.Error("SYNTHETIC-SECRET") if error == "duckdb" else ValueError("SYNTHETIC-SECRET")
+    def fail(*args, **kwargs):
+        raise exc
+    monkeypatch.setattr(tool, "freeze_population" if command == "freeze" else "sample_population", fail)
+    args = (["--db", str(tmp_path / "unused.db"), "--until", "2026-08-13T00:00:00Z"]
+            if command == "freeze" else
+            ["--population", str(tmp_path / "unused.jsonl"), "--population-sha256", "0" * 64,
+             "--n", "1", "--seed", "1"])
+    monkeypatch.setattr(sys, "argv", [str(tool.__file__), command, *args,
+                                       "--out", str(tmp_path / "unused-output.jsonl")])
+    with pytest.raises(SystemExit) as failure:
+        tool.main()
+    assert failure.value.code == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == f"holdout691: {type(exc).__name__}\n"
