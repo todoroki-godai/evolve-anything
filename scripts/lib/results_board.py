@@ -504,7 +504,8 @@ def render_results_board(board: Dict[str, Any]) -> List[str]:
         lines.append(f"参考: 調整に使った評価セットでの値 {union['caught']}/{union['positives']} = {union['recall']:.1%}（上振れするため到達の根拠にしない）")
         lines.append(f"a0 の AI 判定の来歴: {jst_time}・版 {union['harness_sha'][:8]}・モデル別名 {union['model']}・バッチ設定 {union['batch_size']}")
     else:
-        lines.append(f"参考: 調整に使った評価セットでの値 測定不能（{union.get('reason', '来歴不明')}。到達の根拠にしない）")
+        reason = union.get("reason", "来歴不明").split("。再測:", 1)[0].rstrip("。")
+        lines.append(f"参考: 調整に使った評価セットでの値 測定不能（{reason}。到達の根拠にしない）")
     capture = board.get("capture_recall") or {"measured": False, "reason": "評価セットなし"}
     if capture.get("measured"):
         recall_low, recall_high = capture["recall_ci"]

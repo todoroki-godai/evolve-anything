@@ -894,6 +894,29 @@ class TestRenderResultsBoard:
         assert "柱1 捕捉率（確認用セット・調整に不使用）: 測定不能（表示不可）" in text
         assert "柱1 捕捉率（確認用セット・調整に不使用）: 60/80" not in text
 
+    def test_stale_harness_for_both_sets_does_not_show_a0_remeasurement(self):
+        import hashlib
+        from capture_recall import evaluate_capture_union
+
+        rows = [{"eval_id": "synthetic", "text": "ここを直して", "label": "TP"}]
+        results = [{"prompt_id": "synthetic", "status": "ok", "meta": {
+            "rep": 0, "expected": True, "predicted": True,
+            "prompt_sha256": hashlib.sha256(rows[0]["text"].encode()).hexdigest(),
+            "harness_sha": "old", "model": "haiku", "batch_size_config": 30,
+            "generated_at": "2026-09-25T00:00:00+00:00"}}]
+        holdout = evaluate_capture_union(rows, results, "current", "haiku", 30,
+                                         eval_set_name="holdout682")
+        a0 = evaluate_capture_union(rows, results, "current", "haiku", 30)
+        assert not holdout["measured"] and not a0["measured"]
+        assert "baseline" in a0["reason"]
+        text = "\n".join(results_board.render_results_board(self._board(
+            capture_holdout=holdout, capture_union=a0)))
+        assert "柱1 捕捉率（確認用セット・調整に不使用）: 測定不能" in text
+        assert "参考: 調整に使った評価セットでの値 測定不能" in text
+        assert "baseline" not in text
+        assert "--approve-harness" not in text
+        assert "。。" not in text
+
     def test_header_present(self):
         lines = results_board.render_results_board(self._board())
         assert lines[0] == "## 🏆 戦果ボード"
