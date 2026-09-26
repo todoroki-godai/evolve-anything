@@ -232,17 +232,15 @@ def relative_time_label(
     """発話時刻（ISO8601）を「3週間前の発話」のような相対表記にする。parse 不能は None。
 
     しきい値: 0=今日 / 1=昨日 / 14日未満=N日前 / 60日未満=N週間前 / それ以上=Nヶ月前。
-    **今日/昨日/N日前は経過時間でなく JST 暦日の差**で数える（#441 レビュー[Must]1:
-    経過時間を24時間で切り捨てると、朝に前日深夜の発話を見ても「今日の発話」のまま
-    表示され続け、``relative_date_warning`` が出す「発話日」＝暦日と矛盾する）。
-    週間/月間は従来どおり経過時間ベース（judge ラグがある以上、古い文脈の指摘に
-    無自覚に y を押させない安全弁・ADR-054 PR2-d）。
+    **全区分を経過時間でなく JST 暦日の差**で数える（#441 レビュー巡1[Must]1 で日単位だけ
+    暦日差にしたところ、暦日14日前・経過13.4〜60日未満の窓で週・月だけ経過時間基準の
+    ままだと「1週間前」等の旧実装に無い表示になる境界不整合が実データ13群で発生
+    （レビュー巡2[Must]A）。全区分を暦日差に揃えて解消する）。
     """
     epoch = _parse_iso_epoch(value)
     if epoch is None:
         return None
     now_epoch = (now or datetime.now(timezone.utc)).timestamp()
-    delta_days = max(0.0, now_epoch - epoch) / 86400.0
     day_diff = max(0, (
         datetime.fromtimestamp(now_epoch, tz=_JST).date()
         - datetime.fromtimestamp(epoch, tz=_JST).date()
@@ -253,9 +251,9 @@ def relative_time_label(
         if day_diff == 1:
             return "昨日の発話"
         return f"{day_diff}日前の発話"
-    if delta_days < 60:
-        return f"{int(delta_days // 7)}週間前の発話"
-    return f"{max(1, int(delta_days // 30))}ヶ月前の発話"
+    if day_diff < 60:
+        return f"{day_diff // 7}週間前の発話"
+    return f"{max(1, day_diff // 30)}ヶ月前の発話"
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -290,20 +288,28 @@ def relative_date_warning(text: Optional[str], uttered_at: Optional[str]) -> Opt
         return "⚠ 相対日付あり：発話日不明のため日付を確認すること"
     dt_jst = datetime.fromtimestamp(epoch, tz=_JST)
     weekday = _WEEKDAY_JA[dt_jst.weekday()]
-    return f"⚠ 相対日付あり：発話日 {dt_jst:%Y-%m-%d}({weekday}) 基準で読むこと"
+    # #441 レビュー巡2[Should]C: 「この文の」を付け、同じ行に並ぶ N日前ラベル（群全体の
+    # 最新の発話）とは別の・この検出対象文自身の発話であると読めるようにする。
+    return f"⚠ 相対日付あり：この文の発話日 {dt_jst:%Y-%m-%d}({weekday}) 基準で読むこと"
 
 
 def representative_uttered_at(group: Dict[str, Any]) -> Optional[str]:
     """代表文（``signal_keys[0]``。group 生成時の先頭 record の文面）自身の uttered_at を返す。
 
     ``group_freshness_iso`` は残存 signal_keys の**最新**時刻を返すため、代表文とは別の
-    key の時刻を返しうる（実データで21日ずれた群あり・#441 レビュー[Must]2）。「発話日」を
+    key の時刻を返しうる（実データで21日ずれた群あり・#441 レビュー巡1[Must]2）。「発話日」を
     名乗れるのは代表文自身の uttered_at だけなので ``signal_keys[0]`` の meta だけを引く。
-    既読差し引きで signal_keys が空、meta が残っていない、または uttered_at が無く
-    detected_at しか無い場合は None（呼び出し側で「発話日不明」表示になる）。
+    既読差し引きで ``signal_keys`` が減った群（``count``＝construction 時点の総件数が現在の
+    ``signal_keys`` 件数と食い違う）は、詰め直しにより ``signal_keys[0]`` が代表文の key と
+    限らない（#441 レビュー巡2[Must]B-1）ため None を返す。signal_keys が空、meta が
+    残っていない、または uttered_at が無く detected_at しか無い場合も同様に None
+    （呼び出し側で「発話日不明」表示になる）。
     """
     keys = group.get("signal_keys") or []
     if not keys:
+        return None
+    count = group.get("count")
+    if isinstance(count, int) and count != len(keys):
         return None
     meta = (group.get("signal_meta_by_key") or {}).get(keys[0])
     if not meta:
@@ -315,18 +321,23 @@ def relative_date_warning_for_group(group: Dict[str, Any]) -> Optional[str]:
     """group から相対日付警告を組み立てる（``_context_suffix`` が呼ぶ薄いラッパー）。
 
     検出対象は ``all_representatives``（複数 PJ を merge した成分の全代表文）があれば
-    それを連結、無ければ ``representative``/``evidence_text``（#441 レビュー[Should]3:
+    それを連結、無ければ ``representative``/``evidence_text``（#441 レビュー巡1[Should]3:
     merge 済み提案は表示が全代表文なのに検出が先頭1文だけでは見落としになる）。
-    発話日は常に ``representative_uttered_at`` の1規則を使う — 複数代表文の個々の発話と
-    厳密対応しなくても良い（規則を1本に保つほうが検査可能性が高い。ずれた場合の実害は
-    「発話日不明」より詳しい日付が出る程度で、blocking ではない表示用補助の許容範囲）。
+    発話日は ``representative_uttered_at``（先頭代表文＝``signal_keys[0]`` の発話）を使うが、
+    相対日付表現が**先頭代表文以外**にしか無い場合は、その文の発話時刻を持っていないため
+    「発話日不明」に倒す（#441 レビュー巡2[Must]B-2: 先頭以外の代表文の発話日を先頭代表文の
+    時刻で言い切ることはしない。「詳しい日付が出る程度の許容誤差」ではなく実際に不正確）。
     """
     all_reps = group.get("all_representatives")
+    primary_text = group.get("representative") or group.get("evidence_text") or ""
     if isinstance(all_reps, list) and len(all_reps) > 1:
         text = "\n".join(r for r in all_reps if r)
+        primary_has_match = bool(primary_text) and bool(_RELATIVE_DATE_PATTERN.search(primary_text))
     else:
-        text = group.get("representative") or group.get("evidence_text") or ""
-    return relative_date_warning(text, representative_uttered_at(group))
+        text = primary_text
+        primary_has_match = True
+    uttered_at = representative_uttered_at(group) if primary_has_match else None
+    return relative_date_warning(text, uttered_at)
 
 
 def group_freshness_iso(group: Dict[str, Any]) -> Optional[str]:

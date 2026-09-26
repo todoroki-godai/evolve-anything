@@ -1234,8 +1234,28 @@ def test_build_proposal_prompt_relative_date_warning_uses_representative_key_not
 
 
 def test_build_proposal_prompt_relative_date_warning_scans_all_representatives():
-    """#441 レビュー[Should]3 正常系E2E: merge 済み提案は表示が all_representatives の
-    全代表文なので、先頭以外の代表文に含まれる相対日付表現も検出して警告する。
+    """#441 レビュー巡1[Should]3 正常系E2E: merge 済み提案は表示が all_representatives の
+    全代表文なので、先頭代表文が一致すれば他の代表文が同居していても発話日を出す。
+    """
+    g = {
+        "signal_keys": ["k1"],
+        "representative": "来週やる案",
+        "evidence_text": "来週やる案",
+        "all_representatives": ["来週やる案", "別の代表文"],
+        "signal_meta_by_key": {
+            "k1": {"uttered_at": "2026-09-10T03:00:00+00:00", "detected_at": None, "cross_pj": []},
+        },
+        "cross_pj_confirmed": [],
+    }
+    msg = pd.build_proposal_prompt([g], "pj-a")
+    assert "相対日付あり" in msg
+    assert "2026-09-10" in msg
+
+
+def test_build_proposal_prompt_relative_date_warning_unknown_when_only_secondary_representative_matches():
+    """#441 レビュー巡2[Must]B-2 正常系E2E: 一致が先頭代表文以外にしか無いときは、
+    検出そのものは効く（警告は出る）が、その文の発話時刻を持っていないため「発話日不明」
+    に倒す（先頭代表文＝signal_keys[0] の日付を誤って言い切らない）。
     """
     g = {
         "signal_keys": ["k1"],
@@ -1249,7 +1269,29 @@ def test_build_proposal_prompt_relative_date_warning_scans_all_representatives()
     }
     msg = pd.build_proposal_prompt([g], "pj-a")
     assert "相対日付あり" in msg
-    assert "2026-09-10" in msg
+    assert "発話日不明" in msg
+    assert "2026-09-10" not in msg
+
+
+def test_build_proposal_prompt_relative_date_warning_unknown_when_signal_keys_were_subtracted():
+    """#441 レビュー巡2[Must]B-1 正常系E2E: 既読差し引きで signal_keys が減った群
+    （count と件数が食い違う）は、詰め直しにより signal_keys[0] が代表文の key と限らない
+    ため「発話日不明」に倒す。
+    """
+    g = {
+        "signal_keys": ["k2"],  # 元は ["k0", "k2"] で k0（代表文の key）が既読除外された
+        "count": 2,
+        "representative": "来週やる案",
+        "evidence_text": "来週やる案",
+        "signal_meta_by_key": {
+            "k2": {"uttered_at": (datetime.now(timezone.utc) - timedelta(days=1)).isoformat(),
+                   "detected_at": None, "cross_pj": []},
+        },
+        "cross_pj_confirmed": [],
+    }
+    msg = pd.build_proposal_prompt([g], "pj-a")
+    assert "相対日付あり" in msg
+    assert "発話日不明" in msg
 
 
 def test_build_proposal_systemmessage_includes_top_group_context():
