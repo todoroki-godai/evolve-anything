@@ -4,9 +4,13 @@ discover は従来 ``Path.home() / ".claude" / "evolve-anything"`` を import �
 固定しており、CLAUDE_PLUGIN_DATA（テスト隔離の tmp dir を含む）を無視していた。
 本テストは discover を CLAUDE_PLUGIN_DATA 変更後に再 import（reload）し、
 
-  - env が非 plugin-data レイアウト（テスト tmp dir 等）なら env をそのまま尊重
+  - env 未設定なら既定 canonical dir（rl_common._DEFAULT_DATA_DIR 相当）
+  - env が非 plugin-data レイアウト（テスト tmp dir・dogfood の隔離コピー等）なら
+    env をそのまま尊重
   - env が plugin-data レイアウト かつ 一元化 marker あり なら canonical dir へ
     redirect（rl_common.resolve_data_dir と同一結果）
+  - env が plugin-data レイアウト でも 一元化 marker が無いマシンでは plugin-data
+    側をそのまま向く（redirect しない）
 
 を検証する。決定論・LLM 非依存。実 ~/.claude は一切 probe しない（tmp に閉じる）。
 """
@@ -76,3 +80,26 @@ def test_plugin_data_env_with_marker_redirects_to_canonical(layout, monkeypatch)
     assert expected == canonical, "テスト前提: marker ありなら rl_common 自体も canonical に解決する"
     assert mod.DATA_DIR == canonical
     assert mod.DATA_DIR == expected
+
+
+def test_no_env_falls_back_to_default_canonical(layout, monkeypatch):
+    """CLAUDE_PLUGIN_DATA 未設定なら既定 canonical dir（_DEFAULT_DATA_DIR 相当）。"""
+    canonical, _plugins_data = layout
+    monkeypatch.delenv("CLAUDE_PLUGIN_DATA", raising=False)
+
+    mod = _reload_discover()
+
+    assert mod.DATA_DIR == canonical
+    assert mod.DATA_DIR == rl_common._DEFAULT_DATA_DIR
+
+
+def test_plugin_data_env_without_marker_is_respected(layout, monkeypatch):
+    """plugin-data レイアウトでも一元化 marker が無いマシンでは redirect しない。"""
+    canonical, plugins_data = layout
+    assert not (canonical / rl_common.DATA_DIR_UNIFIED_MARKER).exists()
+    monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(plugins_data))
+
+    mod = _reload_discover()
+
+    assert mod.DATA_DIR == plugins_data
+    assert mod.DATA_DIR != canonical
