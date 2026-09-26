@@ -58,6 +58,16 @@ Phase 1 で状況を整理したら、**調査を開始する前に仮説を列�
   - セッションファイル: `~/.claude/evolve-anything/hypothesis_{session_id}.jsonl`
   - `detect_contradiction()` で evidence_against 3件以上の active 仮説ペアを検出できる
 
+```python
+import os, sys
+_root = os.environ.get("CLAUDE_PLUGIN_ROOT") or os.getcwd()
+sys.path.insert(0, os.path.join(_root, "scripts", "lib"))
+from hypothesis_tracker import load_hypotheses, detect_contradiction
+hypotheses = load_hypotheses(session_id="<session_id>")
+pairs = detect_contradiction(hypotheses)
+print(pairs)
+```
+
 ### 調査完了時
 - 全仮説の最終 status を `confirmed` / `refuted` / `suspended` に更新する
 - Phase 5 の最終レポートに仮説の変遷を含める

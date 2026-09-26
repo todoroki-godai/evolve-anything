@@ -66,6 +66,13 @@ evolve-discover [--session-scan]
 窓内は再提示を畳み、窓を過ぎたら1回だけ再評価のため再提示する。記録しないと毎回
 再提示され、本当に必要な提案の signal が薄まる。
 
+```bash
+PYTHONPATH="${CLAUDE_PLUGIN_ROOT}/scripts/lib" python3 -c '
+from discover.suppression import add_artifact_suppression
+add_artifact_suppression("<artifact_id>")
+'
+```
+
 ### Step 5.5: 検証知見の検出
 
 discover.py は `verification_catalog` パッケージの `detect_verification_needs()` を呼び出し、プロジェクトに未導入の検証知見ルールを検出する。
