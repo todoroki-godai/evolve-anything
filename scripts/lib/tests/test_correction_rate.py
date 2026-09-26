@@ -130,7 +130,8 @@ def _judged(u, *, judged_at=None):
     return {"key": _key(u), "judged_at": (judged_at or _BEFORE_CUTOFF).isoformat()}
 
 
-def _tp(u, *, detected_at=None, session_id=None, pj_slug=None, reason="test", category=None):
+def _tp(u, *, detected_at=None, session_id=None, pj_slug=None, reason="test", category=None,
+        prompt_fingerprint=None):
     return {
         "channel": "llm_judge",
         "provenance": {
@@ -140,6 +141,8 @@ def _tp(u, *, detected_at=None, session_id=None, pj_slug=None, reason="test", ca
             "reason": reason,
             "idiom": "",
             "category": category,
+            # #690 巡2後 [Must]: 既定 None（キー省略と同義）は既存テストの挙動を変えない。
+            "prompt_fingerprint": prompt_fingerprint,
         },
         "detected_at": (detected_at or _BEFORE_CUTOFF).isoformat(),
         "session_id": session_id if session_id is not None else u["session_id"],
@@ -439,6 +442,35 @@ class TestJudgeVersionForJudgedAt:
         assert correction_rate._judge_version_for_judged_at(None) is None
 
 
+# ── #690 巡2後 [Must]: judged_at 由来と provenance 実測値の突合 ─────────────
+
+
+class TestResolveJudgeVersion:
+    def test_no_provenance_falls_back_to_judged_at(self):
+        assert correction_rate._resolve_judge_version("28c25437f34a", None) == "28c25437f34a"
+        assert correction_rate._resolve_judge_version(None, None) is None
+
+    def test_matching_provenance_returns_plain_label(self):
+        assert correction_rate._resolve_judge_version(
+            "28c25437f34a", "28c25437f34a",
+        ) == "28c25437f34a"
+
+    def test_unknown_fingerprint_is_not_rounded_to_known_label(self):
+        """陰性試験(i)対応の単体版: 未知の fingerprint は既知ラベルに丸め込まない。"""
+        resolved = correction_rate._resolve_judge_version("53c3982a2738", "e6a3814e11e7")
+        assert resolved != "53c3982a2738"
+        assert resolved != "e6a3814e11e7"  # 生の fingerprint そのままでもない（未知版と明示）
+        assert resolved.startswith(correction_rate._UNKNOWN_VERSION_PREFIX)
+        assert "e6a3814e11e7" in resolved
+
+    def test_mismatch_between_sources_is_flagged(self):
+        """陰性試験(ii)対応の単体版: 既知ラベルでも judged_at 由来と食い違えば専用バケット。"""
+        resolved = correction_rate._resolve_judge_version("28c25437f34a", "53c3982a2738")
+        assert resolved != "28c25437f34a"
+        assert resolved != "53c3982a2738"
+        assert resolved.startswith(correction_rate._VERSION_MISMATCH_PREFIX)
+
+
 _W36_TS = datetime(2026, 8, 31, 12, tzinfo=timezone.utc)
 _W36_INGESTED = datetime(2026, 8, 31, 13, tzinfo=timezone.utc)
 _W36_NOW_AFTER_CUTOFF = datetime(2026, 9, 11, tzinfo=timezone.utc)  # W36 cutoff は 09-10
@@ -475,6 +507,67 @@ class TestVersionBreakdown:
         vb = w["version_breakdown"]
         assert len(vb) == 1
         assert vb["28c25437f34a"]["judged"] == 1
+
+    def test_unknown_fingerprint_tp_is_not_merged_into_known_version(self):
+        """陰性試験(i): 未知の fingerprint（例 e6a3814e11e7・#682 適用後の実際の HEAD 値）を
+        持つ TP が混ざった週は、既知版として単一値の系列に並ばず、未知版バケットへ
+        分離される。診断カウンタも1件増える（silence != evaluated）。"""
+        u_known = _utt("known")
+        u_unknown = _utt("unknown")
+        raw = _raw(
+            [u_known, u_unknown],
+            [_judged(u_known), _judged(u_unknown)],
+            [
+                _tp(u_known, prompt_fingerprint="28c25437f34a"),
+                _tp(u_unknown, prompt_fingerprint="e6a3814e11e7"),
+            ],
+        )
+        result = correction_rate.compute_weekly_correction_rate(now=_AFTER_CUTOFF, raw=raw)
+        w = next(w for w in result["weeks"] if w["week_id"] == "2026-W34")
+        vb = w["version_breakdown"]
+
+        # 未知版が既知ラベル（"28c25437f34a"）へ丸め込まれていないこと。
+        assert "28c25437f34a" in vb
+        assert vb["28c25437f34a"]["judged"] == 1  # u_known の分だけ
+        unknown_keys = [k for k in vb if k != "28c25437f34a"]
+        assert len(unknown_keys) == 1
+        assert unknown_keys[0].startswith(correction_rate._UNKNOWN_VERSION_PREFIX)
+        assert "e6a3814e11e7" in unknown_keys[0]
+        assert len(vb) == 2  # 単一値の系列に混ざっていない（2バケットに分離）
+        assert result["diagnostics"]["version_unknown_tp_count"] == 1
+
+    def test_provenance_mismatch_with_judged_at_is_detected(self):
+        """陰性試験(ii): judged_at 由来（既知版A）と provenance 実測値（既知版B）が
+        食い違う TP は、どちらか一方へ黙って決めず、食い違いバケットへ分離される。"""
+        u_mismatch = _utt("mismatch")
+        raw = _raw(
+            [u_mismatch],
+            # judged_at は between-switches の範囲（28c25437f34a を導出）。
+            [_judged(u_mismatch, judged_at=_BEFORE_CUTOFF)],
+            # provenance は第2版（53c3982a2738）を実測値として記録 → 食い違い。
+            [_tp(u_mismatch, prompt_fingerprint="53c3982a2738")],
+        )
+        result = correction_rate.compute_weekly_correction_rate(now=_AFTER_CUTOFF, raw=raw)
+        w = next(w for w in result["weeks"] if w["week_id"] == "2026-W34")
+        vb = w["version_breakdown"]
+
+        assert "28c25437f34a" not in vb
+        assert "53c3982a2738" not in vb
+        mismatch_keys = list(vb.keys())
+        assert len(mismatch_keys) == 1
+        assert mismatch_keys[0].startswith(correction_rate._VERSION_MISMATCH_PREFIX)
+        assert result["diagnostics"]["version_mismatch_tp_count"] == 1
+
+    def test_known_fingerprint_week_leaves_diagnostics_at_zero(self):
+        """陽性対照: provenance が既知の fingerprint だけの週では、新設した検出は発火せず
+        既存の値（版ラベル・診断カウンタ）が変わらない。"""
+        u1 = _utt("a")
+        raw = _raw([u1], [_judged(u1)], [_tp(u1, prompt_fingerprint="28c25437f34a")])
+        result = correction_rate.compute_weekly_correction_rate(now=_AFTER_CUTOFF, raw=raw)
+        w = next(w for w in result["weeks"] if w["week_id"] == "2026-W34")
+        assert w["version_breakdown"] == {"28c25437f34a": {"judged": 1, "tp": 1, "rate": 1.0}}
+        assert result["diagnostics"]["version_unknown_tp_count"] == 0
+        assert result["diagnostics"]["version_mismatch_tp_count"] == 0
 
 
 # ── #690 変更2: PJ構成を揃えた標準化率 ─────────────────────────────
