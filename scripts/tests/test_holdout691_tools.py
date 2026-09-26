@@ -235,6 +235,11 @@ def test_output_guard_rejects_symlink_escape_and_symlink_root(tmp_path):
     alias_root.symlink_to(outside, target_is_directory=True)
     with pytest.raises(ValueError, match="real directory"):
         tool.extract_keys(tmp_path / "unused", alias_root / "a.keys.jsonl", root=alias_root)
+    parent_alias = tmp_path / "parent_alias"
+    parent_alias.symlink_to(tmp_path, target_is_directory=True)
+    with pytest.raises(ValueError, match="real directory"):
+        tool.extract_keys(tmp_path / "unused", parent_alias / "holdout_691" / "a.keys.jsonl",
+                          root=parent_alias / "holdout_691")
 
 
 def test_existing_output_survives_freeze_failure(tmp_path):

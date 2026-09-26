@@ -29,7 +29,7 @@ def _external_output(path: Path, root: Path = DATA_ROOT) -> Path:
     root, parent = Path(root), Path(path).parent
     if not root.is_dir() or not parent.is_dir():
         raise ValueError("holdout output directory does not exist")
-    if root.is_symlink():
+    if any(ancestor.is_symlink() for ancestor in (root, *root.parents)):
         raise ValueError("holdout root must be a real directory")
     actual_parent = parent.resolve()
     if not any(os.path.samefile(ancestor, root) for ancestor in
