@@ -1606,19 +1606,37 @@ class TestRuleRevertRecording:
     # --- #696 レビュー Must1: CLI 陽性対照3件（現行コード fc313785 で赤になること
     #     を確認済み。旧版「控えに draft_line が在るか」は正当な入力を誤って止めていた）
 
-    def test_apply_cli_does_not_block_when_line_moved(self, tmp_path, capsys):
-        """陽性対照: 行の移動——draft_line と同じ文言の行が元々 before にあり、
-        それを別の位置へ移しただけ（新規追加ではない）でも止めない。"""
+    def test_apply_cli_does_not_block_when_line_moved_forward(self, tmp_path, capsys):
+        """陽性対照: 行の移動（前方向・1つ手前へ）——draft_line と同じ文言の行を
+        1つ前方へ動かしただけの場合は止めない（#696 レビュー巡2: 移動は向き依存の
+        既知の限界——このケースは通る側）。"""
         _exc, output, _filepath, _before_bytes = self._apply_cli_stale_check(
             tmp_path, capsys,
-            target_name="moved-line.md",
-            target_content="- 起草した行\n- A\n- C\n",
+            target_name="moved-line-forward.md",
+            target_content="- a\n- 起草した行\n- b\n",
             draft_line="起草した行",
-            before_content="- A\n- 起草した行\n- C\n",
+            before_content="- a\n- b\n- 起草した行\n",
         )
 
         assert output["status"] == "applied"
         assert output["revert_recorded"] is True
+
+    def test_apply_cli_line_moved_backward_is_a_known_limitation(self, tmp_path, capsys):
+        """既知の限界: 行の移動（後方向・1つ後ろへ）——出現回数は変わらない移動でも
+        diff の整列次第で逆側に落ち、誤って拒否されることがある（#696 レビュー巡2
+        Must1: 実データでの実例は0件のため、意味的な移動検出は追加せずこの向きは
+        既知の限界として固定する）。"""
+        exc, output, _filepath, _before_bytes = self._apply_cli_stale_check(
+            tmp_path, capsys,
+            target_name="moved-line-backward.md",
+            target_content="- a\n- b\n- 起草した行\n",
+            draft_line="起草した行",
+            before_content="- a\n- 起草した行\n- b\n",
+        )
+
+        assert exc is not None and exc.code == 1
+        assert output["status"] == "error"
+        assert output["reason"] == "draft_line_not_added"
 
     def test_apply_cli_does_not_block_when_existing_line_duplicated_elsewhere(self, tmp_path, capsys):
         """陽性対照: 既存行と同じ文言をもう1か所に足す——draft_line と同じ文言が

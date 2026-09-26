@@ -788,22 +788,38 @@ def test_detect_stale_before_snapshot_reuses_bullet_normalization(tmp_path):
 
 
 # ─── #696 レビュー Must1: CLI 陽性対照3件と対応する単体レベルの回帰 ─────────
-#     （行の移動／既存行と同じ文言の別位置への追加／コードブロック内の同一文言。
-#     旧版「控えに draft_line が在るか」は正当な入力をいずれも誤って止めていた）
+#     （既存行と同じ文言の別位置への追加／コードブロック内の同一文言は解消。
+#     旧版「控えに draft_line が在るか」は正当な入力をいずれも誤って止めていた。
+#     行の移動は向き依存の既知の限界として下記2件で固定する・レビュー巡2）
 
 
-def test_detect_stale_before_snapshot_none_when_line_moved(tmp_path):
-    """行の移動: draft_line と同じ文言の行が元々 before にあり、それを別の位置へ
-    移しただけ（内容としては新規追加ではない）でも、diff は移動元/移動先を
-    insert/delete のペアとして表すため、移動先（追加側）としてちゃんと検出される。
+def test_detect_stale_before_snapshot_line_moved_forward_passes(tmp_path):
+    """行の移動（前方向・1つ手前へ）: draft_line と同じ文言の行を1つ前方へ動か
+    しただけの場合、LCS ベース diff はその行を insert 側に乗せるため検出される
+    （#696 レビュー巡2: 移動は向き依存の既知の限界——このケースは通る側）。
     """
     before_path = tmp_path / "before.txt"
-    before_path.write_text("- A\n- 起草した行\n- C\n", encoding="utf-8")
+    before_path.write_text("- a\n- b\n- 起草した行\n", encoding="utf-8")
 
     reason = detect_stale_before_snapshot(
-        before_path, "- 起草した行\n- A\n- C\n", "起草した行",
+        before_path, "- a\n- 起草した行\n- b\n", "起草した行",
     )
     assert reason is None
+
+
+def test_detect_stale_before_snapshot_line_moved_backward_is_a_known_limitation(tmp_path):
+    """行の移動（後方向・1つ後ろへ）: 出現回数は変わらない移動でも、diff の整列
+    次第で逆側（delete 側）に落ちることがあり、この場合は誤って拒否される
+    （#696 レビュー巡2 Must1: 実データでの実例は0件のため、意味的な移動検出は
+    追加せず既知の限界として固定する）。
+    """
+    before_path = tmp_path / "before.txt"
+    before_path.write_text("- a\n- 起草した行\n- b\n", encoding="utf-8")
+
+    reason = detect_stale_before_snapshot(
+        before_path, "- a\n- b\n- 起草した行\n", "起草した行",
+    )
+    assert reason == "draft_line_not_added"
 
 
 def test_detect_stale_before_snapshot_none_when_existing_line_duplicated_elsewhere(tmp_path):
@@ -828,6 +844,21 @@ def test_detect_stale_before_snapshot_none_when_same_text_inside_code_block(tmp_
         before_path, "```\n- draft line\n```\n- draft line\n", "draft line",
     )
     assert reason is None
+
+
+def test_detect_stale_before_snapshot_returns_unknown_line_prefix_reason(tmp_path):
+    """#696 レビュー巡2 Should3: 起草行自体が番号付き・チェックボックス・引用・
+    表など未知の行頭記号で始まる場合は、「追加されていない」と断定できる材料が
+    無いため、diff の結果に関わらず match_draft_line_in_lines の
+    ``unknown_line_prefix`` をそのまま返す（``draft_line_not_added`` に丸めない）。
+    """
+    before_path = tmp_path / "before.txt"
+    before_path.write_text("- 既存行\n", encoding="utf-8")
+
+    reason = detect_stale_before_snapshot(
+        before_path, "- 既存行\n1. 番号付き行\n", "1. 番号付き行",
+    )
+    assert reason == "unknown_line_prefix"
 
 
 # ─── ロック（C4/C26: 手順3〜5 は同一 history lock 内）───────────────────────

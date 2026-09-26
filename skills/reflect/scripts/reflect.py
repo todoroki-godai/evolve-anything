@@ -1578,8 +1578,11 @@ def main():
                         "--before-content-file が編集後の内容に見えます"
                         "（起草行が before→after の差分で追加された行に見つかりません）。"
                         "直前の編集を一度元に戻してから Edit 前の全文を控え直すか、"
-                        "反映先が git 管理下なら `git show HEAD:<path>` を控えにして"
-                        "再実行してください（#696）"
+                        "`git diff HEAD -- <path>` が今回の起草行の追加だけのときに限り"
+                        "`git show HEAD:<path>` を控えにして再実行してください"
+                        "（それ以外の差分が混ざっている場合は編集を戻して控え直す）。"
+                        "起草行が元々ファイルにあった（移動・再掲）場合は --apply でなく"
+                        "反映済みとして扱ってください（#696）"
                     ),
                     "reason": stale_reason,
                 }, ensure_ascii=False))

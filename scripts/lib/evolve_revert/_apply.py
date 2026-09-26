@@ -231,24 +231,29 @@ def _diff_added_lines(before_lines: List[str], after_lines: List[str]) -> List[s
     行だけを集める（#696 レビュー Must1）。
 
     ``difflib.SequenceMatcher`` の LCS ベース diff は、内容が変わっていない行を
-    ``equal`` として畳み込む。そのため次の3パターンはいずれも「実際にはこの編集で
+    ``equal`` として畳み込む。そのため次の2パターンはいずれも「実際にはこの編集で
     新しく足された行ではない」として ``equal`` 側に残り、ここには出てこない:
 
-      - 行の移動（同じ行が別の位置へ移っただけ）—— 移動元/移動先の周辺行が
-        一致する限り、移動された行自体は独立した insert/delete のペアとして
-        現れる（=このペアの insert 側に乗るので、後段の一致判定では「新しく
-        足された」ものとして扱われる。これは意図どおり: 起草行の文言が
-        移動によって新しい位置に現れたことは、その位置の diff としては
-        正しく "追加" である）。
       - 既存行と同じ文言をもう1か所に足す —— 元の occurrence は ``equal`` に
         残り、新しい occurrence だけが ``insert`` として現れる。
       - コードブロック内などに同じ文言が既にある —— そちらは ``equal`` の
         まま変わらず、実際に新しく足された occurrence だけが拾われる。
 
+    既知の限界（#696 レビュー巡2 Must1・実データでの実例は0件）: **出現回数が
+    変わらない行の移動**（同じ文言の行が1個のまま、位置だけ変わる）は、LCS が
+    「どちらが移動元でどちらが移動先か」を意味的に知らないため、**整列の向きに
+    よって insert 側に乗るか delete 側に乗るかが変わる**——前方向へ動かす移動は
+    多くの場合 insert 側（＝「追加された行」として検出される）に乗るが、後方向
+    （1つ後ろ）へ動かす移動は隣接行が insert 側を占め、移動した行自体は delete
+    側（after に対応しない）に落ちることがある。これは対称的な挙動ではなく、
+    移動先/移動元の位置と周辺行の一致具合に依存する diff アルゴリズムの
+    アーティファクトであり、意味的な「移動」検出をこの関数に持たせる拡張はしない
+    （実例が無い問題を解くための機構は追加しない・think-before-coding）。
+
     差分計算そのものが「実際に足された行」を特定する唯一のロジックであり、
     ここでは再実装しない（標準ライブラリ ``difflib`` に委譲）。
     """
-    matcher = difflib.SequenceMatcher(None, before_lines, after_lines)
+    matcher = difflib.SequenceMatcher(None, before_lines, after_lines, autojunk=False)
     added: List[str] = []
     for tag, _i1, _i2, j1, j2 in matcher.get_opcodes():
         if tag in ("insert", "replace"):
@@ -264,9 +269,11 @@ def detect_stale_before_snapshot(
 
     判定軸は「before→after の差分で実際に追加された行の中に、起草行（draft_line）
     が（正規化後）存在するか」の1本（#696 レビュー Must1: 旧版は「起草行が控えに
-    存在するか」を素朴に見ており、行の移動・既存行と同じ文言の別位置への追加・
-    コードブロック内の同一文言、のいずれでも誤検知していた）。追加行の抽出は
-    ``_diff_added_lines``（標準ライブラリ ``difflib``）、正規化・一致判定は
+    存在するか」を素朴に見ており、既存行と同じ文言の別位置への追加・コードブロック
+    内の同一文言を誤検知していた。行の移動については ``_diff_added_lines`` の
+    docstring にある既知の限界を参照——出現回数が変わらない移動は整列の向きに
+    よって止まることがある）。追加行の抽出は ``_diff_added_lines``
+    （標準ライブラリ ``difflib``）、正規化・一致判定は
     ``reflect_apply_match.match_draft_line_in_lines``（反映先ファイルへの実在確認
     ``check_line_applied`` と同じ正規化・同じ関数）を再利用する——別実装しない。
 
@@ -278,17 +285,28 @@ def detect_stale_before_snapshot(
     新規ファイル作成（before が空文字列）は対象外——常に None を返す
     （#475 §8.2「やらないこと」との整合。before が無いので比較のしようがない）。
 
-    検出できない既知の限界（#696 レビュー Nit8）:
+    検出できない既知の限界:
+      - 出現回数が変わらない行の移動は、整列の向きによって止まることがある
+        （#696 レビュー巡2 Must1・``_diff_added_lines`` 参照・実データでの実例は
+        0件）。
       - Read ツールの行番号付き出力（``  42\tfoo``）をそのまま控えにした場合、
-        本来の行内容と一致しないため常に「追加されていない」と誤判定しうる
-        （逆方向の誤検知——本当は編集前の控えなのに拒否される）。
+        本来の行内容と正規化後も一致しないため、控えのどの行も after の追加行と
+        一致せず、この判定は「控え全体が編集後の内容に見える」ときと同じ結果
+        （常に「追加されていない」）を返す。**この判定は本来「編集後の内容を
+        控えた」ケースを拒否するためのものなので、この形の誤りは拒否ではなく
+        逆に検出できず通過する側の限界になる**（#696 レビュー巡2 Should4:
+        以前の記述「拒否される」は誤り。追加の検査は入れない）。
       - 編集後の内容を控えたあとで、さらに起草行の文言そのものを手で書き換えた
         場合（控え側の起草行が draft_line と正規化後も一致しない）は検出できない
         （本判定は「draft_line が新規追加行に含まれるか」だけを見ており、控え
         全体が編集後の内容であること自体は before→after の diff からは分からない）。
 
     Returns:
-        該当すれば理由コード ``"draft_line_not_added"``、該当しなければ ``None``。
+        該当すれば理由コード（``"draft_line_not_added"`` | ``"unknown_line_prefix"``。
+        後者は起草行自体が番号付き・チェックボックス・引用・表など未知の行頭記号で
+        始まる場合——#696 レビュー巡2 Should3: この場合は「追加されていない」と
+        断定できる材料が無い＝一致判定そのものが未定義なので、diff の結果に関わらず
+        その理由をそのまま返す）、該当しなければ ``None``。
     """
     before_content = before_path.read_text(encoding="utf-8")
     if before_content == "":
@@ -296,6 +314,8 @@ def detect_stale_before_snapshot(
     added_lines = _diff_added_lines(before_content.splitlines(), after_content.splitlines())
     match = match_draft_line_in_lines(added_lines, draft_line)
     if not match["matched"]:
+        if match["reason"] == "unknown_line_prefix":
+            return match["reason"]
         return "draft_line_not_added"
     return None
 
