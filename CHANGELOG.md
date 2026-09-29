@@ -3,7 +3,7 @@
 ## [Unreleased]
 
 ### Changed
-- **feat(release-sync): 本番の参照先切替に向け `bin/evolve-release-sync` を作り替え（#548 B1）** — ローカル main の ff を廃し、`plugin update` 後に安定パス `~/.claude/plugins/live/evolve-anything` を入った版へ張り替える。週1リリースを `commit-version.md` に明記。`live_checkout` の git 管理外の判定不能の理由文に `#706 で対応中` を残す
+- **feat(release-sync): 本番の参照先切替に向け `bin/evolve-release-sync` を作り替え（#548 B1）** — ローカル main の ff を廃し、`plugin update` 後に安定パス `~/.claude/plugins/live/evolve-anything` を入った版へ張り替える。週1リリースを `commit-version.md` に明記。`live_checkout` の HEAD 解決不能の理由文に `#706 で対応中` を残す（git 管理外の配置でのみ発火。実配置の本番の木は `~/.claude` の git 内側にあり、別 repo の状態を報告する劣化は #706 の担当）
 
 ### Fixed
 - **fix(daily): 朝の改善案の相対日付警告を質問文まで届ける提示指示を足す（#699）** — 警告が付く案があるときだけ、提示指示に「警告文を省略・言い換えせず AskUserQuestion の質問文（案と判断材料を示す場所）へ含め、今日を基準に読み替えない」を足す（`proposal_ranking.RELATIVE_DATE_INSTRUCTION`。警告本体と接頭辞定数を共有）。

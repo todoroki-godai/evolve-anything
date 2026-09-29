@@ -13,9 +13,9 @@
   `scripts/lib/daily/proposal_digest.py:573-583` が実行時 plugin root から逆算して組んでいる。
   **registry だけでは証明にならない** — `installed_plugins.json` の `installPath` は cache
   （mtime 2026-08-18 で stale）を指し、2つのレジストリは食い違う
-- **切替後（#548）**: 参照先は GitHub 経由で cache の版ディレクトリ（安定パス `~/.claude/plugins/live/evolve-anything`。
-  張り替えは `bin/evolve-release-sync` だけ）になり、本番の木は git 管理外。`live_checkout` は `unknown`（理由文に `#706 で対応中`）を返し、
-  **判定方式の書き換えは #706 の担当**。それまで下の判定項目は切替後の本番に働かず、この表示が恒久的に出る
+- **切替後（#548）**: 参照先は GitHub 経由で cache の版ディレクトリ（安定パス `~/.claude/plugins/live/evolve-anything`。張り替えは `bin/evolve-release-sync` だけ）。
+  **本番の木は `~/.claude`（claude-config）の作業ツリーの内側**（実測 2026-09-29 12:1x JST: `git -C ~/.claude/plugins/cache/evolve-anything/evolve-anything/1.125.0 rev-parse --show-toplevel` → `~/.claude`・`git -C ~/.claude status --porcelain | wc -l` → 233。`plugins` は `.gitignore:3` で無視されるが、包む repo の解決は止まらない）。
+  ゆえに `live_checkout` は git に成功し**別 repo の branch/dirty を本番の状態として恒久表示する（判定不能にならない）**。対処は **#706**（最低限「本番の木が属する git の toplevel が木自身と一致するか」）。理由文の `#706 で対応中` は git 管理外の配置でのみ発火し、この配置では出ない
 - **実行 root は「呼出側が渡す」。`Path(__file__)` を単独の根拠にしない**。`__file__` はモジュールの
   物理位置にすぎず、cache へのコピー・ファイル単体 symlink・`PYTHONPATH` 先頭差し替え・
   worktree の wrapper が主 checkout を import する配置で、**実際に動いている木とは別の木を指す**。
