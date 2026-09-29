@@ -46,6 +46,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import random
 import re
 import sys
@@ -67,6 +68,7 @@ from capture_recall import APPROVED_EVAL_SETS, identify_eval_set, load_capture_e
 from correction_semantic import DEFAULT_BATCH_SIZE, DEFAULT_JUDGE_MODEL  # noqa: E402
 from correction_semantic import judge_runner as _judge_runner  # noqa: E402
 from correction_semantic import prompt as _prompt  # noqa: E402
+from correction_semantic import verify as _verify  # noqa: E402
 
 # ─────────────────────────────────────────────────────────────────
 # 定数・パス
@@ -83,6 +85,7 @@ HARNESS_PATHS: Tuple[str, ...] = (
     "scripts/lib/correction_semantic/__init__.py",
     "scripts/lib/correction_semantic/judge_runner.py",
     "scripts/lib/correction_semantic/prompt.py",
+    "scripts/lib/correction_semantic/verify.py",
     "scripts/lib/safe_llm_call.py",
 )
 
@@ -149,10 +152,18 @@ def row_to_utterance(row: Dict[str, Any]) -> Dict[str, Any]:
     要約」（例: "Read, Bash"）であり、eval コーパスの ``prior_assistant_text``（直前
     assistant 発言の全文）とは意味が異なる別フィールドのため変換しない。``prev_action``
     は欠損時と同じ扱い（プロンプト上 "(なし)"）にする。
+
+    ``prior_assistant_text``（#682）: 2段目（``correction_semantic.verify.apply_verification``）
+    が使う直前 Claude 発言。凍結コーパス構築時に ``a0_capture_replay.fetch_prior_assistant_text``
+    （現 ``correction_semantic.verify.fetch_prior_assistant_text``）で1度だけ取得し凍結した値を
+    そのまま渡す（``verify._default_prior_fn`` が本キーの有無で評価/本番を切り替える単一ソース。
+    1段目のプロンプト組み立て ``format_utterance_line`` はこのキーを読まないため、1段目の
+    判定には影響しない）。
     """
     return {
         "text": row.get("text") or "",
         "prev_action": None,
+        "prior_assistant_text": row.get("prior_assistant_text"),
     }
 
 
@@ -242,9 +253,17 @@ class RunConfig:
 
 
 def run_dry(cases: List[Dict[str, Any]], cfg: RunConfig) -> Dict[str, Any]:
-    """LLM を呼ばず、対象件数・バッチ分割・陽性件数だけを出す（既定・非書込）。"""
+    """LLM を呼ばず、対象件数・バッチ分割・陽性件数だけを出す（既定・非書込）。
+
+    #682: 2段目（``verify.apply_verification``）は1段目の陽性だけを対象にするため、実際の
+    呼び出し回数は実行前には確定しない（1段目の予測を先に見る必要がある）。過小評価しない
+    （llm-batch-guard）ため、``stage2_calls_upper_bound``（全件が陽性だった場合の上限）と、
+    ラベルの陽性件数からの目安 ``stage2_calls_estimate_from_labels`` の両方を出す。
+    """
     groups = chunk(cases, cfg.batch_size)
     positives = sum(1 for r in cases if expected_is_correction(r))
+    stage2_upper_bound = len(groups) * cfg.reps
+    stage2_label_estimate = (math.ceil(positives / cfg.batch_size) if positives else 0) * cfg.reps
     return {
         "dry_run": True,
         "cases": len(cases),
@@ -254,6 +273,11 @@ def run_dry(cases: List[Dict[str, Any]], cfg: RunConfig) -> Dict[str, Any]:
         "batch_size": cfg.batch_size,
         "reps": cfg.reps,
         "total_llm_calls_if_run": len(groups) * cfg.reps,
+        "stage2_calls_upper_bound": stage2_upper_bound,
+        "stage2_calls_estimate_from_labels": stage2_label_estimate,
+        "total_llm_calls_if_run_including_stage2_upper_bound": (
+            len(groups) * cfg.reps + stage2_upper_bound
+        ),
     }
 
 
@@ -386,20 +410,31 @@ def run_eval(
     flow_dir: Path,
     eval_set_name: str = "a0",
     call_haiku_fn: Callable[[str, str], str] = _judge_runner.call_haiku,
+    call_verify_fn: Callable[[str, str], str] = _judge_runner.call_haiku_verify,
     now_fn: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
     sleep_fn: Callable[[float], None] = time.sleep,
     rng: Optional[random.Random] = None,
 ) -> Dict[str, Any]:
     """1 variant の全 rep を実行し results.jsonl / traces / errors.jsonl へ追記する。
 
-    (case, rep) 冪等: results.jsonl に既に行があるものは再実行しない。1件確定するたびに
-    即追記する（バッチ単位の中断でも、確定済みの行は失わない）。
+    (case, rep) 冪等: results.jsonl に既に行があるものは再実行しない。
+
+    **#682 2段階**: 1段目（``call_haiku_fn``）を全バッチで走らせてから、1段目が陽性と
+    判定した発話**だけ**を集約し2段目（``call_verify_fn`` 経由の
+    ``correction_semantic.verify.apply_verification``。本番 ``judge_runner.run_daily_judge``
+    と**同じ関数**・完成条件①）で確かめ直す。results.jsonl への書込みは
+    2段目まで終わってから rep 単位でまとめて行う（1段目バッチ横断で2段目を集約するほど
+    呼び出し回数が減るため・設計 §3。既存の「バッチ単位で即追記」より粒度は粗くなるが、
+    resume の単位は元々 (case, rep) — 1 rep の途中終了時は当該 rep が丸ごと再実行される）。
+    2段目は本番ストアに書かない（``reserve_fn=None``。モジュール docstring の
+    「本番ストアに一切書かない」契約を維持）。
 
     バッチ単位の usage: ``call_haiku`` は生成テキストのみを返し usage/model を含まない
     （``safe_llm_call.call_claude_headless`` の既知の制約・報告に明記）。usage は
     各行 ``None`` とし、latency のみバッチ単位で計測して按分せず各行にそのまま複製する
     （按分規則: バッチ全体の呼び出し時間をバッチ内の全 case 行にコピーする。トークン
-    usage が取れないため按分の必要自体がない）。
+    usage が取れないため按分の必要自体がない。2段目の latency はバッチ単位で行に加算しない
+    — 1段目の latency のみを記録する既存契約を維持する）。
 
     **本番との既知の相違点（未測定・Nit）**:
     - 本番 ``judge_runner.select_daily_batch`` は timestamp 降順（新しい発話優先）で
@@ -425,6 +460,7 @@ def run_eval(
     errors_path = variant_dir / "errors.jsonl"
 
     harness_sha = compute_harness_sha()
+    fingerprint = _prompt.prompt_fingerprint()
     for previous in _read_jsonl(results_path):
         meta = previous.get("meta") or {}
         if (meta.get("harness_sha"), meta.get("model"), meta.get("batch_size_config"),
@@ -440,10 +476,15 @@ def run_eval(
     summary = {
         "requested": 0, "graded": 0, "errors": 0, "batches_called": 0,
         "expected_total": len(cases) * cfg.reps,
+        # #682: 2段目の集計（rep をまたいで積算）。
+        "verify": {"calls": 0, "rejected": 0, "kept": 0, "failed": 0, "no_context": 0},
     }
 
     for rep in range(cfg.reps):
         pending = [r for r in cases if (r["eval_id"], rep) not in done]
+        # ── 1段目: 全バッチを走らせ、陽性/陰性を問わず stage1_records に集める
+        # （results.jsonl への書込みは2段目の後にまとめて行う）。
+        stage1_records: List[Dict[str, Any]] = []
         for group in chunk(pending, cfg.batch_size):
             utterances = [row_to_utterance(r) for r in group]
             batch_prompt = _prompt.build_batch_prompt(utterances)
@@ -480,7 +521,6 @@ def run_eval(
                 continue
 
             by_index = {v["index"]: v for v in parsed["verdicts"]}
-            fingerprint = _prompt.prompt_fingerprint()
             for local_i, r in enumerate(group):
                 summary["requested"] += 1
                 v = by_index.get(local_i)
@@ -494,45 +534,79 @@ def run_eval(
                     continue
                 trace_path = traces_dir / f"{r['eval_id']}_rep{rep}.json"
                 trace_path.write_text(json.dumps(trace, ensure_ascii=False, indent=2), encoding="utf-8")
-                expected = expected_is_correction(r)
-                predicted = bool(v.get("is_correction"))
-                grade = grade_case(expected, predicted)
-                text = r.get("text", "") or ""
-                prompt_sha256 = hashlib.sha256(text.encode("utf-8")).hexdigest()
-                # tacchi レビュー [Must]1: 他PJの生発話（本文・idiom・reason の引用/抜粋）を
-                # results.jsonl（commit 対象）へ書かない。凍結コーパスは .gitignore で同じ
-                # 理由により除外されているため、本文を含む行を commit すると矛盾する。
-                # eval_id + prompt_sha256 があれば、手元の凍結コーパス（非commit）から
-                # 本文を復元・検証できるため情報は失われない（traces/ は非commit・別途 gitignore
-                # 済みなのでローカルデバッグ用に本文を残す）。
-                row = {
-                    "prompt_id": r["eval_id"],
-                    "prompt": f"[redacted other-PJ utterance; sha256={prompt_sha256}]",
-                    "tags": [r.get("label"), r.get("category"), r.get("pj_slug")],
-                    "status": "ok",
-                    "grade": grade,
+                stage1_records.append({
+                    "r": r, "verdict": dict(v), "batch_id": batch_id, "latency_s": latency,
+                })
+
+        if not stage1_records:
+            continue
+
+        # ── 2段目（#682）: 1段目の陽性だけを、1段目バッチをまたいで集約し確かめ直す
+        # （本番 judge_runner.run_daily_judge と同じ verify.apply_verification を通す・
+        # 完成条件①）。合成キー1本にまとめる（judge_eval はバッチ横断で集約するため、
+        # 元の1段目バッチ境界を2段目のバッチングには引き継がない）。
+        synth_key = "eval"
+        groups = {synth_key: [row_to_utterance(rec["r"]) for rec in stage1_records]}
+        stage1_verdicts = {synth_key: [
+            {**rec["verdict"], "index": i} for i, rec in enumerate(stage1_records)
+        ]}
+        verify_result = _verify.apply_verification(
+            groups, stage1_verdicts,
+            call_fn=call_verify_fn,
+            reserve_fn=None,  # eval は本番ストア（当日予算）に一切書かない
+            model=cfg.model,
+            batch_size=cfg.batch_size,
+        )
+        final_verdicts = verify_result["verdicts"].get(synth_key, stage1_verdicts[synth_key])
+        for k in ("calls", "rejected", "kept", "failed", "no_context"):
+            summary["verify"][k] += verify_result[k]
+
+        for i, rec in enumerate(stage1_records):
+            r = rec["r"]
+            stage1_v = rec["verdict"]
+            final_v = final_verdicts[i]
+            expected = expected_is_correction(r)
+            stage1_predicted = bool(stage1_v.get("is_correction"))
+            predicted = bool(final_v.get("is_correction"))
+            grade = grade_case(expected, predicted)
+            text = r.get("text", "") or ""
+            prompt_sha256 = hashlib.sha256(text.encode("utf-8")).hexdigest()
+            # tacchi レビュー [Must]1: 他PJの生発話（本文・idiom・reason の引用/抜粋）を
+            # results.jsonl（commit 対象）へ書かない。凍結コーパスは .gitignore で同じ
+            # 理由により除外されているため、本文を含む行を commit すると矛盾する。
+            # eval_id + prompt_sha256 があれば、手元の凍結コーパス（非commit）から
+            # 本文を復元・検証できるため情報は失われない（traces/ は非commit・別途 gitignore
+            # 済みなのでローカルデバッグ用に本文を残す）。
+            row = {
+                "prompt_id": r["eval_id"],
+                "prompt": f"[redacted other-PJ utterance; sha256={prompt_sha256}]",
+                "tags": [r.get("label"), r.get("category"), r.get("pj_slug")],
+                "status": "ok",
+                "grade": grade,
+                "model": cfg.model,
+                "usage": None,
+                "latency_s": rec["latency_s"],
+                "meta": {
+                    "rep": rep,
+                    "expected": expected,
+                    "predicted": predicted,
+                    # #682: 2段目に確かめる前の1段目単独の判定（後方比較・診断用）。
+                    "stage1_predicted": stage1_predicted,
+                    "judge_category": final_v.get("category"),
+                    "batch_id": rec["batch_id"],
+                    "batch_size": cfg.batch_size,
+                    "prompt_fingerprint": fingerprint,
+                    "prompt_sha256": prompt_sha256,
+                    "harness_sha": harness_sha,
                     "model": cfg.model,
-                    "usage": None,
-                    "latency_s": latency,
-                    "meta": {
-                        "rep": rep,
-                        "expected": expected,
-                        "predicted": predicted,
-                        "judge_category": v.get("category"),
-                        "batch_id": batch_id,
-                        "batch_size": len(group),
-                        "prompt_fingerprint": fingerprint,
-                        "prompt_sha256": prompt_sha256,
-                        "harness_sha": harness_sha,
-                        "model": cfg.model,
-                        "batch_size_config": cfg.batch_size,
-                        "eval_set": eval_set_name,
-                        "eval_set_sha256": APPROVED_EVAL_SETS[eval_set_name][1],
-                        "generated_at": now_fn().isoformat(),
-                    },
-                }
-                _append_jsonl(results_path, row)
-                summary["graded"] += 1
+                    "batch_size_config": cfg.batch_size,
+                    "eval_set": eval_set_name,
+                    "eval_set_sha256": APPROVED_EVAL_SETS[eval_set_name][1],
+                    "generated_at": now_fn().isoformat(),
+                },
+            }
+            _append_jsonl(results_path, row)
+            summary["graded"] += 1
     return summary
 
 

@@ -97,10 +97,37 @@ VERDICT_JSON_SCHEMA = json.dumps(
     }
 )
 
+# #682 2段目（確かめ直し）の response schema。1段目の陽性だけを対象に「直前の Claude 発言と
+# 並べても、その中身を変えさせる・誤りを指摘する・以後の約束事を課す要求か」を2値
+# （keep=1段目の陽性を維持／reject=別物なので非修正へ戻す）で判定させる。1段目の
+# reason/idiom/category は渡さない（先の判定を見ると追認に倒れるため・設計 §3）ので
+# schema にもそれらのフィールドは無い。
+VERIFY_JSON_SCHEMA = json.dumps(
+    {
+        "type": "object",
+        "properties": {
+            "verdicts": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "index": {"type": "integer"},
+                        "verdict": {"type": "string", "enum": ["keep", "reject"]},
+                    },
+                    "required": ["index", "verdict"],
+                },
+            }
+        },
+        "required": ["verdicts"],
+    }
+)
+
 # verdict の category フィールドが従う契約のバージョン。プロンプト文面・enum・優先規則・
 # schema の構造を変えたら上げる（producer 時点で provenance に保存し、断絶が起きたことを
 # 後から識別できるようにする・§2.4/§2.5）。
-CATEGORY_SCHEMA_VERSION = 4
+# #682: 2段目（確かめ直し）を足したことで、同じ is_correction=True でも「2段目を通過した
+# 陽性」と「1段目のみの陽性」は測定条件が異なる（判定基準そのものが変わった）ため 5 へ上げる。
+CATEGORY_SCHEMA_VERSION = 5
 
 # プロンプトに埋め込む語彙表（意味 + 境界優先規則）。§2.1 の表・優先規則をそのまま使う。
 _CATEGORY_VOCAB_TABLE = (
@@ -203,6 +230,119 @@ def build_batch_prompt(
     )
 
 
+# 2段目のプロンプトに含める発話本文・直前発言それぞれの最大文字数。本文は1段目と同じ
+# ``MAX_CHARS_PER_UTTERANCE``。直前発言は凍結済み評価セット・``verify.fetch_prior_assistant_text``
+# のどちらも既に先頭400字で切り詰めているが、防御的にここでも上限を掛ける（#410 [Must]C 同型）。
+_MAX_PRIOR_CHARS = 400
+
+
+def format_verify_line(index: int, item: Dict[str, Any], *, max_chars: int = MAX_CHARS_PER_UTTERANCE) -> str:
+    """2段目1件分のプロンプト行を組み立てる（決定論・IO なし）。
+
+    ``build_verify_prompt``（実送信）と 2段目のトークン見積もりの単一ソース
+    （``format_utterance_line`` と同じ思想・#410 [Must]C）。
+    """
+    prior = (item.get("prior_assistant_text") or "(なし)")[:_MAX_PRIOR_CHARS]
+    text = (item.get("text") or "").replace("\n", " ").strip()[:max_chars]
+    return f"[{index}] 直前のClaudeの発言: {prior}\n    ユーザー発話: {text}"
+
+
+def build_verify_prompt(
+    items: List[Dict[str, Any]], *, max_chars: int = MAX_CHARS_PER_UTTERANCE
+) -> str:
+    """2段目（確かめ直し）の判定プロンプトを組み立てる（決定論・IO なし）。
+
+    1段目が「修正」と判定した発話**だけ**を対象に、直前の Claude 発言と並べて
+    「直前の Claude 発言の中身を変えさせる・誤りを指摘する・以後の約束事を課す要求か」
+    （keep）／「直前とは別の新しい作業・ただの質問か」（reject）を判定させる（設計 §3）。
+    1段目の reason/idiom/category は渡さない（先の判定を見ると追認に倒れるため）。
+    """
+    lines = [format_verify_line(i, it, max_chars=max_chars) for i, it in enumerate(items)]
+    listing = "\n".join(lines)
+
+    return (
+        "あなたは Claude Code セッションのログを監査するアシスタントです。\n"
+        "以下の各ターンは、別の判定器が「ユーザーが Claude の方向を正そうとした発話（修正）」と\n"
+        "一次判定したものです。その判定が正しいかを、直前の Claude の発言と並べてもう一度\n"
+        "確かめてください。\n\n"
+        "keep（判定を維持）にする場合: ユーザー発話が、直前の Claude の発言の**中身**\n"
+        "（成果物・方針・進め方・説明）を変えさせる要求、誤りの指摘、または以後の作業にも\n"
+        "続けて適用させる約束事の追加である場合。\n\n"
+        "reject（判定を取り消す）にする場合:\n"
+        "- 直前の Claude の発言の中身とは無関係な、**新しい作業の依頼**である場合\n"
+        "- 新しい情報を求める**ただの質問**である場合\n"
+        "- 直前の成果物・方針に向かわない相談・提案である場合\n\n"
+        "**判定対象の全 index について、必ず 1 件ずつ verdict を返してください**"
+        "（省略しない）。\n\n"
+        "以下の形式で判定結果を返してください:\n"
+        '{"verdicts": [{"index": 0, "verdict": "keep"}, {"index": 1, "verdict": "reject"}, ...]}\n\n'
+        "判定対象:\n"
+        f"{listing}\n"
+    )
+
+
+def _validate_verify_verdict(v: object) -> Optional[Dict[str, Any]]:
+    """2段目 verdict 1要素を厳格型検証する（``_validate_verdict`` と同型の防御）。"""
+    if not isinstance(v, dict):
+        return None
+    idx = v.get("index")
+    if not isinstance(idx, int) or isinstance(idx, bool):
+        return None
+    verdict = v.get("verdict")
+    if verdict not in ("keep", "reject"):
+        return None
+    return {"index": idx, "verdict": verdict}
+
+
+def parse_verify_result(
+    raw: Optional[Any], *, expected_len: Optional[int] = None
+) -> Dict[str, Any]:
+    """2段目のモデル応答（JSON 文字列）から verdict のリストを取り出す（``parse_verdicts_result``
+    と同型の頑健パース・#682）。
+
+    「解釈できない（壊れた JSON）」場合は ``ok=False`` を返す。呼び出し側
+    （``correction_semantic.verify.apply_verification``）はこれを「2段目が失敗した」として
+    扱い、**1段目の陽性を残す**（黙って消さない・設計 §3）。
+
+    Returns:
+        {"ok": bool, "verdicts": [{index:int, verdict:"keep"|"reject"}], "out_of_range": int}
+    """
+    if not raw or not isinstance(raw, str):
+        return {"ok": False, "verdicts": [], "out_of_range": 0}
+    text = raw.strip()
+    obj = None
+    try:
+        obj = json.loads(text)
+    except (json.JSONDecodeError, ValueError):
+        m = _JSON_OBJ_RE.search(text)
+        if m:
+            try:
+                obj = json.loads(m.group(0))
+            except (json.JSONDecodeError, ValueError):
+                return {"ok": False, "verdicts": [], "out_of_range": 0}
+        else:
+            return {"ok": False, "verdicts": [], "out_of_range": 0}
+    if not isinstance(obj, dict):
+        return {"ok": False, "verdicts": [], "out_of_range": 0}
+    verdicts = obj.get("verdicts")
+    if not isinstance(verdicts, list):
+        return {"ok": False, "verdicts": [], "out_of_range": 0}
+
+    out: List[Dict[str, Any]] = []
+    seen_idx: set = set()
+    out_of_range = 0
+    for v in verdicts:
+        item = _validate_verify_verdict(v)
+        if item is None or item["index"] in seen_idx:
+            return {"ok": False, "verdicts": [], "out_of_range": 0}
+        if expected_len is not None and not (0 <= item["index"] < expected_len):
+            out_of_range += 1
+            continue
+        seen_idx.add(item["index"])
+        out.append(item)
+    return {"ok": True, "verdicts": out, "out_of_range": out_of_range}
+
+
 def prompt_fingerprint() -> str:
     """固定プロンプトテンプレートの fingerprint（sha256 先頭12桁）。
 
@@ -213,8 +353,11 @@ def prompt_fingerprint() -> str:
     発話に依存しない固定部分だけをハッシュ対象にするため ``build_batch_prompt([])``
     （``batch.estimate_tokens`` の固定費導出と同じ基準文字列・単一ソース）を入力にする。
     プロンプト文面・語彙表・優先規則のどれを変えてもこの値は変わる。
+
+    #682: 2段目（``build_verify_prompt([])``）の固定部分も対象に加える。2段目の文面だけを
+    変えても系列断絶が検出できる必要があるため（完成条件⑤）。
     """
-    basis = build_batch_prompt([])
+    basis = build_batch_prompt([]) + "\x00" + build_verify_prompt([])
     return hashlib.sha256(basis.encode("utf-8")).hexdigest()[:12]
 
 

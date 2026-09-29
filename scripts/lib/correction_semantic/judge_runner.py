@@ -46,6 +46,7 @@ judged にせずスキップする（#273）ので、``call_haiku`` が例外を
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -62,8 +63,10 @@ from weak_signals.ttl import _parse_iso  # noqa: E402
 
 from . import DEFAULT_BATCH_SIZE, DEFAULT_JUDGE_MODEL  # noqa: E402
 from . import batch as _batch  # noqa: E402
+from . import prompt as _prompt  # noqa: E402
 from .prompt import VERDICT_JSON_SCHEMA as _VERDICT_JSON_SCHEMA  # noqa: E402
 from . import store as _store  # noqa: E402
+from . import verify as _verify  # noqa: E402
 
 # 承認済み標準運用値（#408・ユーザー standing approval）。呼び出し側が override しない
 # 場合の既定。userConfig（judge_daily_utterance_limit / judge_daily_token_limit）から
@@ -94,6 +97,17 @@ def call_haiku(prompt: str, model: str = DEFAULT_JUDGE_MODEL) -> str:
     """
     return _safe_llm_call.call_claude_headless(
         prompt, model=model, json_schema=_VERDICT_JSON_SCHEMA
+    )
+
+
+def call_haiku_verify(prompt: str, model: str = DEFAULT_JUDGE_MODEL) -> str:
+    """2段目（確かめ直し）の唯一の呼び出し集約点（#682・単体テストはここを mock する）。
+
+    ``call_haiku`` と同じ安全な経路（``safe_llm_call.call_claude_headless``）を使う。
+    schema だけ2段目用（``prompt.VERIFY_JSON_SCHEMA``）に差し替える。
+    """
+    return _safe_llm_call.call_claude_headless(
+        prompt, model=model, json_schema=_prompt.VERIFY_JSON_SCHEMA
     )
 
 
@@ -453,6 +467,11 @@ def run_daily_judge(
                 "excluded_untracked_total": excluded_untracked_total,
                 "excluded_untracked_by_pj": excluded_untracked_by_pj,
                 "excluded_before_cutoff_total": excluded_before_cutoff_total,
+                "verify_calls": 0,
+                "verify_rejected": 0,
+                "verify_kept": 0,
+                "verify_failed": 0,
+                "verify_no_context": 0,
             }
 
         unjudged_all, selected, capped = _select_for_today(
@@ -490,6 +509,11 @@ def run_daily_judge(
                 "excluded_untracked_total": excluded_untracked_total,
                 "excluded_untracked_by_pj": excluded_untracked_by_pj,
                 "excluded_before_cutoff_total": excluded_before_cutoff_total,
+                "verify_calls": 0,
+                "verify_rejected": 0,
+                "verify_kept": 0,
+                "verify_failed": 0,
+                "verify_no_context": 0,
             }
 
         # Phase A（決定論）: "daily" はラベルに過ぎない（batch_id 構成のみに使われ、
@@ -535,6 +559,43 @@ def run_daily_judge(
             file=out,
         )
 
+        # 2段目（確かめ直し・#682）: 1段目の陽性だけを、直前の Claude 発言と並べてもう一度
+        # 確かめる。Phase C（既存・変更なし）へは「書き換えた応答」として渡す — reject された
+        # 発話だけ responses[key] を JSON 再構築し、変更が無かった key は元の応答のまま
+        # （out_of_range 等の既存 observability を壊さない）。
+        groups: Dict[str, List[Dict[str, Any]]] = {}
+        stage1_verdicts: Dict[str, List[Dict[str, Any]]] = {}
+        for req in emitted["requests"]:
+            key = req.get("id")
+            group = (req.get("meta") or {}).get("utterances", [])
+            groups[key] = group
+            raw = responses.get(key)
+            if not raw:
+                continue
+            parsed_stage1 = _prompt.parse_verdicts_result(raw, expected_len=len(group))
+            if not parsed_stage1["ok"]:
+                continue
+            stage1_verdicts[key] = parsed_stage1["verdicts"]
+
+        verify_result = _verify.apply_verification(
+            groups,
+            stage1_verdicts,
+            call_fn=call_haiku_verify,
+            reserve_fn=lambda items: _verify.reserve_verify_cost(
+                items, judged_path=judged_path, dry_run=False
+            ),
+            model=model,
+            batch_size=batch_size,
+        )
+        for key, vlist in verify_result["verdicts"].items():
+            responses[key] = json.dumps({"verdicts": vlist}, ensure_ascii=False)
+        print(
+            f"[judge_runner] 2段目: calls={verify_result['calls']} "
+            f"rejected={verify_result['rejected']} kept={verify_result['kept']} "
+            f"failed={verify_result['failed']} no_context={verify_result['no_context']}",
+            file=out,
+        )
+
         # Phase C（決定論）。#400 A5: category の provenance に producer 時点の model を
         # 保存するため、Phase B が実際に call_haiku へ渡した model をそのまま渡す。
         result = _batch.ingest_judgement_results(
@@ -562,6 +623,9 @@ def run_daily_judge(
             # バッチ数）をログにも出す。応答結果に関わらず「呼ぼうとした」時点で必ず1件
             # 積むため、この件数が emitted['batches'] と乖離しないかで予約漏れを検知できる。
             f"reserved_batches={reserved_batches} "
+            # #682: 2段目の結果もログへ（重複表示になるが、永続化ログ1行で全件数が
+            # 追えることを既存の運用慣習に合わせる）。
+            f"verify_calls={verify_result['calls']} verify_rejected={verify_result['rejected']} "
             f"weak_written={result['weak_written']} judged_written={result['judged_written']}",
             file=out,
         )
@@ -591,6 +655,12 @@ def run_daily_judge(
             "excluded_untracked_total": excluded_untracked_total,
             "excluded_untracked_by_pj": excluded_untracked_by_pj,
             "excluded_before_cutoff_total": excluded_before_cutoff_total,
+            # #682 2段目（確かめ直し）の件数。
+            "verify_calls": verify_result["calls"],
+            "verify_rejected": verify_result["rejected"],
+            "verify_kept": verify_result["kept"],
+            "verify_failed": verify_result["failed"],
+            "verify_no_context": verify_result["no_context"],
         }
 
 

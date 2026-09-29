@@ -186,10 +186,16 @@ def test_prompt_fingerprint_changes_with_template() -> None:
     assert cs_prompt.prompt_fingerprint() == fp1
 
 
-def test_prompt_contract_version_and_fingerprint_for_schema_v4() -> None:
-    """#682: 判定境界の変更後の系列識別値を固定する。"""
-    assert cs_prompt.CATEGORY_SCHEMA_VERSION == 4
-    assert cs_prompt.prompt_fingerprint() == "e6a3814e11e7"
+def test_prompt_contract_version_and_fingerprint_for_schema_v5() -> None:
+    """#682 精度回復（2段判定）: 判定境界の変更後の系列識別値を固定する。
+
+    2段目（``build_verify_prompt``）を fingerprint の対象に加えたため、schema v4 時点
+    （文言だけの1段目修正・e6a3814e11e7）から値が変わる。CATEGORY_SCHEMA_VERSION も
+    5 へ上げた（同じ is_correction=True でも「2段目を通過した陽性」と「1段目のみの
+    陽性」は測定条件が異なるため）。
+    """
+    assert cs_prompt.CATEGORY_SCHEMA_VERSION == 5
+    assert cs_prompt.prompt_fingerprint() == "45b5786931e9"
 
 
 @pytest.mark.parametrize(

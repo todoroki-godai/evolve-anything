@@ -55,6 +55,9 @@ import duckdb  # noqa: E402
 
 import rl_common.detection as det  # noqa: E402
 from capture_recall import evaluate_capture_recall, load_capture_eval_set  # noqa: E402
+# #682: fetch_prior_assistant_text は correction_semantic.verify へ移設（単一化）。
+# 2段目（確かめ直し）と評価コーパス構築（本ファイル）が同じ実装を共有する。
+from correction_semantic.verify import fetch_prior_assistant_text  # noqa: E402,F401
 
 import os  # noqa: E402
 
@@ -251,58 +254,6 @@ def sample_random_plus_machinery_oversample(
     machinery_all = [r for r in pop if machinery_suspect(r["text"])]
     oversample_extra = [r for r in machinery_all if (r["source_path"], r["line_no"]) not in random_keys]
     return random_sample, oversample_extra
-
-
-_PRIOR_LOOKBACK_LINES = 150
-"""assistant テキストを遡って探す行数。round2 codex [Must-6] で判明: IDE メタデータ行
-（attachment/last-prompt/ai-title/mode/permission-mode/pr-link/file-history-snapshot 等、
-type が user/assistant でない行）が直前の実 assistant ターンとの間に 30 行を超えて挟まる
-ケースが実測で複数見つかった（例: 44行・36行離れていた）。30→150 に拡張。"""
-
-
-def fetch_prior_assistant_text(source_path: str, line_no: int, max_chars: int = 400) -> Optional[str]:
-    """raw transcript から、当該行より前の直近 assistant テキストを取得する。
-
-    utterances.db の prev_action 列はツール名列のみ（実内容なし）で、かつ実測で
-    extractor_version=2（2026-07-14 以降の再抽出分）は 0/1971 件が非 null という
-    データ欠損があり、本コーパス窓（07-27以降）では使用不能と判明した
-    （codex [Must]5 への回答は本関数による raw transcript 直読みで代替する）。
-    """
-    p = Path(source_path)
-    if not p.exists():
-        return None
-    try:
-        with open(p, "r", encoding="utf-8", errors="replace") as f:
-            lines = f.readlines()
-    except OSError:
-        return None
-    # line_no は 1-indexed（utterances.db 保存規約に合わせる）
-    idx = line_no - 1
-    for i in range(idx - 1, max(-1, idx - _PRIOR_LOOKBACK_LINES), -1):
-        if i < 0 or i >= len(lines):
-            continue
-        try:
-            obj = json.loads(lines[i])
-        except json.JSONDecodeError:
-            continue
-        if obj.get("type") != "assistant":
-            continue
-        msg = obj.get("message", {})
-        content = msg.get("content", "") if isinstance(msg, dict) else ""
-        text = ""
-        if isinstance(content, str):
-            text = content
-        elif isinstance(content, list):
-            parts = []
-            for block in content:
-                if isinstance(block, dict) and block.get("type") == "text":
-                    parts.append(block.get("text", ""))
-                elif isinstance(block, dict) and block.get("type") == "tool_use":
-                    parts.append(f"[tool_use:{block.get('name')}]")
-            text = " ".join(parts)
-        if text.strip():
-            return text.strip()[:max_chars]
-    return None
 
 
 # ---------------------------------------------------------------------------
