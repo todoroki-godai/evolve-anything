@@ -28,6 +28,7 @@ if str(_lib_dir) not in sys.path:
 
 from correction_semantic.store import CorrectionIdiom, append_idioms  # noqa: E402
 from daily import proposal_digest as pd  # noqa: E402
+from daily import proposal_ranking as pr  # noqa: E402
 from weak_signals.store import WeakSignal, append_signals  # noqa: E402
 
 # idiom_eligible（#527: 最小長8文字/日常語stopword無し/文脈固有トークン無し）を満たすテキスト。
@@ -1194,6 +1195,75 @@ def test_build_proposal_prompt_no_relative_date_warning_when_text_is_plain():
     g = _group_with_meta(["k1"], rep="テストを追加する案", uttered_at=ts)
     msg = pd.build_proposal_prompt([g], "pj-a")
     assert "相対日付あり" not in msg
+
+
+def test_build_proposal_prompt_tells_assistant_to_carry_relative_date_warning_into_question_text():
+    """#699 正常系E2E: 警告行は「N日前の発話」の括弧行に入るだけで、判断材料として列挙されるのは
+    「記録される内容・背景」だけだった＝アシスタントが AskUserQuestion の質問文へ転記するかは
+    運任せだった。警告が付く案があるとき、提示指示に「警告文を省略・言い換えせず質問文へ含める」が
+    最終 payload の指示部（案の列挙より前）へ届くこと。
+    """
+    ts = "2026-09-10T03:00:00+00:00"
+    g = _group_with_meta(["k1"], rep="来週やる案", uttered_at=ts)
+    msg = pd.build_proposal_prompt([g], "pj-a")
+    # 期待値は定数経由でなく全文を直書きする（否定形への書き換え等、意味の反転を緑で通さない）
+    instruction = (
+        "「⚠ 相対日付あり」が付いた案は、その警告文を省略・言い換えせずに"
+        "AskUserQuestion の質問文（案と判断材料を示す場所）へ含め、今日を基準に読み替えないこと。"
+    )
+    assert pr.RELATIVE_DATE_INSTRUCTION == instruction
+    assert instruction in msg
+    # 指示は案の行より前（=アシスタントが案を並べる前に読む位置）にある
+    assert msg.index(instruction) < msg.index("- 案:")
+    # 警告本体（発話日つき）は案の直下の行に実在し、指示が名指しする接頭辞で始まる
+    warning_line = next(ln for ln in msg.splitlines() if "2026-09-10(木)" in ln)
+    assert pr.RELATIVE_DATE_WARNING_PREFIX in warning_line
+    assert pr.RELATIVE_DATE_WARNING_PREFIX in instruction
+    assert msg.index("- 案:") < msg.index(warning_line)
+
+
+def test_build_proposal_prompt_relative_date_instruction_for_unknown_date_and_later_group():
+    """#699: 発話日不明の警告・複数案の2件目にだけ警告が付く場合でも指示が届く。"""
+    plain = _group_with_meta(["k0"], rep="テストを追加する案", uttered_at="2026-09-10T03:00:00+00:00")
+    unknown = _group_with_meta(["k1"], rep="来週やる案", uttered_at="not-a-date")
+    msg = pd.build_proposal_prompt([plain, unknown], "pj-a")
+    assert pr.RELATIVE_DATE_INSTRUCTION in msg
+    assert "発話日不明のため日付を確認すること" in msg
+
+
+def test_build_proposal_prompt_relative_date_instruction_on_unknown_date_branch_with_freshness_label():
+    """#699: 発話日が取れない分岐（count != len(signal_keys)）では、隣に並ぶ「N日前の発話」
+    （群の最新の時刻であって、この文の発話日ではない）があっても、指示と「発話日不明」警告の両方が出る。
+    """
+    g = {
+        "signal_keys": ["k2"],  # 元は ["k0", "k2"] で k0（代表文の key）が既読除外された
+        "count": 2,
+        "representative": "来週やる案",
+        "evidence_text": "来週やる案",
+        "signal_meta_by_key": {
+            "k2": {"uttered_at": (datetime.now(timezone.utc) - timedelta(days=1)).isoformat(),
+                   "detected_at": None, "cross_pj": []},
+        },
+        "cross_pj_confirmed": [],
+    }
+    msg = pd.build_proposal_prompt([g], "pj-a")
+    assert pr.RELATIVE_DATE_INSTRUCTION in msg
+    assert "昨日の発話" in msg  # 隣に並ぶ群の最新時刻ラベル
+    context_line = next(ln for ln in msg.splitlines() if "発話日不明のため日付を確認すること" in ln)
+    assert "昨日の発話" in context_line
+    # 警告に日付は含まれない（隣のラベルの日付を発話日として写す根拠が無い）
+    assert "この文の発話日" not in msg
+
+
+def test_build_proposal_prompt_no_relative_date_instruction_when_no_warning():
+    """#699 陽性対照: 警告の付く案が無ければ提示指示も足さない（ノイズ無し）。"""
+    ts = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
+    g = _group_with_meta(["k1"], rep="テストを追加する案", uttered_at=ts)
+    msg = pd.build_proposal_prompt([g], "pj-a")
+    assert pr.RELATIVE_DATE_INSTRUCTION not in msg
+    assert pr.RELATIVE_DATE_WARNING_PREFIX not in msg
+    # 既存の推奨指示は従来どおり届く
+    assert pd.RECOMMENDATION_INSTRUCTION in msg
 
 
 def test_build_proposal_prompt_relative_date_warning_unparsable_uttered_at():
