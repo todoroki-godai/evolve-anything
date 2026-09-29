@@ -7,12 +7,17 @@
 ④**blocking**: 「非既定ブランチ／dirty／ahead の実環境で、SessionStart に何も出ない」または「判定不能なのに無音」
 ⑤**検証方法**: 陽性・陽性対照・判定不能の3件を実測（本文末尾）
 
-- **事実（2026-08-25 実測）**: 実行時の plugin root は共有 checkout。根拠を2つ揃えて確認した:
+- **事実（2026-08-25 実測・#548 の参照先切替前）**: 実行時の plugin root は共有 checkout。根拠を2つ揃えて確認した:
   ①`known_marketplaces.json` の当該 marketplace が `source.source = "directory"` / `installLocation` = 共有 checkout
   ②本日の SessionStart 出力が共有 checkout 配下のパスを印字し、それは
   `scripts/lib/daily/proposal_digest.py:573-583` が実行時 plugin root から逆算して組んでいる。
   **registry だけでは証明にならない** — `installed_plugins.json` の `installPath` は cache
   （mtime 2026-08-18 で stale）を指し、2つのレジストリは食い違う
+- **切替後（#548）**: 参照先は GitHub 経由で cache の版ディレクトリ（安定パス `~/.claude/plugins/live/evolve-anything`。張り替えは `bin/evolve-release-sync` だけ）。
+  **本番の木は `~/.claude`（claude-config）の作業ツリーの内側**（実測 2026-09-29 12:1x JST: `git -C ~/.claude/plugins/cache/evolve-anything/evolve-anything/1.125.0 rev-parse --show-toplevel` → `~/.claude`・`git -C ~/.claude status --porcelain | wc -l` → 233。`plugins` は `.gitignore:3` で無視されるが、包む repo の解決は止まらない）。
+  ゆえに `live_checkout` は git に成功し**別 repo の branch/dirty を本番の状態として恒久表示する（判定不能にならない）**。対処は **#706**（最低限「本番の木が属する git の toplevel が木自身と一致するか」）。この配置は次項の条件に当たり、判定不能＋`#706 で対応中` が出る（branch/dirty の誤報はしない）
+- **別 repo の内側の木は判定不能（#706 から切り出して #548 で実装）**: `git rev-parse --show-toplevel` が実行木と別実体（`samefile` 比較）なら branch/dirty へ進まず、両パスと `#706 で対応中` を理由文に出す。正しい判定は #706 本体
+- **git 呼び出しは `git -C <実行木> --no-optional-locks` で repo 解決を固定する（主。`--git-dir` 等と違い配置ごとの分岐が要らない形を選んだ。git 2.50.1 では gitfile を `--git-dir` に渡しても解決した＝実測 2026-09-29、他版は未確認）。あわせて repo の場所を決める環境変数（`git rev-parse --local-env-vars` の一覧。hook 実行時に git 自身が `GIT_DIR` 等を立てる）を落とす（保険。`GIT_CEILING_DIRECTORIES` 等は含まれず閉じていない＝既知の種別のみ・迂回可能）**（`_git()` が単一の口）。継承すると別 repo を判定する（#548 巡4）
 - **実行 root は「呼出側が渡す」。`Path(__file__)` を単独の根拠にしない**。`__file__` はモジュールの
   物理位置にすぎず、cache へのコピー・ファイル単体 symlink・`PYTHONPATH` 先頭差し替え・
   worktree の wrapper が主 checkout を import する配置で、**実際に動いている木とは別の木を指す**。
@@ -55,4 +60,4 @@
   （hook stdout に出ることと、人間が見て動くことは別の測定）。**再測条件**: ①が緑になった後、
   同一状態で5セッション連続開始し、文言が他通知に埋もれず読める位置に出るかを記録する（実装と同日に測る）
 - 出所: 2026-08-24〜25 実測。詳細は PJ memory `pitfall_shared_checkout_is_live_plugin`。
-  **構造そのものの是正は `#548` が扱う。本 rule は緩和策**
+  **構造そのものの是正（参照先の切替）は `#548`、切替後の判定方式は `#706` が扱う。本 rule は緩和策**

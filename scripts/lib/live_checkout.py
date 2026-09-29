@@ -33,6 +33,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -96,13 +97,57 @@ def _module_root() -> "Path | None":
     return _find_plugin_root(__file__)
 
 
+# 主たる防御は `git -C <root>` で repo 解決を実行木に固定すること。`--git-dir`/`--work-tree` の組み合わせと違い、
+# 実行木の配置（通常 checkout か linked worktree か）で渡す値を変える分岐が要らない形を選んだ。
+# 実測 2026-09-29: git 2.50.1（Apple Git-155）では `--git-dir` に gitfile を渡しても正しく解決した
+# （`git --git-dir=<worktree>/.git rev-parse --abbrev-ref HEAD`）。他の git 版での挙動は未確認。
+# 以下の環境変数除去は**保険**:
+# git が hook 実行時に GIT_DIR 等を自ら環境へ入れ、継承すると -C を上書きして別 repo を判定しうる。
+# 一覧は git 自身の定義（`git rev-parse --local-env-vars`）だが、GIT_CEILING_DIRECTORIES /
+# GIT_DISCOVERY_ACROSS_FILESYSTEM など探索に効く変数は含まれず閉じていない＝既知の種別のみ・迂回可能
+# （no-denylist-checks: advisory）。取得失敗時のみ下の静的既定へ落とす。
+# **検出しない入力クラス（既知の種別のみ検出・迂回可能）**: 環境変数を1つも使わず、実行木の直下に
+# gitfile（`gitdir: <別 repo>` を書いた `.git` ファイル）を置く配置クラスは、`-C` でも環境変数除去でも
+# 閉じない（2026-09-29 実測で別 repo の branch/dirty を返した）。完成条件②が「意図的な配置改変」を
+# 脅威に数えないため本変更では対象外とし、検出は #706 の `gitCommitSha` 照合へ送る。
+# 運用ミスでこの形にはならない（cache へのコピーは `.git` を含まない・2026-09-29 実測）。
+_LOCAL_GIT_ENV_FALLBACK = (
+    "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_IMPLICIT_WORK_TREE", "GIT_PREFIX", "GIT_NAMESPACE",
+)
+_local_git_env_cache: "tuple[str, ...] | None" = None
+
+
+def _local_git_env_vars() -> "tuple[str, ...]":
+    global _local_git_env_cache
+    if _local_git_env_cache is None:
+        try:
+            out = subprocess.run(
+                ["git", "rev-parse", "--local-env-vars"], capture_output=True, text=True, timeout=10,
+            )
+            names = tuple(ln.strip() for ln in out.stdout.splitlines() if ln.strip().startswith("GIT_"))
+        except (FileNotFoundError, OSError, subprocess.SubprocessError):
+            names = ()
+        if not names:
+            return _LOCAL_GIT_ENV_FALLBACK  # 失敗はキャッシュしない
+        _local_git_env_cache = names
+    return _local_git_env_cache
+
+
 def _git(cwd: Path, *args: str) -> "tuple[bool, str]":
-    """git を ``cwd`` で実行する。``(成功したか, stdout or エラー理由)`` を返す。例外を投げない。"""
+    """git を ``cwd`` で実行する。``(成功したか, stdout or エラー理由)`` を返す。例外を投げない。
+
+    ``-C`` で repo 解決を ``cwd`` に固定し、repo の場所を決める ``GIT_*`` 環境変数も保険として落とす（全 git 呼び出しの単一の口）。
+    """
+    drop = set(_local_git_env_vars()) | set(_LOCAL_GIT_ENV_FALLBACK)
+    env = {k: v for k, v in os.environ.items() if k not in drop}
     try:
         out = subprocess.run(
-            ["git", *args], cwd=str(cwd), capture_output=True, text=True, timeout=10,
+            ["git", "-C", str(cwd), "--no-optional-locks", *args],
+            cwd=str(cwd), env=env, capture_output=True, text=True, timeout=10,
         )
-    except (FileNotFoundError, OSError) as e:
+    except (FileNotFoundError, OSError, subprocess.SubprocessError) as e:
+        # TimeoutExpired は SubprocessError 系で OSError ではないため明示する（docstring の「例外を投げない」を実装と一致させる）
         return False, f"git 実行不能: {e}"
     if out.returncode != 0:
         detail = (out.stderr or out.stdout or "").strip() or f"git {' '.join(args)} failed"
@@ -189,12 +234,36 @@ def check(caller_file, expected_root: "Optional[str]" = None) -> LiveCheckoutRes
             )
 
     root = module_root
-    registry = _check_registry(root)
+    registry = _check_registry(root)  # 早期 return でも registry の別警告を落とさない
+    # 実行木が別 repo の作業ツリーの内側にあるとき（例: ~/.claude の .gitignore 済み plugins/ 配下の cache）、
+    # git は成功して包む repo の branch/dirty を返し、実行木の状態として誤報する。判定へ進まず判定不能にする
+    # （#548/#706: 正しい判定は #706 本体）。比較は実体の同一性（samefile＝macOS の大文字小文字・symlink に強い）。
+    # git 管理外で失敗する場合は下の既存「HEAD 解決不能」経路に任せる。
+    ok, top_out = _git(root, "rev-parse", "--show-toplevel")
+    if ok and top_out.strip():
+        toplevel = top_out.strip()
+        try:
+            same_tree = os.path.samefile(toplevel, root)
+        except OSError:
+            same_tree = False
+        if not same_tree:
+            return LiveCheckoutResult(
+                status="unknown",
+                reason=(
+                    f"実行木が別の git repo の内側にある（実行木={root}, git toplevel={toplevel}）"
+                    "。別 repo の状態は報告しない（#706 で対応中）"
+                ),
+                root=root, registry=registry,
+            )
 
     ok, branch_or_err = _git(root, "rev-parse", "--abbrev-ref", "HEAD")
     if not ok:
         return LiveCheckoutResult(
-            status="unknown", reason=f"HEAD 解決不能: {branch_or_err}", root=root, registry=registry,
+            status="unknown",
+            # 本番の木が git 管理外（marketplace 参照先を GitHub へ切替後）のときはここに来る。
+            # 判定方式の是正は #706。恒久表示が「見なくてよい行」に育つのを止めるため理由文に残す。
+            reason=f"HEAD 解決不能（git 管理外の木なら #706 で対応中）: {branch_or_err}",
+            root=root, registry=registry,
         )
     branch = branch_or_err.strip()
 
