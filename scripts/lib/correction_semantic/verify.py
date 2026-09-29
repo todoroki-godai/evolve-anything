@@ -72,7 +72,7 @@ def fetch_prior_assistant_text(source_path: str, line_no: int, max_chars: int = 
             obj = json.loads(lines[i])
         except json.JSONDecodeError:
             continue
-        if obj.get("type") != "assistant":
+        if not isinstance(obj, dict) or obj.get("type") != "assistant":
             continue
         msg = obj.get("message", {})
         content = msg.get("content", "") if isinstance(msg, dict) else ""
@@ -188,17 +188,19 @@ def apply_verification(
     """
     prior_fn = prior_fn or _default_prior_fn
 
-    # 陽性候補を集める: (key, local_index, utterance, verdict)
+    # 陽性候補を集める: (key, verdict のリスト内位置, utterance, verdict)。書き換えは
+    # 「verdicts リストの位置」で行う（``verdict["index"]`` は group 内の発話位置で、
+    # 部分応答・順不同のときリスト位置とは一致しない）。
     candidates: List[tuple] = []
     for key, verdicts in stage1_verdicts.items():
         group = groups.get(key, [])
-        for v in verdicts:
+        for pos, v in enumerate(verdicts):
             if not v.get("is_correction"):
                 continue
             idx = v.get("index")
-            if not isinstance(idx, int) or not (0 <= idx < len(group)):
+            if not isinstance(idx, int) or isinstance(idx, bool) or not (0 <= idx < len(group)):
                 continue
-            candidates.append((key, idx, group[idx], v))
+            candidates.append((key, pos, group[idx], v))
 
     counts = {"calls": 0, "rejected": 0, "kept": 0, "failed": 0, "no_context": 0}
     result_verdicts: Dict[str, List[Dict[str, Any]]] = {}
@@ -209,20 +211,27 @@ def apply_verification(
         return result_verdicts[key]
 
     to_verify: List[tuple] = []
-    for key, idx, utt, v in candidates:
-        prior_text = prior_fn(utt)
+    for key, pos, utt, v in candidates:
+        try:
+            prior_text = prior_fn(utt)
+        except Exception:  # noqa: BLE001 - 取得失敗は「文脈なし」＝1段目を残す
+            prior_text = None
         if not prior_text:
             counts["no_context"] += 1
             continue
-        to_verify.append((key, idx, utt, v, prior_text))
+        to_verify.append((key, pos, utt, v, prior_text))
 
     for chunk in _chunk(to_verify, batch_size):
         items = [
             {"text": utt.get("text") or "", "prior_assistant_text": prior_text}
-            for (_key, _idx, utt, _v, prior_text) in chunk
+            for (_key, _pos, utt, _v, prior_text) in chunk
         ]
         if reserve_fn is not None:
-            reserve_fn(items)
+            try:
+                reserve_fn(items)
+            except Exception:  # noqa: BLE001 - 予約を記録できないときは呼ばない（予算の歯止め）
+                counts["failed"] += len(chunk)  # 1段目の陽性は残す
+                continue
         counts["calls"] += 1
         try:
             raw = call_fn(_prompt.build_verify_prompt(items), model)
@@ -234,16 +243,16 @@ def apply_verification(
             counts["failed"] += len(chunk)
             continue
         by_local = {d["index"]: d for d in parsed["verdicts"]}
-        for local_i, (key, idx, utt, v, _prior_text) in enumerate(chunk):
+        for local_i, (key, pos, _utt, _v, _prior_text) in enumerate(chunk):
             d = by_local.get(local_i)
             if d is None:
                 counts["failed"] += 1
                 continue
             if d["verdict"] == "reject":
                 vlist = _ensure_copy(key)
-                vlist[idx]["is_correction"] = False
-                vlist[idx]["idiom"] = None
-                vlist[idx]["category"] = None
+                vlist[pos]["is_correction"] = False
+                vlist[pos]["idiom"] = None
+                vlist[pos]["category"] = None
                 counts["rejected"] += 1
             else:
                 counts["kept"] += 1
