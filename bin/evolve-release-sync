@@ -17,12 +17,19 @@
 #     --dry-run   実コマンドを実行せず、実行予定のコマンドを表示するだけ。
 #                 張り替え先は update 前の版で表示する（update 後に確定する）。
 #
-# exit 0=成功 / 1=同期失敗（plugin コマンド失敗・版ディレクトリ不在・live が symlink でない）/
-#      2=前提不成立（installed_plugins.json 不在・evolve-anything の登録なし）。
+# exit 0=成功 / 1=同期失敗（plugin コマンド失敗・版ディレクトリに bin/evolve-daily-run が無い・live が symlink でない）/
+#      2=前提不成立（installed_plugins.json 不在・user scope の登録が1件でない・想定外の引数）。
 set -uo pipefail
 
 DRY_RUN=0
-[ "${1:-}" = "--dry-run" ] && DRY_RUN=1
+case "${1:-}" in
+  "") ;;
+  --dry-run) DRY_RUN=1 ;;
+  *)
+    echo "[release-sync] ⚠ 想定外の引数: $1（Usage: evolve-release-sync [--dry-run]）" >&2
+    exit 2
+    ;;
+esac
 
 PLUGINS_DIR="$HOME/.claude/plugins"
 INSTALLED="$PLUGINS_DIR/installed_plugins.json"
@@ -43,7 +50,10 @@ installed_version() {
 import json, sys
 try:
     entries = json.load(open(sys.argv[1]))["plugins"]["evolve-anything@evolve-anything"]
-    print(entries[0]["version"])
+    user = [e for e in entries if e.get("scope") == "user"]
+    if len(user) != 1:  # project scope の要素が先頭でも別 scope の版を読まない
+        sys.exit(1)
+    print(user[0]["version"])
 except Exception:
     sys.exit(1)
 PY
@@ -68,8 +78,9 @@ else
   }
 fi
 target="$CACHE_BASE/$after"
-if [ "$DRY_RUN" = 0 ] && [ ! -d "$target" ]; then
-  echo "[release-sync] ⚠ 版ディレクトリがありません: ${target}（symlink は張り替えていません）" >&2
+# 空の版ディレクトリを指したまま成功で終わると、翌朝の自動実行が黙って失敗する（完成条件④(e)）。
+if [ "$DRY_RUN" = 0 ] && [ ! -x "$target/bin/evolve-daily-run" ]; then
+  echo "[release-sync] ⚠ ${target}/bin/evolve-daily-run が実行可能ではありません（symlink は張り替えていません）" >&2
   exit 1
 fi
 if [ -e "$LIVE_LINK" ] && [ ! -L "$LIVE_LINK" ]; then
