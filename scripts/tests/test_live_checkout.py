@@ -216,6 +216,13 @@ class TestTreeInsideAnotherRepo:
         assert result.status == "unknown" and result.branch is None
         assert "#706 で対応中" in result.reason
 
+    def test_nested_tree_unknown_still_carries_registry_check(self, monkeypatch, nested_tree: Path):
+        """切替後の本番配置でも registry の別警告を落とさない（早期 return が registry を None にしない）。"""
+        monkeypatch.setattr(live_checkout, "_MODULE_ROOT_OVERRIDE", nested_tree)
+        result = live_checkout.check(str(nested_tree / "hooks" / "fake.py"))
+        assert result.status == "unknown"
+        assert result.registry is not None
+
     def test_tree_is_its_own_toplevel_proceeds_to_judgement(self, monkeypatch, repo_pair: Path):
         """陽性対照A: toplevel == 実行木なら発火せず従来判定（共有 checkout と同配置）。"""
         monkeypatch.setattr(live_checkout, "_MODULE_ROOT_OVERRIDE", repo_pair)
