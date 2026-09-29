@@ -276,6 +276,43 @@ def test_relative_time_label_none_when_unparsable():
     assert pr.relative_time_label("not-a-date") is None
 
 
+def test_relative_time_label_late_night_utterance_shown_next_morning_is_yesterday():
+    """#441 レビュー[Must]1: JST 23:00 の発話を翌朝 JST 09:00（経過10時間・24時間未満）に
+    表示すると、経過時間の24時間切り捨てでは「今日の発話」に化けるが、JST 暦日で
+    「昨日の発話」と正しく出て、``relative_date_warning`` が出す発話日（暦日）と矛盾しない。
+    """
+    uttered_iso = "2026-09-25T14:00:00+00:00"  # 2026-09-25T23:00 JST
+    now = datetime(2026, 9, 26, 0, 0, 0, tzinfo=timezone.utc)  # 2026-09-26T09:00 JST
+    assert pr.relative_time_label(uttered_iso, now=now) == "昨日の発話"
+
+
+def test_relative_time_label_same_jst_calendar_day_is_today():
+    uttered_iso = "2026-09-26T00:30:00+00:00"  # 2026-09-26T09:30 JST
+    now = datetime(2026, 9, 26, 1, 0, 0, tzinfo=timezone.utc)  # 2026-09-26T10:00 JST 同日
+    assert pr.relative_time_label(uttered_iso, now=now) == "今日の発話"
+
+
+def test_relative_time_label_week_boundary_uses_calendar_day_not_elapsed_time():
+    """#441 レビュー巡2[Must]A: 週・月区分も暦日差で数える。経過13.5日でも暦日14日前なら
+    「2週間前」（旧: 経過時間ベースだと13.5日<14日で「13日前」に化けていた）。
+    """
+    now = datetime(2026, 9, 26, 0, 0, 0, tzinfo=timezone.utc)  # 2026-09-26T09:00 JST
+    uttered_iso = "2026-09-12T12:00:00+00:00"  # 2026-09-12T21:00 JST（経過13.5日・暦日14日前）
+    assert pr.relative_time_label(uttered_iso, now=now) == "2週間前の発話"
+
+
+def test_relative_time_label_exactly_14_days_is_two_weeks_ago():
+    now = datetime(2026, 9, 26, 0, 0, 0, tzinfo=timezone.utc)
+    uttered_iso = "2026-09-12T00:00:00+00:00"  # ちょうど14日前（暦日・経過とも14）
+    assert pr.relative_time_label(uttered_iso, now=now) == "2週間前の発話"
+
+
+def test_relative_time_label_calendar_13_days_is_still_days_ago():
+    now = datetime(2026, 9, 26, 0, 0, 0, tzinfo=timezone.utc)
+    uttered_iso = "2026-09-13T00:00:00+00:00"  # 暦日13日前
+    assert pr.relative_time_label(uttered_iso, now=now) == "13日前の発話"
+
+
 # ─────────────────────────────────────────────────────────────────
 # group_freshness_iso / cross_pj_note（PR2-d 提示文の判断材料）
 # ─────────────────────────────────────────────────────────────────
@@ -323,3 +360,199 @@ def test_cross_pj_note_global_takes_priority_over_confirmed():
     note = pr.cross_pj_note(g, "pj-a")
     assert "amamo" in note
     assert "確認済み" not in note
+
+
+# ─────────────────────────────────────────────────────────────────
+# relative_date_warning（#441: 相対日付・曜日表現の陳腐化警告）
+# ─────────────────────────────────────────────────────────────────
+def test_relative_date_warning_none_when_no_relative_expression():
+    assert pr.relative_date_warning("普通の改善提案です", _now_iso()) is None
+
+
+def test_relative_date_warning_includes_uttered_date_and_weekday():
+    # 2026-09-10 は木曜日。
+    ts = "2026-09-10T03:00:00+00:00"
+    warning = pr.relative_date_warning("来週やること", ts)
+    assert warning is not None
+    assert "2026-09-10" in warning
+    assert "(木)" in warning
+
+
+def test_relative_date_warning_wording_distinguishes_from_group_freshness_label():
+    """#441 レビュー巡2[Should]C: 「この文の発話日」と明記し、同じ行に並ぶ N日前ラベル
+    （群全体の最新の発話）とは別の・検出対象の文自身の発話であると読めるようにする。
+    """
+    ts = "2026-09-10T03:00:00+00:00"
+    warning = pr.relative_date_warning("来週やること", ts)
+    assert warning == "⚠ 相対日付あり：この文の発話日 2026-09-10(木) 基準で読むこと"
+
+
+def test_relative_date_warning_uses_jst_date_not_utc_date():
+    """UTC 深夜（JST では日付が繰り上がる）の発話は JST の日付・曜日で出す（UTC 固定は誤り）。
+
+    2026-09-09T16:00:00+00:00 は UTC では 9/9（水）だが JST（+9h）では 9/10（木）になる。
+    """
+    ts = "2026-09-09T16:00:00+00:00"
+    warning = pr.relative_date_warning("明日までにやる", ts)
+    assert warning is not None
+    assert "2026-09-10" in warning
+    assert "(木)" in warning
+    assert "2026-09-09" not in warning
+
+
+def test_relative_date_warning_unparsable_uttered_at():
+    warning = pr.relative_date_warning("来週やること", "not-a-date")
+    assert warning == "⚠ 相対日付あり：発話日不明のため日付を確認すること"
+    assert pr.relative_date_warning("来週やること", None) == warning
+
+
+def test_relative_date_warning_none_for_none_or_empty_text():
+    assert pr.relative_date_warning(None, _now_iso()) is None
+    assert pr.relative_date_warning("", _now_iso()) is None
+
+
+# 陽性対照: 相対日付を含まない・含んでよい文面
+def test_relative_date_warning_positive_control_plain_text_no_warning():
+    assert pr.relative_date_warning("テストを追加してください", _now_iso()) is None
+
+
+def test_relative_date_warning_positive_control_weekday_past_reference_may_fire():
+    """「月曜日に作った」のような過去言及は相対性が薄いが、表示用補助のため過検出を許容する。"""
+    assert pr.relative_date_warning("月曜日に作ったファイルを直す", _now_iso()) is not None
+
+
+# 陽性対照: 固有名詞の誤爆を避ける（既知の除外のみ・#441 の指定ケース）
+def test_relative_date_warning_positive_control_proper_noun_asuka_no_false_positive():
+    assert pr.relative_date_warning("明日香さんに確認する", _now_iso()) is None
+
+
+def test_relative_date_warning_positive_control_weekday_compound_word_may_fire():
+    """「日曜大工」のような曜日を含む一般語は本パターンにも一致する。
+
+    固有名詞の誤爆（明日香）は既知の除外で塞ぐが、それ以外の曜日複合語まで塞ぐと
+    正規表現が閉じない除外リスト化する。過検出は表示用補助として許容する方針
+    （#441 レビュー[Nit]5・relative_date_warning docstring 参照）なので、ここでは
+    「出ないこと」でなく「出てよいこと」を陽性対照として確認する。
+    """
+    assert pr.relative_date_warning("日曜大工の道具を買う話", _now_iso()) is not None
+
+
+# ─────────────────────────────────────────────────────────────────
+# representative_uttered_at / relative_date_warning_for_group
+# （#441 レビュー[Must]2・[Should]3: 代表文自身の発話時刻を使い、merge 済み全代表文を検出する）
+# ─────────────────────────────────────────────────────────────────
+def test_representative_uttered_at_uses_first_signal_key_not_max():
+    """代表文（signal_keys[0]）の uttered_at を返す。group_freshness_iso（最新時刻）とは
+    値が異なってよい — 実データで21日ずれた群があった（#441 レビュー[Must]2）。
+    """
+    g = _group(
+        ["k1", "k2"],
+        {"k1": _meta(uttered_at=_iso(21)), "k2": _meta(uttered_at=_iso(1))},
+    )
+    assert pr.representative_uttered_at(g) == g["signal_meta_by_key"]["k1"]["uttered_at"]
+    assert pr.representative_uttered_at(g) != pr.group_freshness_iso(g)
+
+
+def test_representative_uttered_at_none_when_first_key_meta_missing():
+    """既読差し引きで signal_keys[0] の meta が残っていなければ None（発話日不明扱い）。"""
+    g = {"signal_keys": ["k1"], "signal_meta_by_key": {}}
+    assert pr.representative_uttered_at(g) is None
+
+
+def test_representative_uttered_at_none_when_only_detected_at():
+    """uttered_at が無く detected_at しか無い場合は None（detected_at を発話日と呼ばない）。"""
+    g = _group(["k1"], {"k1": _meta(detected_at=_iso(1))})
+    assert pr.representative_uttered_at(g) is None
+
+
+def test_representative_uttered_at_none_when_no_signal_keys():
+    assert pr.representative_uttered_at({"signal_keys": []}) is None
+
+
+def test_relative_date_warning_for_group_uses_representative_key_time_not_freshness_max():
+    """freshness（最新時刻・k2）ではなく代表文の時刻（signal_keys[0]・k1）で発話日を出す。"""
+    ts_rep = "2026-09-10T03:00:00+00:00"  # 木曜
+    g = _group(
+        ["k1", "k2"],
+        {"k1": _meta(uttered_at=ts_rep), "k2": _meta(uttered_at=_iso(1))},
+    )
+    g["representative"] = "来週やる案"
+    warning = pr.relative_date_warning_for_group(g)
+    assert warning is not None
+    assert "2026-09-10" in warning
+    assert "(木)" in warning
+
+
+def test_relative_date_warning_for_group_uses_date_when_primary_representative_matches():
+    """[Should]3: 先頭代表文が一致すれば、他の代表文が同居していても通常どおり発話日を出す。"""
+    g = {
+        "signal_keys": ["k1"],
+        "representative": "来週やる案",
+        "all_representatives": ["来週やる案", "別の代表文"],
+        "signal_meta_by_key": {"k1": {"uttered_at": "2026-09-10T03:00:00+00:00", "detected_at": None}},
+    }
+    warning = pr.relative_date_warning_for_group(g)
+    assert warning is not None
+    assert "2026-09-10" in warning
+
+
+def test_relative_date_warning_for_group_scans_all_representatives_but_unknown_when_only_secondary_matches():
+    """[Should]3: 検出は先頭以外の代表文にも及ぶ（警告そのものは出る）。ただし一致が
+    先頭代表文（signal_keys[0] の発話に対応する文）以外にしか無いときは、その文の発話
+    時刻を持っていないため「発話日不明」に倒す（#441 レビュー巡2[Must]B-2）。
+    """
+    g = {
+        "signal_keys": ["k1"],
+        "representative": "普通の提案",
+        "all_representatives": ["普通の提案", "来週やる別提案"],
+        "signal_meta_by_key": {"k1": {"uttered_at": "2026-09-10T03:00:00+00:00", "detected_at": None}},
+    }
+    warning = pr.relative_date_warning_for_group(g)
+    assert warning is not None  # 検出（Should3）は効いている
+    assert "発話日不明" in warning
+    assert "2026-09-10" not in warning  # 日付は言い切らない（Must B-2）
+
+
+def test_relative_date_warning_for_group_none_when_no_representatives_match():
+    g = {
+        "signal_keys": ["k1"],
+        "representative": "普通の提案",
+        "all_representatives": ["普通の提案", "別の普通の提案"],
+        "signal_meta_by_key": {"k1": {"uttered_at": _now_iso(), "detected_at": None}},
+    }
+    assert pr.relative_date_warning_for_group(g) is None
+
+
+def test_representative_uttered_at_none_when_signal_keys_were_subtracted():
+    """[Must]B-1: 既読差し引きで signal_keys が減った群（count と件数が食い違う）は、
+    詰め直しにより signal_keys[0] が代表文の key と限らないため None を返す。
+    """
+    g = {
+        "signal_keys": ["k2"],  # 元は ["k0", "k2"] で k0（代表文の key）が既読除外された
+        "count": 2,
+        "signal_meta_by_key": {"k2": {"uttered_at": _iso(1), "detected_at": None}},
+    }
+    assert pr.representative_uttered_at(g) is None
+
+
+def test_representative_uttered_at_uses_signal_keys_when_count_matches():
+    """count が signal_keys 件数と一致（既読差し引きが起きていない）なら通常どおり使う。"""
+    g = {
+        "signal_keys": ["k0"],
+        "count": 1,
+        "signal_meta_by_key": {"k0": {"uttered_at": _iso(1), "detected_at": None}},
+    }
+    assert pr.representative_uttered_at(g) == g["signal_meta_by_key"]["k0"]["uttered_at"]
+
+
+def test_relative_date_warning_for_group_unknown_when_signal_keys_were_subtracted():
+    """[Must]B-1 の統合確認: count 食い違いの群は、先頭代表文が一致していても発話日不明。"""
+    g = {
+        "signal_keys": ["k2"],
+        "count": 2,
+        "representative": "来週やる案",
+        "signal_meta_by_key": {"k2": {"uttered_at": _iso(1), "detected_at": None}},
+    }
+    warning = pr.relative_date_warning_for_group(g)
+    assert warning is not None
+    assert "発話日不明" in warning

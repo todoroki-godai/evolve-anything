@@ -154,7 +154,7 @@ confidence × max(0, 1 - elapsed_days / decay_days)
 3. 上記いずれでもない → 新規修正として通常レビューに進む
 
 各 correction について AskUserQuestion で以下の選択肢を提供する:
-- **approve**: **Edit 前に現在の全文を保存すること（MUST）** → suggested_file に書き込み → `evolve-reflect --apply <source_correction_id> --target-path <suggested_file> --draft-line-file <書き込んだ内容> --before-content-file <Edit前の全文>` で実在確認してから reflect_status を更新（**corrections.jsonl を直接 Edit しない — #475 §6.1 の実在確認ゲートを経由する。反映先が rules 配下なら `--before-content-file` は必須**） → **episodic 昇格 (後述)**
+- **approve**: **Edit 前に現在の全文を保存すること（MUST）** → suggested_file に書き込み → `evolve-reflect --apply <source_correction_id> --target-path <suggested_file> --draft-line-file <書き込んだ内容> --before-content-file <Edit前の全文>` で実在確認してから reflect_status を更新（**corrections.jsonl を直接 Edit しない — #475 §6.1 の実在確認ゲートを経由する。反映先が rules 配下なら `--before-content-file` は必須**）。控えが編集後の内容に見える場合（起草行が before→after の差分で「追加された行」に見つからない）は `--apply` が書込み前に拒否する。拒否されたら、直前の編集を一度元に戻してから Edit 前の全文を控え直すか、`git diff HEAD -- <path>` が今回の起草行の追加だけのときに限り `git show HEAD:<path>` を控えにして再実行する（それ以外の差分が混ざっている場合は編集を戻して控え直す）。起草行が元々ファイルにあった（移動・再掲）場合は `--apply` でなく反映済みとして扱う（#696） → **episodic 昇格 (後述)**
 - **edit**: **Edit 前に現在の全文を保存すること（MUST）** → ユーザーの編集内容で書き込み → 同様に `evolve-reflect --apply ...` で実在確認してから reflect_status を更新 → episodic 昇格
 - **false-positive**: 偽陽性として報告 → `false_positives.jsonl` に SHA-256 ハッシュを追記し、reflect_status を "skipped" に更新（"skipped" は §6.1 の実在確認ゲートの対象外 — 迂回口は "applied" を直接書く経路だけなので、直接 Edit のままでよい）
 - **skip**: reflect_status を "skipped" に更新
