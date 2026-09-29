@@ -208,6 +208,14 @@ class TestTreeInsideAnotherRepo:
         assert "#706 で対応中" in result.reason
         assert result.branch is None  # 別 repo の branch/dirty へ進んでいない
 
+    def test_inherited_git_work_tree_cannot_disguise_nested_tree(self, monkeypatch, nested_tree: Path):
+        """GIT_WORK_TREE を実行木自身へ向けても、toplevel の一致で別 repo 判定を素通りさせない。"""
+        monkeypatch.setenv("GIT_WORK_TREE", str(nested_tree))
+        monkeypatch.setattr(live_checkout, "_MODULE_ROOT_OVERRIDE", nested_tree)
+        result = live_checkout.check(str(nested_tree / "hooks" / "fake.py"))
+        assert result.status == "unknown" and result.branch is None
+        assert "#706 で対応中" in result.reason
+
     def test_tree_is_its_own_toplevel_proceeds_to_judgement(self, monkeypatch, repo_pair: Path):
         """陽性対照A: toplevel == 実行木なら発火せず従来判定（共有 checkout と同配置）。"""
         monkeypatch.setattr(live_checkout, "_MODULE_ROOT_OVERRIDE", repo_pair)
@@ -230,6 +238,45 @@ class TestTreeInsideAnotherRepo:
         monkeypatch.setattr(live_checkout, "_MODULE_ROOT_OVERRIDE", tree)
         result = live_checkout.check(str(tree / "x.py"))
         assert result.status == "unknown" and result.reason.startswith("HEAD 解決不能")
+
+
+class TestGitEnvInheritanceIsIgnored:
+    """継承した GIT_DIR / GIT_WORK_TREE で別 repo を判定しない（git の hook 実行時に自ら立つ・#548 巡4 C1）。"""
+
+    def test_git_dir_pointing_elsewhere_does_not_leak_into_non_git_tree(
+        self, tmp_path: Path, monkeypatch, repo_pair: Path,
+    ):
+        tree = tmp_path / "ft"  # git 管理外
+        _write_plugin_marker(tree)
+        monkeypatch.setenv("GIT_DIR", str(repo_pair / ".git"))
+        # 前提の再現確認: 環境を継承する素の git だと別 repo の HEAD が見えてしまう。
+        leaked = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=str(tree), capture_output=True, text=True,
+        )
+        assert leaked.returncode == 0 and leaked.stdout.strip() == "main"
+        monkeypatch.setattr(live_checkout, "_MODULE_ROOT_OVERRIDE", tree)
+        result = live_checkout.check(str(tree / "x.py"))
+        assert result.status == "unknown"
+        assert result.branch is None and result.dirty_count == 0
+        assert result.reason.startswith("HEAD 解決不能")
+
+    def test_git_dir_and_work_tree_together(self, tmp_path: Path, monkeypatch, repo_pair: Path):
+        tree = tmp_path / "ft2"
+        _write_plugin_marker(tree)
+        monkeypatch.setenv("GIT_DIR", str(repo_pair / ".git"))
+        monkeypatch.setenv("GIT_WORK_TREE", str(repo_pair))
+        monkeypatch.setattr(live_checkout, "_MODULE_ROOT_OVERRIDE", tree)
+        result = live_checkout.check(str(tree / "x.py"))
+        assert result.status == "unknown" and result.branch is None
+
+    def test_normal_tree_unaffected_by_stray_git_dir(self, tmp_path: Path, monkeypatch, repo_pair: Path):
+        """陽性対照: 正常な木は GIT_DIR が別 repo を指していても従来どおり自分の状態で判定される。"""
+        other = tmp_path / "other.git"
+        subprocess.run(["git", "init", "--bare", "-q", str(other)], check=True, capture_output=True)
+        monkeypatch.setenv("GIT_DIR", str(other))
+        monkeypatch.setattr(live_checkout, "_MODULE_ROOT_OVERRIDE", repo_pair)
+        result = live_checkout.check(_caller_file(repo_pair))
+        assert result.status == "safe" and result.branch == "main"
 
 
 class TestRegistrySecondary:

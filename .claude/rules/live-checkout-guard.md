@@ -17,6 +17,7 @@
   **本番の木は `~/.claude`（claude-config）の作業ツリーの内側**（実測 2026-09-29 12:1x JST: `git -C ~/.claude/plugins/cache/evolve-anything/evolve-anything/1.125.0 rev-parse --show-toplevel` → `~/.claude`・`git -C ~/.claude status --porcelain | wc -l` → 233。`plugins` は `.gitignore:3` で無視されるが、包む repo の解決は止まらない）。
   ゆえに `live_checkout` は git に成功し**別 repo の branch/dirty を本番の状態として恒久表示する（判定不能にならない）**。対処は **#706**（最低限「本番の木が属する git の toplevel が木自身と一致するか」）。理由文の `#706 で対応中` は git 管理外の配置でのみ発火し、この配置では出ない
 - **別 repo の内側の木は判定不能（#706 から切り出して #548 で実装）**: `git rev-parse --show-toplevel` が実行木と別実体（`samefile` 比較）なら branch/dirty へ進まず、両パスと `#706 で対応中` を理由文に出す。正しい判定は #706 本体
+- **git 呼び出しは repo の場所を決める環境変数（`git rev-parse --local-env-vars` の一覧。hook 実行時に git 自身が `GIT_DIR` 等を立てる）を落として実行する**（`_git()` が単一の口）。継承すると cwd の木でなく別 repo を判定する（#548 巡4）
 - **実行 root は「呼出側が渡す」。`Path(__file__)` を単独の根拠にしない**。`__file__` はモジュールの
   物理位置にすぎず、cache へのコピー・ファイル単体 symlink・`PYTHONPATH` 先頭差し替え・
   worktree の wrapper が主 checkout を import する配置で、**実際に動いている木とは別の木を指す**。
