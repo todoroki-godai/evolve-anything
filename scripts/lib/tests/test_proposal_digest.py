@@ -1197,10 +1197,10 @@ def test_build_proposal_prompt_no_relative_date_warning_when_text_is_plain():
     assert "相対日付あり" not in msg
 
 
-def test_build_proposal_prompt_tells_assistant_to_carry_relative_date_warning_into_choices():
+def test_build_proposal_prompt_tells_assistant_to_carry_relative_date_warning_into_question_text():
     """#699 正常系E2E: 警告行は「N日前の発話」の括弧行に入るだけで、判断材料として列挙されるのは
-    「記録される内容・背景」だけだった＝アシスタントが AskUserQuestion の選択肢へ転記するかは
-    運任せだった。警告が付く案があるとき、提示指示に「警告と発話日を選択肢の説明にそのまま含める」が
+    「記録される内容・背景」だけだった＝アシスタントが AskUserQuestion の質問文へ転記するかは
+    運任せだった。警告が付く案があるとき、提示指示に「警告文を省略・言い換えせず質問文へ含める」が
     最終 payload の指示部（案の列挙より前）へ届くこと。
     """
     ts = "2026-09-10T03:00:00+00:00"
@@ -1232,7 +1232,7 @@ def test_build_proposal_prompt_relative_date_instruction_for_unknown_date_and_la
 
 
 def test_build_proposal_prompt_relative_date_instruction_on_unknown_date_branch_with_freshness_label():
-    """#699 [Must]M2: 発話日が取れない分岐（count != len(signal_keys)）では、隣に並ぶ「N日前の発話」
+    """#699: 発話日が取れない分岐（count != len(signal_keys)）では、隣に並ぶ「N日前の発話」
     （群の最新の時刻であって、この文の発話日ではない）があっても、指示と「発話日不明」警告の両方が出る。
     """
     g = {
