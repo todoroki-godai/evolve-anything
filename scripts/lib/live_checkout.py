@@ -33,6 +33,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -189,6 +190,26 @@ def check(caller_file, expected_root: "Optional[str]" = None) -> LiveCheckoutRes
             )
 
     root = module_root
+    # 実行木が別 repo の作業ツリーの内側にあるとき（例: ~/.claude の .gitignore 済み plugins/ 配下の cache）、
+    # git は成功して包む repo の branch/dirty を返し、実行木の状態として誤報する。判定へ進まず判定不能にする
+    # （#548/#706: 正しい判定は #706 本体）。比較は実体の同一性（samefile＝macOS の大文字小文字・symlink に強い）。
+    # git 管理外で失敗する場合は下の既存「HEAD 解決不能」経路に任せる。
+    ok, top_out = _git(root, "rev-parse", "--show-toplevel")
+    if ok and top_out.strip():
+        toplevel = top_out.strip()
+        try:
+            same_tree = os.path.samefile(toplevel, root)
+        except OSError:
+            same_tree = False
+        if not same_tree:
+            return LiveCheckoutResult(
+                status="unknown",
+                reason=(
+                    f"実行木が別の git repo の内側にある（実行木={root}, git toplevel={toplevel}）"
+                    "。別 repo の状態は報告しない（#706 で対応中）"
+                ),
+                root=root,
+            )
     registry = _check_registry(root)
 
     ok, branch_or_err = _git(root, "rev-parse", "--abbrev-ref", "HEAD")

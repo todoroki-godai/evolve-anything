@@ -185,6 +185,53 @@ class TestNonGitTreeReasonPointsToIssue:
         assert result.reason is None
 
 
+class TestTreeInsideAnotherRepo:
+    """実行木が別 repo の内側（無視された subdir）なら判定不能。本番の実配置（~/.claude/plugins/cache）と同型（#548/#706）。"""
+
+    @pytest.fixture
+    def nested_tree(self, repo_pair: Path) -> Path:
+        (repo_pair / ".gitignore").write_text("plugins/\n", encoding="utf-8")
+        tree = repo_pair / "plugins" / "cache" / "ver"
+        _write_plugin_marker(tree)
+        # 本番の性質の再現確認: 無視されていても toplevel は包む repo に解決される。
+        top = _git(tree, "rev-parse", "--show-toplevel").strip()
+        assert Path(top).resolve() == repo_pair.resolve()
+        assert Path(top).resolve() != tree.resolve()
+        return tree
+
+    def test_nested_ignored_tree_is_unknown_with_paths_and_issue(self, monkeypatch, nested_tree: Path, repo_pair: Path):
+        monkeypatch.setattr(live_checkout, "_MODULE_ROOT_OVERRIDE", nested_tree)
+        result = live_checkout.check(str(nested_tree / "hooks" / "fake.py"))
+        assert result.status == "unknown"
+        assert str(nested_tree.resolve()) in result.reason
+        assert str(repo_pair.resolve()) in result.reason
+        assert "#706 で対応中" in result.reason
+        assert result.branch is None  # 別 repo の branch/dirty へ進んでいない
+
+    def test_tree_is_its_own_toplevel_proceeds_to_judgement(self, monkeypatch, repo_pair: Path):
+        """陽性対照A: toplevel == 実行木なら発火せず従来判定（共有 checkout と同配置）。"""
+        monkeypatch.setattr(live_checkout, "_MODULE_ROOT_OVERRIDE", repo_pair)
+        result = live_checkout.check(_caller_file(repo_pair))
+        assert result.status == "safe" and result.branch == "main"
+
+    def test_case_variant_path_is_same_tree(self, monkeypatch, repo_pair: Path):
+        """実体の同一性で比較する（文字列一致だと大文字小文字違いで誤って別 repo 扱いになる）。"""
+        variant = Path(str(repo_pair).swapcase())
+        if not variant.exists() or str(variant.resolve()) == str(repo_pair.resolve()):
+            pytest.skip("case-sensitive FS or resolve() が大文字小文字を正規化する環境")
+        monkeypatch.setattr(live_checkout, "_MODULE_ROOT_OVERRIDE", variant)
+        result = live_checkout.check(str(variant / "hooks" / "fake.py"))
+        assert result.status == "safe", result.reason
+
+    def test_non_git_tree_still_takes_head_unresolved_path(self, tmp_path: Path, monkeypatch):
+        """新条件が既存の HEAD 解決不能経路を奪わない。"""
+        tree = tmp_path / "plain"
+        _write_plugin_marker(tree)
+        monkeypatch.setattr(live_checkout, "_MODULE_ROOT_OVERRIDE", tree)
+        result = live_checkout.check(str(tree / "x.py"))
+        assert result.status == "unknown" and result.reason.startswith("HEAD 解決不能")
+
+
 class TestRegistrySecondary:
     def test_registry_missing_is_skipped_not_fatal(self, monkeypatch, repo_pair: Path):
         monkeypatch.setattr(live_checkout, "_MODULE_ROOT_OVERRIDE", repo_pair)
