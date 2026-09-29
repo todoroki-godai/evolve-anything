@@ -1264,3 +1264,144 @@ def test_cutoff_excluded_utterance_not_written_to_judged_store(tmp_path, monkeyp
     assert res["selected"] == 0
     assert res["excluded_before_cutoff_total"] == 1
     assert not judged.exists()
+
+
+# ─────────────────────────────────────────────────────────────────
+# 2段目（確かめ直し・#682）: 1段目の陽性だけを直前の Claude 発言と並べて確かめ直す
+# ─────────────────────────────────────────────────────────────────
+def _transcript_with_prior(tmp_path, prior_text="成果物を出しました"):
+    """assistant 発言の直後に user 発話が来る元ログ。(source_path, user の line_no) を返す。"""
+    p = tmp_path / "session.jsonl"
+    rows = [
+        {"type": "assistant", "message": {"content": prior_text}},
+        {"type": "user", "message": {"content": "x"}},
+    ]
+    p.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in rows) + "\n", encoding="utf-8")
+    return str(p), 2
+
+
+def _stage1_positive(prompt, model="haiku"):
+    return json.dumps({"verdicts": [
+        {"index": 0, "is_correction": True, "idiom": "IDIOM", "category": "omission", "reason": "R"},
+    ]}, ensure_ascii=False)
+
+
+def _verify_resp(verdict: str) -> str:
+    return json.dumps({"verdicts": [{"index": 0, "verdict": verdict}]})
+
+
+def _run_with_verify(tmp_path, monkeypatch, *, verify_call, verify=True, utt=None):
+    judged = tmp_path / "correction_judged.jsonl"
+    ws = tmp_path / "weak_signals.jsonl"
+    if utt is None:
+        sp, ln = _transcript_with_prior(tmp_path)
+        utt = _utt(sp, ln, "新しい依頼をお願い", "pj-a", ts=_ts(1))
+    monkeypatch.setattr(judge_runner, "call_haiku", _stage1_positive)
+    monkeypatch.setattr(judge_runner, "call_haiku_verify", verify_call)
+    kwargs = {} if verify is None else {"verify": verify}
+    res = judge_runner.run_daily_judge(
+        run=True, utterances=[utt], judged_path=judged, weak_signals_path=ws, **kwargs,
+    )
+    written = [json.loads(l) for l in ws.read_text(encoding="utf-8").splitlines() if l.strip()] if ws.exists() else []
+    return res, written, judged
+
+
+def test_verify_reject_turns_positive_into_non_correction_and_marks_judged(tmp_path, monkeypatch):
+    res, written, judged = _run_with_verify(
+        tmp_path, monkeypatch, verify_call=lambda p, m="haiku": _verify_resp("reject"))
+    assert written == []  # 朝の y/n 候補に出ない
+    assert (res["corrections"], res["non_corrections"]) == (0, 1)
+    assert (res["verify_calls"], res["verify_rejected"], res["verify_kept"]) == (1, 1, 0)
+    assert len(read_judged_keys(judged)) == 1  # 判定済みとして確定（再判定しない）
+
+
+def test_verify_keep_preserves_stage1_positive(tmp_path, monkeypatch):
+    res, written, _ = _run_with_verify(
+        tmp_path, monkeypatch, verify_call=lambda p, m="haiku": _verify_resp("keep"))
+    assert res["corrections"] == 1 and len(written) == 1
+    assert written[0]["provenance"]["idiom"] == "IDIOM" and written[0]["provenance"]["category"] == "omission"
+    assert res["verify_kept"] == 1 and res["verify_rejected"] == 0
+
+
+@pytest.mark.parametrize("failure", ["raise", "garbage", "missing_index"])
+def test_verify_failure_keeps_stage1_positive_and_records_reason(tmp_path, monkeypatch, failure):
+    def call(p, m="haiku"):
+        if failure == "raise":
+            raise RuntimeError("boom")
+        if failure == "garbage":
+            return "not json"
+        return json.dumps({"verdicts": [{"index": 5, "verdict": "reject"}]})
+
+    res, written, _ = _run_with_verify(tmp_path, monkeypatch, verify_call=call)
+    assert res["corrections"] == 1 and len(written) == 1  # 黙って消さない
+    assert res["verify_failed"] == 1 and res["verify_rejected"] == 0
+
+
+def test_verify_without_prior_context_keeps_stage1_and_skips_call(tmp_path, monkeypatch):
+    utt = _utt(str(tmp_path / "gone.jsonl"), 2, "新しい依頼をお願い", "pj-a", ts=_ts(1))
+
+    def call(p, m="haiku"):
+        raise AssertionError("直前発言が無いのに2段目を呼んだ")
+
+    res, written, _ = _run_with_verify(tmp_path, monkeypatch, verify_call=call, utt=utt)
+    assert res["corrections"] == 1 and len(written) == 1
+    assert res["verify_no_context"] == 1 and res["verify_calls"] == 0
+
+
+def test_verify_cost_is_reserved_in_judged_store_before_the_call(tmp_path, monkeypatch):
+    judged = tmp_path / "correction_judged.jsonl"
+    seen = {}
+
+    def call(p, m="haiku"):
+        recs = [json.loads(l) for l in judged.read_text(encoding="utf-8").splitlines() if l.strip()]
+        seen["records_at_call"] = len(recs)
+        return _verify_resp("keep")
+
+    res, _, _ = _run_with_verify(tmp_path, monkeypatch, verify_call=call)
+    # 1段目の予約1件 + 2段目の予約1件が、2段目の呼び出し時点で既に記録されている
+    assert seen["records_at_call"] == 2
+    assert res["reserved_batches"] == 1
+
+
+def test_verify_is_off_by_default_and_never_calls_stage2(tmp_path, monkeypatch):
+    monkeypatch.delenv("EVOLVE_JUDGE_VERIFY", raising=False)
+
+    def call(p, m="haiku"):
+        raise AssertionError("既定（無効）なのに2段目を呼んだ")
+
+    res, written, _ = _run_with_verify(tmp_path, monkeypatch, verify_call=call, verify=None)
+    assert res["corrections"] == 1 and len(written) == 1
+    assert res["verify_calls"] == 0
+
+
+def test_verify_can_be_enabled_by_env(tmp_path, monkeypatch):
+    monkeypatch.setenv("EVOLVE_JUDGE_VERIFY", "1")
+    res, written, _ = _run_with_verify(
+        tmp_path, monkeypatch, verify_call=lambda p, m="haiku": _verify_resp("reject"), verify=None)
+    assert res["verify_calls"] == 1 and written == []
+
+
+def test_explicit_verify_false_overrides_env(tmp_path, monkeypatch):
+    monkeypatch.setenv("EVOLVE_JUDGE_VERIFY", "1")
+
+    def call(p, m="haiku"):
+        raise AssertionError("verify=False なのに2段目を呼んだ")
+
+    res, written, _ = _run_with_verify(tmp_path, monkeypatch, verify_call=call, verify=False)
+    assert res["verify_calls"] == 0 and len(written) == 1
+
+
+def test_stage1_negative_never_reaches_stage2(tmp_path, monkeypatch):
+    judged = tmp_path / "correction_judged.jsonl"
+    sp, ln = _transcript_with_prior(tmp_path)
+    utt = _utt(sp, ln, "続けて", "pj-a", ts=_ts(1))
+    monkeypatch.setattr(judge_runner, "call_haiku",
+                        lambda p, m="haiku": _ok_verdict_response([(0, False)]))
+
+    def call(p, m="haiku"):
+        raise AssertionError("1段目陰性が2段目に送られた")
+
+    monkeypatch.setattr(judge_runner, "call_haiku_verify", call)
+    res = judge_runner.run_daily_judge(run=True, utterances=[utt], judged_path=judged,
+                                       weak_signals_path=tmp_path / "ws.jsonl", verify=True)
+    assert res["verify_calls"] == 0 and res["corrections"] == 0

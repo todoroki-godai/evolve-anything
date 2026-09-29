@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -109,6 +110,22 @@ def call_haiku_verify(prompt: str, model: str = DEFAULT_JUDGE_MODEL) -> str:
     return _safe_llm_call.call_claude_headless(
         prompt, model=model, json_schema=_prompt.VERIFY_JSON_SCHEMA
     )
+
+
+_VERIFY_ENV = "EVOLVE_JUDGE_VERIFY"
+_VERIFY_ZERO: Dict[str, Any] = {"calls": 0, "rejected": 0, "kept": 0, "failed": 0, "no_context": 0}
+
+
+def _verify_enabled(verify: Optional[bool]) -> bool:
+    """2段目（#682）を走らせるか。明示引数 > 環境変数 ``EVOLVE_JUDGE_VERIFY`` > 既定 False。
+
+    既定を無効にする理由: 2段目の効き（落とす本物の修正の件数）は a0 / 確認用セットでの実測
+    前で、reject された陽性は「判定済み」として確定し二度と再判定されない（取り戻せない）。
+    実測合格後に有効化する（施策を独立に入切りできる形・measure-now）。
+    """
+    if verify is not None:
+        return bool(verify)
+    return os.environ.get(_VERIFY_ENV, "").strip().lower() in ("1", "true", "yes", "on")
 
 
 def _sort_key(u: Dict[str, Any]):
@@ -288,6 +305,7 @@ def run_daily_judge(
     weak_signals_path: Optional[Path] = None,
     idioms_path: Optional[Path] = None,
     out=None,
+    verify: Optional[bool] = None,
 ) -> Dict[str, Any]:
     """全 PJ 横断の未判定発話を Haiku で判定する（dry-run 既定・#408）。
 
@@ -303,6 +321,9 @@ def run_daily_judge(
                     呼び出し側の意図的な override として扱う（0 は「今日より古い全件除外」）。
         now:    cutoff 計算の基準時刻（DI 用・既定 ``datetime.now(timezone.utc)``）。
         out:    出力先（既定 stdout）。フェーズ遷移ログ（提示/実行/応答/永続化）をここに書く。
+        verify: 2段目（確かめ直し・#682）の入切り。True で1段目の陽性だけを直前の Claude 発言と
+                並べて確かめ直す。None（既定）は環境変数 ``EVOLVE_JUDGE_VERIFY``（``1``/``true``）に
+                従い、未設定なら**無効**（``_verify_enabled``）。明示の True/False は環境変数に勝つ。
 
     Returns:
         dry-run: {"dry_run": True, "unjudged_total", "selected", "capped", "cost",
@@ -317,6 +338,10 @@ def run_daily_judge(
                    "unjudged_total", "selected", "capped", "source_failed", "source_error",
                    "skipped_locked", "excluded_untracked_total", "excluded_untracked_by_pj",
                    "excluded_before_cutoff_total"}
+
+        run の戻り値には 2段目（#682）の件数 ``verify_calls`` / ``verify_rejected`` /
+        ``verify_kept`` / ``verify_failed`` / ``verify_no_context`` も含む（無効時は全て 0）。
+        ``verify_failed``・``verify_no_context`` は「1段目の陽性を残した」件数で、理由の区別に使う。
 
         ``excluded_untracked_total`` / ``excluded_untracked_by_pj`` / ``excluded_before_cutoff_total``
         （#442 契約4・5）: judge の母集団を tracked_projects + cutoff に絞った際の除外件数
@@ -559,42 +584,45 @@ def run_daily_judge(
             file=out,
         )
 
-        # 2段目（確かめ直し・#682）: 1段目の陽性だけを、直前の Claude 発言と並べてもう一度
-        # 確かめる。Phase C（既存・変更なし）へは「書き換えた応答」として渡す — reject された
-        # 発話だけ responses[key] を JSON 再構築し、変更が無かった key は元の応答のまま
-        # （out_of_range 等の既存 observability を壊さない）。
-        groups: Dict[str, List[Dict[str, Any]]] = {}
-        stage1_verdicts: Dict[str, List[Dict[str, Any]]] = {}
-        for req in emitted["requests"]:
-            key = req.get("id")
-            group = (req.get("meta") or {}).get("utterances", [])
-            groups[key] = group
-            raw = responses.get(key)
-            if not raw:
-                continue
-            parsed_stage1 = _prompt.parse_verdicts_result(raw, expected_len=len(group))
-            if not parsed_stage1["ok"]:
-                continue
-            stage1_verdicts[key] = parsed_stage1["verdicts"]
+        # 2段目（確かめ直し・#682・既定は無効＝``_verify_enabled``）: 1段目の陽性だけを、
+        # 直前の Claude 発言と並べてもう一度確かめる（評価 ``judge_eval.run_eval`` と同じ
+        # ``verify.apply_verification`` を通す）。Phase C（既存・変更なし）へは「書き換えた
+        # 応答」として渡す — reject された発話だけ responses[key] を JSON 再構築し、変更が無か
+        # った key は元の応答のまま（out_of_range 等の既存 observability を壊さない）。
+        verify_result = dict(_VERIFY_ZERO)
+        if _verify_enabled(verify):
+            groups: Dict[str, List[Dict[str, Any]]] = {}
+            stage1_verdicts: Dict[str, List[Dict[str, Any]]] = {}
+            for req in emitted["requests"]:
+                key = req.get("id")
+                group = (req.get("meta") or {}).get("utterances", [])
+                groups[key] = group
+                raw = responses.get(key)
+                if not raw:
+                    continue
+                parsed_stage1 = _prompt.parse_verdicts_result(raw, expected_len=len(group))
+                if not parsed_stage1["ok"]:
+                    continue
+                stage1_verdicts[key] = parsed_stage1["verdicts"]
 
-        verify_result = _verify.apply_verification(
-            groups,
-            stage1_verdicts,
-            call_fn=call_haiku_verify,
-            reserve_fn=lambda items: _verify.reserve_verify_cost(
-                items, judged_path=judged_path, dry_run=False
-            ),
-            model=model,
-            batch_size=batch_size,
-        )
-        for key, vlist in verify_result["verdicts"].items():
-            responses[key] = json.dumps({"verdicts": vlist}, ensure_ascii=False)
-        print(
-            f"[judge_runner] 2段目: calls={verify_result['calls']} "
-            f"rejected={verify_result['rejected']} kept={verify_result['kept']} "
-            f"failed={verify_result['failed']} no_context={verify_result['no_context']}",
-            file=out,
-        )
+            verify_result = _verify.apply_verification(
+                groups,
+                stage1_verdicts,
+                call_fn=call_haiku_verify,
+                reserve_fn=lambda items: _verify.reserve_verify_cost(
+                    items, judged_path=judged_path, dry_run=False
+                ),
+                model=model,
+                batch_size=batch_size,
+            )
+            for key, vlist in verify_result["verdicts"].items():
+                responses[key] = json.dumps({"verdicts": vlist}, ensure_ascii=False)
+            print(
+                f"[judge_runner] 2段目: calls={verify_result['calls']} "
+                f"rejected={verify_result['rejected']} kept={verify_result['kept']} "
+                f"failed={verify_result['failed']} no_context={verify_result['no_context']}",
+                file=out,
+            )
 
         # Phase C（決定論）。#400 A5: category の provenance に producer 時点の model を
         # 保存するため、Phase B が実際に call_haiku へ渡した model をそのまま渡す。
@@ -680,6 +708,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
     ap.add_argument("--model", default=DEFAULT_JUDGE_MODEL)
     ap.add_argument(
+        "--verify", action=argparse.BooleanOptionalAction, default=None,
+        help="2段目（確かめ直し・#682）の入切り。未指定は環境変数 EVOLVE_JUDGE_VERIFY、それも無ければ無効",
+    )
+    ap.add_argument(
         "--max-age-days", type=int, default=DEFAULT_JUDGE_UTTERANCE_MAX_AGE_DAYS,
         help="未判定 utterance を judge に入れる cutoff（発話時刻基準・既定90日・#442）",
     )
@@ -692,6 +724,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         batch_size=args.batch_size,
         model=args.model,
         judge_utterance_max_age_days=args.max_age_days,
+        verify=args.verify,
     )
     return 0
 

@@ -559,3 +559,198 @@ def test_run_dry_does_not_write_any_files(tmp_path: Path, monkeypatch: pytest.Mo
     assert result["cases"] == 2
     assert result["positives"] == 1
     assert not (tmp_path / "flow").exists()
+
+
+# ─────────────────────────────────────────────────
+# 2段目（確かめ直し・#682）— 評価側。LLM は全て mock（call_haiku_fn / call_verify_fn）
+# ─────────────────────────────────────────────────
+
+PRIOR = "直前のClaudeが出した成果物の説明"
+
+
+def _prior_row(eval_id: str, label: str, text: str, prior=PRIOR) -> Dict[str, Any]:
+    r = _row(eval_id, label, text=text)
+    r["prior_assistant_text"] = prior
+    return r
+
+
+def _stage1_all_positive(_prompt_text: str, _model: str) -> str:
+    return json.dumps({"verdicts": [
+        {"index": i, "is_correction": True, "idiom": "I", "category": "omission", "reason": "r"}
+        for i in range(2)
+    ]})
+
+
+def _stage1_first_positive_second_negative(_prompt_text: str, _model: str) -> str:
+    return json.dumps({"verdicts": [
+        {"index": 0, "is_correction": True, "idiom": "I", "category": "omission", "reason": "r"},
+        {"index": 1, "is_correction": False, "idiom": None, "category": None, "reason": "r"},
+    ]})
+
+
+def _rows_by_id(tmp_path: Path) -> Dict[str, Dict[str, Any]]:
+    lines = (tmp_path / "baseline" / "results.jsonl").read_text().splitlines()
+    return {r["prompt_id"]: r for r in map(json.loads, lines)}
+
+
+def _verify_verdicts(*pairs) -> str:
+    return json.dumps({"verdicts": [{"index": i, "verdict": v} for i, v in pairs]})
+
+
+def test_run_eval_stage2_reject_flips_final_prediction_and_records_stage1(tmp_path: Path):
+    cases = [_prior_row("tp-1", "TP", "直して"), _prior_row("np-1", "not_TP", "次はこれをやって")]
+    cfg = je.RunConfig(variant="baseline", batch_size=30, reps=1)
+    summary = je.run_eval(
+        cases, cfg, flow_dir=tmp_path, call_haiku_fn=_stage1_all_positive,
+        call_verify_fn=lambda _p, _m: _verify_verdicts((0, "keep"), (1, "reject")),
+        sleep_fn=lambda _s: None,
+    )
+    rows = _rows_by_id(tmp_path)
+    assert rows["tp-1"]["meta"]["predicted"] is True and rows["tp-1"]["meta"]["stage1_predicted"] is True
+    assert rows["np-1"]["meta"]["predicted"] is False and rows["np-1"]["meta"]["stage1_predicted"] is True
+    assert rows["np-1"]["grade"]["specificity_hit"] == 1
+    assert summary["verify"]["rejected"] == 1 and summary["verify"]["kept"] == 1
+    assert summary["graded"] == 2
+
+
+def test_run_eval_stage1_negative_is_not_sent_to_stage2(tmp_path: Path):
+    cases = [_prior_row("tp-1", "TP", "直して"), _prior_row("np-1", "not_TP", "ありがとう")]
+    sent: List[str] = []
+
+    def verify_call(p: str, _m: str) -> str:
+        sent.append(p)
+        return _verify_verdicts((0, "keep"))
+
+    cfg = je.RunConfig(variant="baseline", batch_size=30, reps=1)
+    je.run_eval(cases, cfg, flow_dir=tmp_path, call_haiku_fn=_stage1_first_positive_second_negative,
+                call_verify_fn=verify_call, sleep_fn=lambda _s: None)
+    assert len(sent) == 1 and "直して" in sent[0] and "ありがとう" not in sent[0]
+    assert _rows_by_id(tmp_path)["np-1"]["meta"]["predicted"] is False
+
+
+@pytest.mark.parametrize("failure", ["raise", "garbage"])
+def test_run_eval_stage2_failure_keeps_stage1_positive(tmp_path: Path, failure: str):
+    cases = [_prior_row("tp-1", "TP", "直して"), _prior_row("np-1", "not_TP", "ありがとう")]
+
+    def verify_call(_p: str, _m: str) -> str:
+        if failure == "raise":
+            raise RuntimeError("boom")
+        return "not json"
+
+    cfg = je.RunConfig(variant="baseline", batch_size=30, reps=1)
+    summary = je.run_eval(cases, cfg, flow_dir=tmp_path, call_haiku_fn=_stage1_all_positive,
+                          call_verify_fn=verify_call, sleep_fn=lambda _s: None)
+    rows = _rows_by_id(tmp_path)
+    assert rows["tp-1"]["meta"]["predicted"] is True and rows["np-1"]["meta"]["predicted"] is True
+    assert summary["verify"]["failed"] == 2 and summary["graded"] == 2
+
+
+def test_run_eval_missing_prior_keeps_stage1_without_calling_stage2(tmp_path: Path):
+    cases = [_prior_row("tp-1", "TP", "直して", prior=None), _prior_row("np-1", "not_TP", "x", prior=None)]
+
+    def verify_call(_p: str, _m: str) -> str:
+        pytest.fail("直前発言が無いのに2段目を呼んだ")
+
+    cfg = je.RunConfig(variant="baseline", batch_size=30, reps=1)
+    summary = je.run_eval(cases, cfg, flow_dir=tmp_path, call_haiku_fn=_stage1_all_positive,
+                          call_verify_fn=verify_call, sleep_fn=lambda _s: None)
+    assert summary["verify"]["no_context"] == 2 and summary["verify"]["calls"] == 0
+    assert all(r["meta"]["predicted"] for r in _rows_by_id(tmp_path).values())
+
+
+def test_eval_writes_nothing_to_production_judged_store_for_stage2(tmp_path: Path, monkeypatch):
+    """評価の2段目は本番の当日予算（correction_judged.jsonl）へ予約を書かない。"""
+    from correction_semantic import verify as _v
+    monkeypatch.setattr(_v, "reserve_verify_cost",
+                        lambda *a, **k: pytest.fail("評価が本番ストアへ予約を書こうとした"))
+    cases = [_prior_row("tp-1", "TP", "直して"), _prior_row("np-1", "not_TP", "x")]
+    cfg = je.RunConfig(variant="baseline", batch_size=30, reps=1)
+    je.run_eval(cases, cfg, flow_dir=tmp_path, call_haiku_fn=_stage1_all_positive,
+                call_verify_fn=lambda _p, _m: _verify_verdicts((0, "keep"), (1, "keep")),
+                sleep_fn=lambda _s: None)
+
+
+def test_eval_and_production_route_through_the_same_apply_verification(tmp_path: Path, monkeypatch):
+    """完成条件①: 評価と本番が同じ関数（verify.apply_verification）で2段目を実行する。
+    同じ mock 応答から同じ最終判定になることも確かめる。"""
+    import json as _json
+    from datetime import datetime, timedelta, timezone
+    from correction_semantic import judge_runner as jr
+    from correction_semantic import verify as _v
+
+    calls: List[str] = []
+    real = _v.apply_verification
+
+    def spy(*args, **kwargs):
+        calls.append("called")
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(_v, "apply_verification", spy)
+
+    # ── 評価
+    cases = [_prior_row("np-1", "not_TP", "次はこれをやって")]
+    cfg = je.RunConfig(variant="baseline", batch_size=30, reps=1)
+    stage1 = lambda _p, _m: _json.dumps({"verdicts": [  # noqa: E731
+        {"index": 0, "is_correction": True, "idiom": "I", "category": "omission", "reason": "r"}]})
+    verify_reject = lambda _p, _m: _verify_verdicts((0, "reject"))  # noqa: E731
+    je.run_eval(cases, cfg, flow_dir=tmp_path / "flow", call_haiku_fn=stage1,
+                call_verify_fn=verify_reject, sleep_fn=lambda _s: None)
+    eval_final = _rows_by_id(tmp_path / "flow")["np-1"]["meta"]["predicted"]
+
+    # ── 本番（同じ本文・同じ直前発言を元ログに用意）
+    sp = tmp_path / "s.jsonl"
+    sp.write_text(
+        _json.dumps({"type": "assistant", "message": {"content": PRIOR}}) + "\n"
+        + _json.dumps({"type": "user", "message": {"content": "x"}}) + "\n", encoding="utf-8")
+    ts = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+    utt = {"source_path": str(sp), "line_no": 2, "pj_slug": "pj-a", "session_id": "s1",
+           "timestamp": ts, "text": "次はこれをやって", "text_hash": "", "prev_action": "",
+           "source_kind": "dialogue", "extractor_version": 1, "ingested_at": ts}
+    import fleet_config
+    monkeypatch.setattr(fleet_config, "load_config", lambda: {
+        "tracked_projects": ["/x/pj-a"], "ignored_projects": [], "last_discovery": None})
+    monkeypatch.setattr(jr, "call_haiku", stage1)
+    monkeypatch.setattr(jr, "call_haiku_verify", verify_reject)
+    res = jr.run_daily_judge(run=True, utterances=[utt], judged_path=tmp_path / "correction_judged.jsonl",
+                             weak_signals_path=tmp_path / "ws.jsonl", verify=True)
+
+    assert calls == ["called", "called"]  # 評価1回 + 本番1回、どちらも同一関数
+    assert eval_final is False and res["corrections"] == 0  # 同じ mock から同じ最終判定（陰性）
+
+
+# ── 来歴（harness_sha / prompt fingerprint）
+
+def test_harness_paths_include_stage2_module():
+    assert "scripts/lib/correction_semantic/verify.py" in je.HARNESS_PATHS
+
+
+def test_real_harness_sha_changes_when_verify_module_content_changes(tmp_path: Path):
+    """実際の HARNESS_PATHS で、verify.py の1バイト変更が harness_sha を変える。"""
+    import shutil
+    for rel in je.HARNESS_PATHS:
+        dst = tmp_path / rel
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(je._PLUGIN_ROOT / rel, dst)
+    before = je.compute_harness_sha(je.HARNESS_PATHS, base_dir=tmp_path)
+    assert je.compute_harness_sha(je.HARNESS_PATHS, base_dir=tmp_path) == before  # 陽性対照
+    with open(tmp_path / "scripts/lib/correction_semantic/verify.py", "ab") as f:
+        f.write(b"\n# mutated\n")
+    assert je.compute_harness_sha(je.HARNESS_PATHS, base_dir=tmp_path) != before
+
+
+def test_prompt_fingerprint_changes_when_only_stage2_wording_changes(monkeypatch):
+    before = _prompt.prompt_fingerprint()
+    assert _prompt.prompt_fingerprint() == before  # 陽性対照
+    orig = _prompt.build_verify_prompt
+    monkeypatch.setattr(_prompt, "build_verify_prompt", lambda items, **kw: orig(items, **kw) + "追記")
+    assert _prompt.prompt_fingerprint() != before
+
+
+def test_run_dry_reports_stage2_upper_bound_without_llm(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(je, "FLOW_DIR", tmp_path / "flow")
+    cfg = je.RunConfig(variant="baseline", batch_size=1, reps=1)
+    r = je.run_dry(_cases(), cfg)
+    assert r["total_llm_calls_if_run"] == 2
+    assert r["stage2_calls_upper_bound"] == 2
+    assert r["stage2_calls_estimate_from_labels"] == 1  # 陽性ラベル1件
+    assert r["total_llm_calls_if_run_including_stage2_upper_bound"] == 4
