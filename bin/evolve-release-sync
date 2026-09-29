@@ -1,26 +1,33 @@
 #!/usr/bin/env bash
-# bin/evolve-release-sync — リリース（bump + tag push）後に、ローカル開発環境の
-# evolve-anything プラグインを最新バージョンへ同期する。
+# bin/evolve-release-sync — 週1リリース（bump + tag push）後に、本番のプラグインを
+# 最新リリースへ同期し、安定パス ~/.claude/plugins/live/evolve-anything を入った版へ向け直す。
 #
-# 背景（なぜ必要か）:
-#   marketplace は Directory source（ローカルの作業ディレクトリ）を直接見る。
-#   リリースは worktree → PR → origin/main に入るが、**ローカル main を pull
-#   しない限り marketplace は古いまま**。そのため `claude plugin update` を
-#   叩いても低い（古い）バージョンしか返らない、という慢性的な穴があった。
-#   このスクリプトを `claude plugin tag --push` の直後に実行すると、その穴を塞ぐ。
+# 背景（なぜ必要か・#548）:
+#   本番が実行する木は、開発用の共有 checkout ではなく、marketplace（GitHub の main）から
+#   `claude plugin update` で cache に入った「版ごとのディレクトリ」。毎朝の自動実行（launchd）は
+#   版番号がパスに入る cache を直接指せないため、安定パス（symlink）経由で起動する。
+#   この symlink を張り替えるのは**このスクリプトだけ**（手で作らない・手で直さない）。
+#   ローカル main は本番と無関係なので pull しない。
 #
-# 手順: ローカル main を origin/main へ fast-forward → marketplace update →
-#       plugin update。
+# 手順: marketplace update → plugin update → installed_plugins.json の版を読む →
+#       live symlink をその版のディレクトリへ張り替える。
 #
 # Usage:
 #   evolve-release-sync [--dry-run]
 #     --dry-run   実コマンドを実行せず、実行予定のコマンドを表示するだけ。
+#                 張り替え先は update 前の版で表示する（update 後に確定する）。
 #
-# exit 0=成功 / 1=同期失敗（ff 不可など要手動確認）/ 2=前提不成立（repo 外・main 以外）。
+# exit 0=成功 / 1=同期失敗（plugin コマンド失敗・版ディレクトリ不在・live が symlink でない）/
+#      2=前提不成立（installed_plugins.json 不在・evolve-anything の登録なし）。
 set -uo pipefail
 
 DRY_RUN=0
 [ "${1:-}" = "--dry-run" ] && DRY_RUN=1
+
+PLUGINS_DIR="$HOME/.claude/plugins"
+INSTALLED="$PLUGINS_DIR/installed_plugins.json"
+LIVE_LINK="$PLUGINS_DIR/live/evolve-anything"
+CACHE_BASE="$PLUGINS_DIR/cache/evolve-anything/evolve-anything"
 
 run() {
   if [ "$DRY_RUN" = 1 ]; then
@@ -30,39 +37,48 @@ run() {
   fi
 }
 
-# --- main 本体 repo を解決（worktree から呼んでも本体を指すように） ---
-GIT_COMMON="$(git rev-parse --git-common-dir 2>/dev/null)" || {
-  echo "[release-sync] ⚠ git repo 外です。evolve-anything のディレクトリ内で実行してください。" >&2
+# installPath は stale の実績があるため使わず、version から cache のパスを組む。
+installed_version() {
+  python3 - "$INSTALLED" <<'PY'
+import json, sys
+try:
+    entries = json.load(open(sys.argv[1]))["plugins"]["evolve-anything@evolve-anything"]
+    print(entries[0]["version"])
+except Exception:
+    sys.exit(1)
+PY
+}
+
+before="$(installed_version)" || {
+  echo "[release-sync] ⚠ $INSTALLED に evolve-anything@evolve-anything の版が読めません。" >&2
   exit 2
 }
-# git-common-dir は <main>/.git（相対で返ることがあるので絶対化）。
-GIT_COMMON="$(cd "$GIT_COMMON" && pwd)"
-MAIN_REPO="$(dirname "$GIT_COMMON")"
-echo "[release-sync] main repo: $MAIN_REPO" >&2
 
-# --- 本体が main をチェックアウトしているか（誤同期防止） ---
-cur="$(git -C "$MAIN_REPO" branch --show-current 2>/dev/null)"
-if [ "$cur" != "main" ]; then
-  echo "[release-sync] ⚠ 本体が main 以外（'${cur}'）をチェックアウト中です。" >&2
-  echo "[release-sync]   本体を main に切り替えてから再実行してください。" >&2
-  exit 2
+# --- marketplace → plugin を更新 ---
+run claude plugin marketplace update evolve-anything || exit 1
+run claude plugin update evolve-anything@evolve-anything || exit 1
+
+# --- live symlink を入った版へ張り替え ---
+if [ "$DRY_RUN" = 1 ]; then
+  after="$before"
+else
+  after="$(installed_version)" || {
+    echo "[release-sync] ⚠ update 後に版が読めません。" >&2
+    exit 1
+  }
 fi
-
-PLUGIN_JSON="$MAIN_REPO/.claude-plugin/plugin.json"
-before="$(grep '"version"' "$PLUGIN_JSON" 2>/dev/null | head -1 | tr -d ' ')"
-
-# --- ローカル main を origin/main へ fast-forward ---
-run git -C "$MAIN_REPO" fetch origin
-if ! run git -C "$MAIN_REPO" merge --ff-only origin/main; then
-  echo "[release-sync] ⚠ fast-forward に失敗しました（ローカル main が origin と分岐）。" >&2
-  echo "[release-sync]   手動で 'git -C $MAIN_REPO status' を確認してください。" >&2
+target="$CACHE_BASE/$after"
+if [ "$DRY_RUN" = 0 ] && [ ! -d "$target" ]; then
+  echo "[release-sync] ⚠ 版ディレクトリがありません: ${target}（symlink は張り替えていません）" >&2
   exit 1
 fi
+if [ -e "$LIVE_LINK" ] && [ ! -L "$LIVE_LINK" ]; then
+  echo "[release-sync] ⚠ $LIVE_LINK が symlink ではありません。手動で確認してください。" >&2
+  exit 1
+fi
+run mkdir -p "$(dirname "$LIVE_LINK")"
+run ln -sfn "$target" "$LIVE_LINK"
 
-# --- marketplace（Directory source）→ plugin を更新 ---
-run claude plugin marketplace update evolve-anything
-run claude plugin update evolve-anything@evolve-anything
-
-after="$(grep '"version"' "$PLUGIN_JSON" 2>/dev/null | head -1 | tr -d ' ')"
-echo "[release-sync] plugin.json version: ${before} → ${after}" >&2
+echo "[release-sync] installed version: ${before} → ${after}" >&2
+echo "[release-sync] live → ${target}" >&2
 echo "[release-sync] 完了。反映には Claude Code の再起動が必要です。" >&2

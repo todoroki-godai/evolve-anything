@@ -1,66 +1,130 @@
-"""bin/evolve-release-sync の dry-run 契約テスト。
+"""bin/evolve-release-sync の契約テスト（#548）。
 
-実際の git fetch / claude plugin 操作は副作用が大きく claude CLI に依存するため、
-``--dry-run`` でコマンドシーケンスが正しい順序で出力されることを検証する
-（単体テストで claude を実行しない — no-llm-in-tests）。
+実 HOME・実 claude CLI には触れない（no-llm-in-tests）。HOME を tmp に差し替え、
+``claude`` は PATH 先頭のスタブ（呼び出しを記録するだけ）に置き換える。
 """
 
+import json
+import os
 import subprocess
 from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parents[1] / "evolve-release-sync"
+KEY = "evolve-anything@evolve-anything"
 
 
-def _init_main_repo(tmp_path):
-    """plugin.json を持つ main ブランチの git repo を作る。"""
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    subprocess.run(["git", "init", "-b", "main"], cwd=repo, check=True, capture_output=True)
-    subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=repo, check=True)
-    subprocess.run(["git", "config", "user.name", "t"], cwd=repo, check=True)
-    pj = repo / ".claude-plugin"
-    pj.mkdir()
-    (pj / "plugin.json").write_text('{\n  "version": "1.102.0"\n}\n')
-    subprocess.run(["git", "add", "."], cwd=repo, check=True, capture_output=True)
-    subprocess.run(["git", "commit", "-m", "init"], cwd=repo, check=True, capture_output=True)
-    return repo
+def _make_home(tmp_path, version="1.126.0", *, with_cache=True, entry=True):
+    """installed_plugins.json と cache の版ディレクトリを持つ偽 HOME を作る。"""
+    home = tmp_path / "home"
+    plugins = home / ".claude" / "plugins"
+    plugins.mkdir(parents=True)
+    data = {"version": 2, "plugins": {}}
+    if entry:
+        # installPath はわざと stale な版にする（version から組むことの検査）。
+        data["plugins"][KEY] = [{"scope": "user", "version": version, "installPath": "/stale/1.0.0"}]
+    (plugins / "installed_plugins.json").write_text(json.dumps(data))
+    if with_cache:
+        (plugins / "cache" / "evolve-anything" / "evolve-anything" / version).mkdir(parents=True)
+    return home
 
 
-def test_dry_run_emits_sync_sequence(tmp_path):
-    """ff → marketplace update → plugin update の順でコマンドを出す。"""
-    repo = _init_main_repo(tmp_path)
-    res = subprocess.run(
-        ["bash", str(SCRIPT), "--dry-run"],
-        cwd=repo, capture_output=True, text=True,
+def _stub_claude(tmp_path, exit_code=0):
+    """呼び出し引数を calls.log に追記するだけの claude スタブを PATH 用 dir に置く。"""
+    bindir = tmp_path / "stubbin"
+    bindir.mkdir()
+    log = tmp_path / "calls.log"
+    stub = bindir / "claude"
+    stub.write_text(f'#!/bin/sh\necho "$@" >> "{log}"\nexit {exit_code}\n')
+    stub.chmod(0o755)
+    return bindir, log
+
+
+def _run(home, tmp_path, *args, bindir=None):
+    env = {**os.environ, "HOME": str(home)}
+    if bindir is not None:
+        env["PATH"] = f"{bindir}:{env['PATH']}"
+    return subprocess.run(
+        ["bash", str(SCRIPT), *args], cwd=tmp_path, env=env, capture_output=True, text=True,
     )
+
+
+def test_dry_run_emits_sync_sequence_without_local_main_ff(tmp_path):
+    """marketplace update → plugin update → symlink 張り替えの順。ローカル main の ff は無い。"""
+    home = _make_home(tmp_path)
+    res = _run(home, tmp_path, "--dry-run")
     out = res.stdout + res.stderr
     assert res.returncode == 0, out
-    assert "merge --ff-only origin/main" in out
-    assert "claude plugin marketplace update evolve-anything" in out
-    assert "claude plugin update evolve-anything@evolve-anything" in out
-    i_ff = out.index("merge --ff-only origin/main")
-    i_mp = out.index("marketplace update evolve-anything")
-    i_pl = out.index("plugin update evolve-anything@evolve-anything")
-    assert i_ff < i_mp < i_pl, f"順序違反: {out}"
+    assert "ff-only" not in out and "git " not in out
+    i_mp = out.index("claude plugin marketplace update evolve-anything")
+    i_pl = out.index("claude plugin update evolve-anything@evolve-anything")
+    i_ln = out.index("ln -sfn")
+    assert i_mp < i_pl < i_ln, f"順序違反: {out}"
+    assert "cache/evolve-anything/evolve-anything/1.126.0" in out
+    assert "/stale/1.0.0" not in out
+    assert "plugins/live/evolve-anything" in out
 
 
-def test_aborts_when_not_on_main(tmp_path):
-    """本体が main 以外をチェックアウト中なら exit 2 で止める（誤同期防止）。"""
-    repo = _init_main_repo(tmp_path)
-    subprocess.run(["git", "checkout", "-b", "feature"], cwd=repo, check=True, capture_output=True)
-    res = subprocess.run(
-        ["bash", str(SCRIPT), "--dry-run"],
-        cwd=repo, capture_output=True, text=True,
-    )
-    out = res.stdout + res.stderr
-    assert res.returncode == 2, out
-    assert "main 以外" in out
+def test_dry_run_does_not_touch_filesystem(tmp_path):
+    home = _make_home(tmp_path)
+    _run(home, tmp_path, "--dry-run")
+    assert not (home / ".claude" / "plugins" / "live").exists()
 
 
-def test_aborts_outside_git_repo(tmp_path):
-    """git repo 外で呼ぶと exit 2。"""
-    res = subprocess.run(
-        ["bash", str(SCRIPT), "--dry-run"],
-        cwd=tmp_path, capture_output=True, text=True,
-    )
+def test_apply_points_live_symlink_at_installed_version(tmp_path):
+    home = _make_home(tmp_path, "1.126.0")
+    bindir, log = _stub_claude(tmp_path)
+    link = home / ".claude" / "plugins" / "live" / "evolve-anything"
+    link.parent.mkdir()
+    old = tmp_path / "old_version"
+    old.mkdir()
+    link.symlink_to(old)  # 旧版を指している状態からの張り替え
+    res = _run(home, tmp_path, bindir=bindir)
+    assert res.returncode == 0, res.stdout + res.stderr
+    expected = home / ".claude/plugins/cache/evolve-anything/evolve-anything/1.126.0"
+    assert link.is_symlink() and Path(os.readlink(link)) == expected
+    calls = log.read_text().splitlines()
+    assert calls == [
+        "plugin marketplace update evolve-anything",
+        f"plugin update {KEY}",
+    ]
+
+
+def test_missing_version_dir_fails_without_relinking(tmp_path):
+    home = _make_home(tmp_path, with_cache=False)
+    bindir, _ = _stub_claude(tmp_path)
+    res = _run(home, tmp_path, bindir=bindir)
+    assert res.returncode == 1, res.stdout + res.stderr
+    assert not (home / ".claude/plugins/live/evolve-anything").exists()
+
+
+def test_plugin_command_failure_exits_1_without_relinking(tmp_path):
+    home = _make_home(tmp_path)
+    bindir, _ = _stub_claude(tmp_path, exit_code=3)
+    res = _run(home, tmp_path, bindir=bindir)
+    assert res.returncode == 1, res.stdout + res.stderr
+    assert not (home / ".claude/plugins/live/evolve-anything").exists()
+
+
+def test_refuses_when_live_is_a_real_directory(tmp_path):
+    """live が実ディレクトリなら上書きしない（データ損失防止）。"""
+    home = _make_home(tmp_path)
+    bindir, _ = _stub_claude(tmp_path)
+    real = home / ".claude/plugins/live/evolve-anything"
+    real.mkdir(parents=True)
+    (real / "keep.txt").write_text("x")
+    res = _run(home, tmp_path, bindir=bindir)
+    assert res.returncode == 1, res.stdout + res.stderr
+    assert (real / "keep.txt").exists() and not real.is_symlink()
+
+
+def test_aborts_when_plugin_not_registered(tmp_path):
+    home = _make_home(tmp_path, entry=False)
+    res = _run(home, tmp_path, "--dry-run")
+    assert res.returncode == 2, res.stdout + res.stderr
+
+
+def test_aborts_when_installed_plugins_missing(tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+    res = _run(home, tmp_path, "--dry-run")
     assert res.returncode == 2, res.stdout + res.stderr
