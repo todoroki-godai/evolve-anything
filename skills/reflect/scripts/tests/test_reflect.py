@@ -1355,6 +1355,27 @@ class TestRuleRevertRecording:
         from optimize_history_store import history_path
         assert not history_path("test-slug").exists()
 
+    @pytest.mark.parametrize(
+        "blank", ["\n", "  \n\t", "\r\n", "\u3000\n", "\ufeff", "   "],
+    )
+    def test_record_rule_revert_entry_blank_before_is_new_file_not_revertible(self, blank):
+        """#697: 空白だけの控えも「本当に空」と同じ new_file_not_revertible。
+        記録すると revert が空白で既存ファイルを上書きしうる（optimize_history は書かない）。
+        """
+        target = Path.home() / ".claude" / "rules" / "blank-before.md"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("- 起草した行\n", encoding="utf-8")
+
+        result = reflect.record_rule_revert_entry(
+            str(target), before_content=blank, after_content="- 起草した行\n",
+            pj_slug="test-slug",
+        )
+
+        assert result["recorded"] is False
+        assert result["reason"] == "new_file_not_revertible"
+        from optimize_history_store import history_path
+        assert not history_path("test-slug").exists()
+
     def test_record_rule_revert_entry_is_classified_accepted(self, tmp_path):
         """#512: 書いた entry が reader 側（results_board.classify_decision）で accepted になる。
 

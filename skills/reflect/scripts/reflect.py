@@ -26,7 +26,7 @@ from reflect_apply_match import (
     classify_reflect_target_kind,
     normalize_reflect_target_path,
 )
-from evolve_revert import detect_stale_before_snapshot
+from evolve_revert import detect_stale_before_snapshot, is_blank_snapshot
 from reflect_fold import _hash_correction_message, _parse_iso8601_utc, fold_corrections
 from pillar2_metrics import pillar2_count_key
 from reflect_utils import (
@@ -701,7 +701,7 @@ def record_rule_revert_entry(
     "global_rule"/"project_rule" と判定できない対象（新規スキル/hook 等）は記録しない。
     冪等性（同一 id の二重記録防止）は `append_history_entry_deduped` に委譲する。
 
-    `before_content == ""` は新規ファイル作成として扱う（§8.2「やらないこと」— 新規ファイル
+    `before_content` が空（空白・BOM だけも同じ。`is_blank_snapshot`）は新規ファイル作成として扱う（§8.2「やらないこと」— 新規ファイル
     作成の revert は実装しない。before 本文が存在しないため「不在」sentinel + schema version 2
     が要り、#467 §1.4 と同じ穴を開けることになる）。この場合 optimize_history へは書かず、
     **黙らせず** `{"recorded": False, "reason": "new_file_not_revertible"}` を返す。
@@ -713,7 +713,7 @@ def record_rule_revert_entry(
     if identity is None:
         return {"recorded": False, "reason": "not_rule_scope", "id": None, "written": None}
 
-    if before_content == "":
+    if is_blank_snapshot(before_content):
         return {
             "recorded": False,
             "reason": "new_file_not_revertible",
@@ -1659,7 +1659,7 @@ def main():
                 }
         # #475 §8.2/rev2: 反映先が rules 配下（= rule_identity is not None）で applied に
         # なったときは、必ず revert 記録を試みる（--before-content-file は上で必須化済み）。
-        # 新規ファイル作成（before が空）は §8.2「やらないこと」どおり revert 未対応を
+        # 新規ファイル作成（before が空・空白・BOM だけ）は §8.2「やらないこと」どおり revert 未対応を
         # 黙らせず明示する。rules 配下でない target は revert 記録の対象外。
         if result.get("status") == "applied" and rule_identity is not None:
             before_path = Path(args.before_content_file)
