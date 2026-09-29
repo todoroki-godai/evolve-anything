@@ -26,6 +26,7 @@ from reflect_apply_match import (
     classify_reflect_target_kind,
     normalize_reflect_target_path,
 )
+from evolve_revert import detect_stale_before_snapshot
 from reflect_fold import _hash_correction_message, _parse_iso8601_utc, fold_corrections
 from pillar2_metrics import pillar2_count_key
 from reflect_utils import (
@@ -1503,6 +1504,14 @@ def main():
             }, ensure_ascii=False))
             sys.exit(1)
         draft_line = draft_line_path.read_text(encoding="utf-8").rstrip("\n")
+        # #696 レビュー Nit6: 空の起草行は #696 ゲート（「追加された行に無い」）に
+        # 落として紛らわしくする前に、専用のエラーで弾く。
+        if not draft_line.strip():
+            print(json.dumps({
+                "status": "error",
+                "message": f"--draft-line-file の内容が空です: {draft_line_path}",
+            }, ensure_ascii=False))
+            sys.exit(1)
 
         all_records = load_corrections(corrections_file)
         source_resolution = resolve_source_correction_id(all_records, args.apply)
@@ -1531,6 +1540,53 @@ def main():
                 "message": "対象 correction が見つかりません",
             }, ensure_ascii=False))
             sys.exit(1)
+
+        # #696: rules 配下への反映は、attempt 追記・status 更新・revert 記録の
+        # どれも書き込む前に、--before-content-file が編集後の内容に見えないかを
+        # 確認する。ここで止めれば reflect_apply_events.jsonl / corrections.jsonl /
+        # optimize_history のいずれにも一切追記されない。read-only（ファイルは一切
+        # 書かない）判定なので、dry-run の「一切書かない」規約はここでは崩れない
+        # ——むしろ --dry-run でも同じ確認をしないと、控えが編集後の内容だと気づく
+        # 手段が試し実行では得られない（#696 レビュー Nit7）ため、dry-run の
+        # early return より前に置く。
+        if rule_identity is not None:
+            before_path = Path(args.before_content_file)
+            if not before_path.exists():
+                print(json.dumps({
+                    "status": "error",
+                    "message": f"--before-content-file が見つかりません: {before_path}",
+                }, ensure_ascii=False))
+                sys.exit(1)
+            # #696 レビュー Should4: 反映先ファイルが無いと read_text が traceback
+            # するため、before_path と同じ形で先に存在確認する。
+            target_path_for_check = Path(args.target_path)
+            if not target_path_for_check.exists():
+                print(json.dumps({
+                    "status": "error",
+                    "message": f"--target-path が見つかりません: {target_path_for_check}",
+                }, ensure_ascii=False))
+                sys.exit(1)
+            stale_reason = detect_stale_before_snapshot(
+                before_path,
+                target_path_for_check.read_text(encoding="utf-8"),
+                draft_line,
+            )
+            if stale_reason is not None:
+                print(json.dumps({
+                    "status": "error",
+                    "message": (
+                        "--before-content-file が編集後の内容に見えます"
+                        "（起草行が before→after の差分で追加された行に見つかりません）。"
+                        "直前の編集を一度元に戻してから Edit 前の全文を控え直すか、"
+                        "`git diff HEAD -- <path>` が今回の起草行の追加だけのときに限り"
+                        "`git show HEAD:<path>` を控えにして再実行してください"
+                        "（それ以外の差分が混ざっている場合は編集を戻して控え直す）。"
+                        "起草行が元々ファイルにあった（移動・再掲）場合は --apply でなく"
+                        "反映済みとして扱ってください（#696）"
+                    ),
+                    "reason": stale_reason,
+                }, ensure_ascii=False))
+                sys.exit(1)
 
         if args.dry_run:
             # --dry-run では一切書かない（既存 dry-run ゲート貫通規約）。
