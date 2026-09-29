@@ -1206,7 +1206,12 @@ def test_build_proposal_prompt_tells_assistant_to_carry_relative_date_warning_in
     ts = "2026-09-10T03:00:00+00:00"
     g = _group_with_meta(["k1"], rep="来週やる案", uttered_at=ts)
     msg = pd.build_proposal_prompt([g], "pj-a")
-    instruction = pr.RELATIVE_DATE_INSTRUCTION
+    # 期待値は定数経由でなく全文を直書きする（否定形への書き換え等、意味の反転を緑で通さない）
+    instruction = (
+        "「⚠ 相対日付あり」が付いた案は、その警告文を省略・言い換えせずに"
+        "AskUserQuestion の質問文（案と判断材料を示す場所）へ含め、今日を基準に読み替えないこと。"
+    )
+    assert pr.RELATIVE_DATE_INSTRUCTION == instruction
     assert instruction in msg
     # 指示は案の行より前（=アシスタントが案を並べる前に読む位置）にある
     assert msg.index(instruction) < msg.index("- 案:")
@@ -1214,8 +1219,6 @@ def test_build_proposal_prompt_tells_assistant_to_carry_relative_date_warning_in
     warning_line = next(ln for ln in msg.splitlines() if "2026-09-10(木)" in ln)
     assert pr.RELATIVE_DATE_WARNING_PREFIX in warning_line
     assert pr.RELATIVE_DATE_WARNING_PREFIX in instruction
-    # 指示が要求する4語（AskUserQuestion・選択肢の説明・発話日・そのまま含め）が文面に残っている
-    assert all(w in instruction for w in ("AskUserQuestion", "選択肢の説明", "発話日", "そのまま含め"))
     assert msg.index("- 案:") < msg.index(warning_line)
 
 
@@ -1226,6 +1229,30 @@ def test_build_proposal_prompt_relative_date_instruction_for_unknown_date_and_la
     msg = pd.build_proposal_prompt([plain, unknown], "pj-a")
     assert pr.RELATIVE_DATE_INSTRUCTION in msg
     assert "発話日不明のため日付を確認すること" in msg
+
+
+def test_build_proposal_prompt_relative_date_instruction_on_unknown_date_branch_with_freshness_label():
+    """#699 [Must]M2: 発話日が取れない分岐（count != len(signal_keys)）では、隣に並ぶ「N日前の発話」
+    （群の最新の時刻であって、この文の発話日ではない）があっても、指示と「発話日不明」警告の両方が出る。
+    """
+    g = {
+        "signal_keys": ["k2"],  # 元は ["k0", "k2"] で k0（代表文の key）が既読除外された
+        "count": 2,
+        "representative": "来週やる案",
+        "evidence_text": "来週やる案",
+        "signal_meta_by_key": {
+            "k2": {"uttered_at": (datetime.now(timezone.utc) - timedelta(days=1)).isoformat(),
+                   "detected_at": None, "cross_pj": []},
+        },
+        "cross_pj_confirmed": [],
+    }
+    msg = pd.build_proposal_prompt([g], "pj-a")
+    assert pr.RELATIVE_DATE_INSTRUCTION in msg
+    assert "昨日の発話" in msg  # 隣に並ぶ群の最新時刻ラベル
+    context_line = next(ln for ln in msg.splitlines() if "発話日不明のため日付を確認すること" in ln)
+    assert "昨日の発話" in context_line
+    # 警告に日付は含まれない（隣のラベルの日付を発話日として写す根拠が無い）
+    assert "この文の発話日" not in msg
 
 
 def test_build_proposal_prompt_no_relative_date_instruction_when_no_warning():

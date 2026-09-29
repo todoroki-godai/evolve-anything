@@ -274,8 +274,8 @@ _RELATIVE_DATE_PATTERN = re.compile(
 # 組むので、片方だけ文言が変わって指示が空振りすることは無い。
 RELATIVE_DATE_WARNING_PREFIX = "⚠ 相対日付あり"
 RELATIVE_DATE_INSTRUCTION = (
-    f"「{RELATIVE_DATE_WARNING_PREFIX}」の行が付いた案は、AskUserQuestion の選択肢の説明にも"
-    "その警告と発話日をそのまま含め、今日の日付に読み替えないこと。"
+    f"「{RELATIVE_DATE_WARNING_PREFIX}」が付いた案は、その警告文を省略・言い換えせずに"
+    "AskUserQuestion の質問文（案と判断材料を示す場所）へ含め、今日を基準に読み替えないこと。"
 )
 
 
