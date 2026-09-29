@@ -6,18 +6,27 @@ usage.jsonl、errors.jsonl、sessions.jsonl、history.jsonl から
 """
 import argparse
 import json
+import os
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-
-DATA_DIR = Path.home() / ".claude" / "evolve-anything"
 
 # パッケージ化後 (Phase 2): __file__ は scripts/lib/discover/__init__.py のため
 # scripts/lib/ を sys.path に追加して plugin_root / line_limit / similarity 等を解決
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from plugin_root import PLUGIN_ROOT
 _plugin_root = PLUGIN_ROOT
+
+# DATA_DIR は rl_common.resolve_data_dir に揃える（#702）。従来は Path.home() 固定で
+# CLAUDE_PLUGIN_DATA（テスト隔離 tmp dir を含む）を無視していた。resolve_data_dir は
+# env 未設定、または CC の plugin-data env＋一元化 marker のときは正準 dir を返し、
+# それ以外の env（dogfood の隔離コピー等）はその値をそのまま使う。marker が無い
+# マシンでは（plugin-data env のときも）plugin-data 側をそのまま向く。属性名
+# DATA_DIR は bench（measure_467_proposal_kinds.py）の属性差し替えのため維持する。
+from rl_common import resolve_data_dir
+
+DATA_DIR = resolve_data_dir(os.environ.get("CLAUDE_PLUGIN_DATA", ""))
 
 # HISTORY_DIR（旧 plugin 内 generations）は ADR-031 で撤去。
 # accept/reject 履歴は optimize_history_store（DATA_DIR/optimize_history/<slug>）に集約。
