@@ -39,7 +39,8 @@ map 構築に成功したが個別の signal_key の物理キーが見つから�
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import re
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
@@ -215,6 +216,14 @@ def lookup_uttered_at(
 
 
 # ─────────────────────────────────────────────────────────────────
+# JST 暦日（相対時刻表示・相対日付警告の両方が使う。日付・曜日は常に JST で出す —
+# UTC のまま出すと深夜の発話で1日ずれる）
+# ─────────────────────────────────────────────────────────────────
+_JST = timezone(timedelta(hours=9))
+_WEEKDAY_JA = ("月", "火", "水", "木", "金", "土", "日")
+
+
+# ─────────────────────────────────────────────────────────────────
 # 相対時刻表示（PR2-d: 提示文の判断材料）
 # ─────────────────────────────────────────────────────────────────
 def relative_time_label(
@@ -222,22 +231,113 @@ def relative_time_label(
 ) -> Optional[str]:
     """発話時刻（ISO8601）を「3週間前の発話」のような相対表記にする。parse 不能は None。
 
-    しきい値: 1日未満=今日 / 14日未満=N日前 / 60日未満=N週間前 / それ以上=Nヶ月前。
-    judge ラグがある以上、古い文脈の指摘に無自覚に y を押させない安全弁として使う
-    （ADR-054 PR2-d）。
+    しきい値: 0=今日 / 1=昨日 / 14日未満=N日前 / 60日未満=N週間前 / それ以上=Nヶ月前。
+    **全区分を経過時間でなく JST 暦日の差**で数える（#441 レビュー巡1[Must]1 で日単位だけ
+    暦日差にしたところ、暦日14日前・経過13.4〜60日未満の窓で週・月だけ経過時間基準の
+    ままだと「1週間前」等の旧実装に無い表示になる境界不整合が実データ13群で発生
+    （レビュー巡2[Must]A）。全区分を暦日差に揃えて解消する）。
     """
     epoch = _parse_iso_epoch(value)
     if epoch is None:
         return None
     now_epoch = (now or datetime.now(timezone.utc)).timestamp()
-    delta_days = max(0.0, now_epoch - epoch) / 86400.0
-    if delta_days < 1:
-        return "今日の発話"
-    if delta_days < 14:
-        return f"{int(delta_days)}日前の発話"
-    if delta_days < 60:
-        return f"{int(delta_days // 7)}週間前の発話"
-    return f"{max(1, int(delta_days // 30))}ヶ月前の発話"
+    day_diff = max(0, (
+        datetime.fromtimestamp(now_epoch, tz=_JST).date()
+        - datetime.fromtimestamp(epoch, tz=_JST).date()
+    ).days)
+    if day_diff < 14:
+        if day_diff == 0:
+            return "今日の発話"
+        if day_diff == 1:
+            return "昨日の発話"
+        return f"{day_diff}日前の発話"
+    if day_diff < 60:
+        return f"{day_diff // 7}週間前の発話"
+    return f"{max(1, day_diff // 30)}ヶ月前の発話"
+
+
+# ─────────────────────────────────────────────────────────────────
+# 相対日付警告（#441: 再提案の文面をアシスタントが「今日基準」で誤補完するのを防ぐ）
+# ─────────────────────────────────────────────────────────────────
+# 曜日は「月|火|水|木|金|土|日」+ 任意の「曜日」接尾辞1本にまとめる（旧: 短縮形/正式形を
+# 7個ずつ列挙していたのを解消・#441 レビュー[Nit]6）。`明日(?!香)` は固有名詞「明日香」の
+# 誤爆（#441 陽性対照）を避けるための既知の除外。
+_RELATIVE_DATE_PATTERN = re.compile(
+    r"明後日|一昨日|明日(?!香)|昨日|今日"
+    r"|来週|先週|今週|来月|先月|今月"
+    r"|[月火水木金土日]曜日?"
+)
+
+
+def relative_date_warning(text: Optional[str], uttered_at: Optional[str]) -> Optional[str]:
+    """提案文面に相対日付・曜日表現があれば、発話日（JST）基準で読むよう警告を返す（#441）。
+
+    **既知の表現のみを文字列（正規表現）で検出する表示用の補助であり、blocking ではない**
+    （見落とし・迂回がありうる）。文面に該当表現が無ければ None（過検出は許容 — 「月曜日に
+    作った」「今週の見どころ」「今日やること」のような画面見出しの引用・相対性の薄い言及も
+    表示用の安全弁として警告してよい・#441 レビュー[Should]4）。
+    該当表現があるのに ``uttered_at`` が parse 不能なときは発話日不明の文言を返す
+    （``detected_at`` は judge の判定時刻であって発話時刻ではないため、代用しない）。
+    """
+    if not text or not isinstance(text, str):
+        return None
+    if not _RELATIVE_DATE_PATTERN.search(text):
+        return None
+    epoch = _parse_iso_epoch(uttered_at)
+    if epoch is None:
+        return "⚠ 相対日付あり：発話日不明のため日付を確認すること"
+    dt_jst = datetime.fromtimestamp(epoch, tz=_JST)
+    weekday = _WEEKDAY_JA[dt_jst.weekday()]
+    # #441 レビュー巡2[Should]C: 「この文の」を付け、同じ行に並ぶ N日前ラベル（群全体の
+    # 最新の発話）とは別の・この検出対象文自身の発話であると読めるようにする。
+    return f"⚠ 相対日付あり：この文の発話日 {dt_jst:%Y-%m-%d}({weekday}) 基準で読むこと"
+
+
+def representative_uttered_at(group: Dict[str, Any]) -> Optional[str]:
+    """代表文（``signal_keys[0]``。group 生成時の先頭 record の文面）自身の uttered_at を返す。
+
+    ``group_freshness_iso`` は残存 signal_keys の**最新**時刻を返すため、代表文とは別の
+    key の時刻を返しうる（実データで21日ずれた群あり・#441 レビュー巡1[Must]2）。「発話日」を
+    名乗れるのは代表文自身の uttered_at だけなので ``signal_keys[0]`` の meta だけを引く。
+    既読差し引きで ``signal_keys`` が減った群（``count``＝construction 時点の総件数が現在の
+    ``signal_keys`` 件数と食い違う）は、詰め直しにより ``signal_keys[0]`` が代表文の key と
+    限らない（#441 レビュー巡2[Must]B-1）ため None を返す。signal_keys が空、meta が
+    残っていない、または uttered_at が無く detected_at しか無い場合も同様に None
+    （呼び出し側で「発話日不明」表示になる）。
+    """
+    keys = group.get("signal_keys") or []
+    if not keys:
+        return None
+    count = group.get("count")
+    if isinstance(count, int) and count != len(keys):
+        return None
+    meta = (group.get("signal_meta_by_key") or {}).get(keys[0])
+    if not meta:
+        return None
+    return meta.get("uttered_at")
+
+
+def relative_date_warning_for_group(group: Dict[str, Any]) -> Optional[str]:
+    """group から相対日付警告を組み立てる（``_context_suffix`` が呼ぶ薄いラッパー）。
+
+    検出対象は ``all_representatives``（複数 PJ を merge した成分の全代表文）があれば
+    それを連結、無ければ ``representative``/``evidence_text``（#441 レビュー巡1[Should]3:
+    merge 済み提案は表示が全代表文なのに検出が先頭1文だけでは見落としになる）。
+    発話日は ``representative_uttered_at``（先頭代表文＝``signal_keys[0]`` の発話）を使うが、
+    相対日付表現が**先頭代表文以外**にしか無い場合は、その文の発話時刻を持っていないため
+    「発話日不明」に倒す（#441 レビュー巡2[Must]B-2: 先頭以外の代表文の発話日を先頭代表文の
+    時刻で言い切ることはしない。「詳しい日付が出る程度の許容誤差」ではなく実際に不正確）。
+    """
+    all_reps = group.get("all_representatives")
+    primary_text = group.get("representative") or group.get("evidence_text") or ""
+    if isinstance(all_reps, list) and len(all_reps) > 1:
+        text = "\n".join(r for r in all_reps if r)
+        primary_has_match = bool(primary_text) and bool(_RELATIVE_DATE_PATTERN.search(primary_text))
+    else:
+        text = primary_text
+        primary_has_match = True
+    uttered_at = representative_uttered_at(group) if primary_has_match else None
+    return relative_date_warning(text, uttered_at)
 
 
 def group_freshness_iso(group: Dict[str, Any]) -> Optional[str]:
