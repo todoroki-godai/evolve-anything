@@ -239,6 +239,43 @@ def test_revert_count_from_fixed_history_and_actual_files(sources, monkeypatch):
     reader.assert_called_once_with("evolve-anything")
 
 
+def test_revert_count_excludes_stale_before_snapshot(sources, monkeypatch):
+    """#696 レビュー Must2: 記録の before/after が同一（記録の不具合）の entry は、
+    `--list` の「戻せる」件数と同じく柱4（pillar4_count）からも除外する
+    （render_revert_listing と weekly_board で判定式が食い違わないことの回帰）。
+    """
+    import hashlib
+    wb, _, root, *_ = sources
+    target = root / "skills" / "example" / "SKILL.md"
+    target.parent.mkdir(parents=True)
+    target.write_text("applied")
+    after_sha = hashlib.sha256(b"applied").hexdigest()
+    normal_entry = {
+        "id": "normal", "human_accepted": True, "scope": "project",
+        "repo_id": str(root), "relative_path": "skills/example/SKILL.md",
+        "timestamp": "2026-09-06T00:00:00Z", "revert_schema_version": 1,
+        "revert_before_b64": "eJwDAAAAAAE=", "revert_encoding": "zlib+base64",
+        "after_sha": after_sha,
+    }
+    # revert_before_b64 が zlib.compress(b"applied") の base64 —
+    # 復元すると after_sha と同一（= before/after が同一の記録の不具合）。
+    stale_entry = dict(
+        normal_entry, id="stale",
+        revert_before_b64="eJxLLCjIyUxNAQALlwLg",
+        timestamp="2026-09-06T01:00:00Z",
+    )
+    history = [normal_entry, stale_entry]
+    reader = Mock(return_value=MeasuredList(history))
+    monkeypatch.setattr(wb.evolve_revert_listing, "load_effective_history", reader)
+    monkeypatch.setattr(wb.evolve_revert_listing, "build_revert_listing", real_revert_listing)
+
+    board = build(sources)
+
+    assert board["pillar4_count"] == 1
+    listing = real_revert_listing("evolve-anything")
+    assert [it["stale_before_snapshot"] for it in listing if it["entry_id"] == "stale"] == [True]
+
+
 @pytest.mark.parametrize("stamp,week,day", [
     ("2026-09-07T00:30:00+09:00", "2026-W37", "2026-09-07"),
     ("2027-01-01T00:30:00+09:00", "2026-W53", "2027-01-01"),
