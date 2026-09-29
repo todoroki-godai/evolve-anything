@@ -7,12 +7,15 @@
 ④**blocking**: 「非既定ブランチ／dirty／ahead の実環境で、SessionStart に何も出ない」または「判定不能なのに無音」
 ⑤**検証方法**: 陽性・陽性対照・判定不能の3件を実測（本文末尾）
 
-- **事実（2026-08-25 実測）**: 実行時の plugin root は共有 checkout。根拠を2つ揃えて確認した:
+- **事実（2026-08-25 実測・#548 の参照先切替前）**: 実行時の plugin root は共有 checkout。根拠を2つ揃えて確認した:
   ①`known_marketplaces.json` の当該 marketplace が `source.source = "directory"` / `installLocation` = 共有 checkout
   ②本日の SessionStart 出力が共有 checkout 配下のパスを印字し、それは
   `scripts/lib/daily/proposal_digest.py:573-583` が実行時 plugin root から逆算して組んでいる。
   **registry だけでは証明にならない** — `installed_plugins.json` の `installPath` は cache
   （mtime 2026-08-18 で stale）を指し、2つのレジストリは食い違う
+- **切替後（#548）**: 参照先は GitHub 経由で cache の版ディレクトリ（安定パス `~/.claude/plugins/live/evolve-anything`。
+  張り替えは `bin/evolve-release-sync` だけ）になり、本番の木は git 管理外。`live_checkout` は `unknown`（理由文に `#706 で対応中`）を返し、
+  **判定方式の書き換えは #706 の担当**。それまで下の判定項目は切替後の本番に働かず、この表示が恒久的に出る
 - **実行 root は「呼出側が渡す」。`Path(__file__)` を単独の根拠にしない**。`__file__` はモジュールの
   物理位置にすぎず、cache へのコピー・ファイル単体 symlink・`PYTHONPATH` 先頭差し替え・
   worktree の wrapper が主 checkout を import する配置で、**実際に動いている木とは別の木を指す**。
@@ -55,4 +58,4 @@
   （hook stdout に出ることと、人間が見て動くことは別の測定）。**再測条件**: ①が緑になった後、
   同一状態で5セッション連続開始し、文言が他通知に埋もれず読める位置に出るかを記録する（実装と同日に測る）
 - 出所: 2026-08-24〜25 実測。詳細は PJ memory `pitfall_shared_checkout_is_live_plugin`。
-  **構造そのものの是正は `#548` が扱う。本 rule は緩和策**
+  **構造そのものの是正（参照先の切替）は `#548`、切替後の判定方式は `#706` が扱う。本 rule は緩和策**
