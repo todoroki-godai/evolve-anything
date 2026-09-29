@@ -726,7 +726,7 @@ def build_proposal_prompt(
         "直後に、以下を AskUserQuestion で1件ずつ確認してください（はい/いいえの二択ではなく"
         "下記の4択）。ユーザーの依頼より先に割り込まないこと。ユーザーが提示を断ったら"
         "その場では再提示しないこと。",
-        RECOMMENDATION_INSTRUCTION,
+        RECOMMENDATION_INSTRUCTION + _ranking.relative_date_instruction(groups),
     ]
     for g in groups:
         # #412 round2 [Must]D-4: all_representatives（成分内の全 group の代表文）があれば

@@ -42,7 +42,7 @@ from __future__ import annotations
 import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 
 def _parse_iso_epoch(value: Optional[str]) -> Optional[float]:
@@ -268,6 +268,21 @@ _RELATIVE_DATE_PATTERN = re.compile(
     r"|[月火水木金土日]曜日?"
 )
 
+# 警告行の接頭辞と、それを選択肢へ転記させる提示指示（#699）の単一ソース。警告行は案の括弧行に
+# 入るだけで、提示指示が列挙する判断材料（記録される内容・背景）に含まれず、アシスタントが
+# AskUserQuestion の選択肢へ転記するかは運任せだった。接頭辞は警告本体と指示の両方がこの定数から
+# 組むので、片方だけ文言が変わって指示が空振りすることは無い。
+RELATIVE_DATE_WARNING_PREFIX = "⚠ 相対日付あり"
+RELATIVE_DATE_INSTRUCTION = (
+    f"「{RELATIVE_DATE_WARNING_PREFIX}」の行が付いた案は、AskUserQuestion の選択肢の説明にも"
+    "その警告と発話日をそのまま含め、今日の日付に読み替えないこと。"
+)
+
+
+def relative_date_instruction(groups: List[Dict[str, Any]]) -> str:
+    """警告行が付く案が1件でもあれば ``RELATIVE_DATE_INSTRUCTION``、無ければ空文字（#699）。"""
+    return RELATIVE_DATE_INSTRUCTION if any(relative_date_warning_for_group(g) for g in groups) else ""
+
 
 def relative_date_warning(text: Optional[str], uttered_at: Optional[str]) -> Optional[str]:
     """提案文面に相対日付・曜日表現があれば、発話日（JST）基準で読むよう警告を返す（#441）。
@@ -285,12 +300,12 @@ def relative_date_warning(text: Optional[str], uttered_at: Optional[str]) -> Opt
         return None
     epoch = _parse_iso_epoch(uttered_at)
     if epoch is None:
-        return "⚠ 相対日付あり：発話日不明のため日付を確認すること"
+        return f"{RELATIVE_DATE_WARNING_PREFIX}：発話日不明のため日付を確認すること"
     dt_jst = datetime.fromtimestamp(epoch, tz=_JST)
     weekday = _WEEKDAY_JA[dt_jst.weekday()]
     # #441 レビュー巡2[Should]C: 「この文の」を付け、同じ行に並ぶ N日前ラベル（群全体の
     # 最新の発話）とは別の・この検出対象文自身の発話であると読めるようにする。
-    return f"⚠ 相対日付あり：この文の発話日 {dt_jst:%Y-%m-%d}({weekday}) 基準で読むこと"
+    return f"{RELATIVE_DATE_WARNING_PREFIX}：この文の発話日 {dt_jst:%Y-%m-%d}({weekday}) 基準で読むこと"
 
 
 def representative_uttered_at(group: Dict[str, Any]) -> Optional[str]:
