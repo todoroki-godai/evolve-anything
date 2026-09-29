@@ -43,6 +43,12 @@ def test_build_prompt_asks_for_structured_verdict_result() -> None:
     assert "idiom" in p
 
 
+# #682 文面調整（a0 の誤りの型に対応）。いずれも既知の文言のみを固定する advisory 検査。
+_CHALLENGE_CLAUSE = "Claude の直前の判断・報告に対し、既に決めたはずのこと・やったはずのこと・別の見方を持ち出して反論する疑問形（反語・確認の形）も修正に含める。"
+_PRAISE_PLUS_CLAUSE = "肯定や承認で始まっていても、続けて成果物の不足や変えたい点を挙げていれば修正に含める。"
+_NEXT_STEP_CLAUSE = "- Claude の報告や提案を受けて、次の作業（実行・マージ・削除・記録・相談・対応）を指示・承認するだけの発話は、成果物の不備を指摘していなければ修正に含めない。"
+
+
 def _assert_advisory_boundary_contract(prompt: str) -> None:
     """Advisory: known wording only; semantic paraphrases can evade this check."""
     normalized = " ".join(prompt.split())
@@ -51,12 +57,15 @@ def _assert_advisory_boundary_contract(prompt: str) -> None:
         "次に、その対象の変更・不足の解消・制約や約束事の追加を求めているかを確認する。",
         "最後に、修正の要求が引用部分だけでなくユーザー自身の発話にあるかを確認する。",
         "発話が既存の成果物や作業の特定の不備・未完了を指し示している疑問形は修正に含める。状態・進捗・可否を尋ねるだけの質問は含めない。",
+        _CHALLENGE_CLAUSE,
+        _PRAISE_PLUS_CLAUSE,
         "特定の欠落・不足を指し示す婉曲な発話も修正に含める。",
         "Claude の誤りの指摘に加え、既に出した成果物・方針・進め方を変えさせる要求も修正に含める。",
         "その作業1回に限る条件は含めない。以後の作業にも続けて適用させる約束事は含める。",
         "新しい情報を求める質問は修正に含めない。",
         "既存の成果物・方針に向かわない相談・提案は修正に含めない。",
         "新しい作業の依頼（「次これやって」）と、その作業の初期条件の指定は修正に含めない。",
+        _NEXT_STEP_CLAUSE,
     )
     positions = []
     for clause in clauses:
@@ -81,6 +90,9 @@ _SHOULD_CLAUSE = "その作業1回に限る条件は含めない。以後の作�
         "状態・進捗・可否を尋ねるだけの質問は含めない。",
         _SHOULD_CLAUSE,
         "以後の作業にも続けて適用させる約束事は含める。",
+        _CHALLENGE_CLAUSE,
+        _PRAISE_PLUS_CLAUSE,
+        _NEXT_STEP_CLAUSE,
     ],
 )
 def test_advisory_new_boundary_deletion_is_rejected(clause: str) -> None:
@@ -95,6 +107,9 @@ def test_advisory_new_boundary_deletion_is_rejected(clause: str) -> None:
     [
         ("状態・進捗・可否を尋ねるだけの質問は含めない。", "状態・進捗・可否を尋ねるだけの質問は含める。"),
         ("以後の作業にも続けて適用させる約束事は含める。", "以後の作業にも続けて適用させる約束事は含めない。"),
+        (_CHALLENGE_CLAUSE, _CHALLENGE_CLAUSE.replace("修正に含める", "修正に含めない")),
+        (_PRAISE_PLUS_CLAUSE, _PRAISE_PLUS_CLAUSE.replace("修正に含める", "修正に含めない")),
+        (_NEXT_STEP_CLAUSE, _NEXT_STEP_CLAUSE.replace("修正に含めない", "修正に含める")),
     ],
 )
 def test_advisory_new_boundary_inversion_is_rejected(before: str, after: str) -> None:
@@ -186,10 +201,10 @@ def test_prompt_fingerprint_changes_with_template() -> None:
     assert cs_prompt.prompt_fingerprint() == fp1
 
 
-def test_prompt_contract_version_and_fingerprint_for_schema_v4() -> None:
-    """#682: 判定境界の変更後の系列識別値を固定する。"""
-    assert cs_prompt.CATEGORY_SCHEMA_VERSION == 4
-    assert cs_prompt.prompt_fingerprint() == "e6a3814e11e7"
+def test_prompt_contract_version_and_fingerprint_for_schema_v5() -> None:
+    """#682: 判定境界の変更後の系列識別値を固定する（v4=e6a3814e11e7 から文面調整で v5 へ）。"""
+    assert cs_prompt.CATEGORY_SCHEMA_VERSION == 5
+    assert cs_prompt.prompt_fingerprint() == "df21f8cad2a9"
 
 
 @pytest.mark.parametrize(
