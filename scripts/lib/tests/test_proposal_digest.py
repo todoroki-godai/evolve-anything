@@ -1214,6 +1214,8 @@ def test_build_proposal_prompt_tells_assistant_to_carry_relative_date_warning_in
     warning_line = next(ln for ln in msg.splitlines() if "2026-09-10(木)" in ln)
     assert pr.RELATIVE_DATE_WARNING_PREFIX in warning_line
     assert pr.RELATIVE_DATE_WARNING_PREFIX in instruction
+    # 指示が要求する4語（AskUserQuestion・選択肢の説明・発話日・そのまま含め）が文面に残っている
+    assert all(w in instruction for w in ("AskUserQuestion", "選択肢の説明", "発話日", "そのまま含め"))
     assert msg.index("- 案:") < msg.index(warning_line)
 
 

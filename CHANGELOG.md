@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Fixed
+- **fix(daily): 朝の改善案の相対日付警告を選択肢まで届ける提示指示を足す（#699）** — 警告が付く案があるときだけ、提示指示に「警告と発話日を AskUserQuestion の選択肢の説明にそのまま含める」を足す（`proposal_ranking.RELATIVE_DATE_INSTRUCTION`。警告本体と接頭辞定数を共有）。
 - **fix(import): SKILL.md frontmatter の `name` から plugin prefix を除去** — `skills/import/SKILL.md` の `name` が `evolve-anything:import` と plugin prefix 込みで宣言されており、スラッシュメニューで `/evolve-anything:evolve-anything:import` と二重表示されていた（CC 2.1.246 が表示側の二重化を修正したが、frontmatter に prefix を自書きすること自体が非推奨で、prefix は CC 側が付与する）。他 23 スキルは prefix 無しで宣言済みで、本件のみの逸脱だった。
 - **fix(discover): `recommended_artifacts_covered` キーを廃止し単一 `recommended_artifacts` へ統合する（#467・巡3是正）** —
   上の3層方式の一次実装は `covered`/`fresh` を `recommended_artifacts_covered`/`recommended_artifacts`
