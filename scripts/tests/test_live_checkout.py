@@ -159,6 +159,32 @@ class TestUnknown:
         assert result.status == "unknown"
 
 
+class TestNonGitTreeReasonPointsToIssue:
+    """本番の木が git 管理下でない unknown は理由文に #706 を含める（#548 B1・恒久表示が読み飛ばされるのを防ぐ）。"""
+
+    def test_non_git_tree_reason_mentions_706(self, tmp_path: Path, monkeypatch):
+        tree = tmp_path / "cache_tree"  # git 管理外（tmp は git repo の外）
+        _write_plugin_marker(tree)
+        monkeypatch.setattr(live_checkout, "_MODULE_ROOT_OVERRIDE", tree)
+        result = live_checkout.check(str(tree / "hooks" / "fake.py"))
+        assert result.status == "unknown"
+        assert "#706 で対応中" in result.reason
+
+    def test_other_unknown_reason_has_no_706(self, monkeypatch, repo_pair: Path):
+        """陽性対照: git 管理下で origin/HEAD が無いだけの unknown には付かない。"""
+        _git(repo_pair, "remote", "set-head", "origin", "-d")
+        monkeypatch.setattr(live_checkout, "_MODULE_ROOT_OVERRIDE", repo_pair)
+        result = live_checkout.check(_caller_file(repo_pair))
+        assert result.status == "unknown"
+        assert "#706" not in result.reason
+
+    def test_safe_has_no_reason(self, monkeypatch, repo_pair: Path):
+        monkeypatch.setattr(live_checkout, "_MODULE_ROOT_OVERRIDE", repo_pair)
+        result = live_checkout.check(_caller_file(repo_pair))
+        assert result.status == "safe"
+        assert result.reason is None
+
+
 class TestRegistrySecondary:
     def test_registry_missing_is_skipped_not_fatal(self, monkeypatch, repo_pair: Path):
         monkeypatch.setattr(live_checkout, "_MODULE_ROOT_OVERRIDE", repo_pair)

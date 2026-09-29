@@ -194,7 +194,11 @@ def check(caller_file, expected_root: "Optional[str]" = None) -> LiveCheckoutRes
     ok, branch_or_err = _git(root, "rev-parse", "--abbrev-ref", "HEAD")
     if not ok:
         return LiveCheckoutResult(
-            status="unknown", reason=f"HEAD 解決不能: {branch_or_err}", root=root, registry=registry,
+            status="unknown",
+            # 本番の木が git 管理外（marketplace 参照先を GitHub へ切替後）のときはここに来る。
+            # 判定方式の是正は #706。恒久表示が「見なくてよい行」に育つのを止めるため理由文に残す。
+            reason=f"HEAD 解決不能（git 管理外の木なら #706 で対応中）: {branch_or_err}",
+            root=root, registry=registry,
         )
     branch = branch_or_err.strip()
 
