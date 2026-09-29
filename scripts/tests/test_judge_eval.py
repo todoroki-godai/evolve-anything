@@ -752,5 +752,5 @@ def test_run_dry_reports_stage2_upper_bound_without_llm(tmp_path: Path, monkeypa
     r = je.run_dry(_cases(), cfg)
     assert r["total_llm_calls_if_run"] == 2
     assert r["stage2_calls_upper_bound"] == 2
-    assert r["stage2_calls_estimate_from_labels"] == 1  # 陽性ラベル1件
+    assert "stage2_calls_estimate_from_labels" not in r  # ラベル陽性からの目安は過小になるため出さない
     assert r["total_llm_calls_if_run_including_stage2_upper_bound"] == 4

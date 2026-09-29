@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Added
+- **feat(judge): AI 判定の2段目（1段目の陽性だけを直前の Claude 発言と並べて確かめ直す）（#682）** — `correction_semantic/verify.py` の `apply_verification` を評価（`judge_eval`）と本番（`judge_runner`）の両方が通す。2段目は陽性→陰性にしか動かせず、失敗・直前発言の欠落・予約失敗では1段目の陽性を残して件数（`verify_failed`/`verify_no_context`）を記録する。費用は呼び出し前に予約。本番は既定で無効（`--verify` / 環境変数 `EVOLVE_JUDGE_VERIFY=1` で有効化・実測合格後に切替）。`verify.py` は harness_sha の対象、`CATEGORY_SCHEMA_VERSION` は 5。
+
 ### Fixed
 - **fix(import): SKILL.md frontmatter の `name` から plugin prefix を除去** — `skills/import/SKILL.md` の `name` が `evolve-anything:import` と plugin prefix 込みで宣言されており、スラッシュメニューで `/evolve-anything:evolve-anything:import` と二重表示されていた（CC 2.1.246 が表示側の二重化を修正したが、frontmatter に prefix を自書きすること自体が非推奨で、prefix は CC 側が付与する）。他 23 スキルは prefix 無しで宣言済みで、本件のみの逸脱だった。
 - **fix(discover): `recommended_artifacts_covered` キーを廃止し単一 `recommended_artifacts` へ統合する（#467・巡3是正）** —

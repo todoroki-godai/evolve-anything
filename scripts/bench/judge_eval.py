@@ -46,7 +46,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import math
 import random
 import re
 import sys
@@ -257,13 +256,13 @@ def run_dry(cases: List[Dict[str, Any]], cfg: RunConfig) -> Dict[str, Any]:
 
     #682: 2段目（``verify.apply_verification``）は1段目の陽性だけを対象にするため、実際の
     呼び出し回数は実行前には確定しない（1段目の予測を先に見る必要がある）。過小評価しない
-    （llm-batch-guard）ため、``stage2_calls_upper_bound``（全件が陽性だった場合の上限）と、
-    ラベルの陽性件数からの目安 ``stage2_calls_estimate_from_labels`` の両方を出す。
+    （llm-batch-guard）ため、全件が陽性だった場合の上限 ``stage2_calls_upper_bound`` だけを
+    出す。正解ラベルの陽性件数からの目安は 1段目の陽性件数を過小に見積もる（1段目は
+    誤検出も陽性にする）ので出さない。
     """
     groups = chunk(cases, cfg.batch_size)
     positives = sum(1 for r in cases if expected_is_correction(r))
     stage2_upper_bound = len(groups) * cfg.reps
-    stage2_label_estimate = (math.ceil(positives / cfg.batch_size) if positives else 0) * cfg.reps
     return {
         "dry_run": True,
         "cases": len(cases),
@@ -274,7 +273,6 @@ def run_dry(cases: List[Dict[str, Any]], cfg: RunConfig) -> Dict[str, Any]:
         "reps": cfg.reps,
         "total_llm_calls_if_run": len(groups) * cfg.reps,
         "stage2_calls_upper_bound": stage2_upper_bound,
-        "stage2_calls_estimate_from_labels": stage2_label_estimate,
         "total_llm_calls_if_run_including_stage2_upper_bound": (
             len(groups) * cfg.reps + stage2_upper_bound
         ),
