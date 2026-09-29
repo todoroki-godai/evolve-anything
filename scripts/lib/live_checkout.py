@@ -97,8 +97,11 @@ def _module_root() -> "Path | None":
     return _find_plugin_root(__file__)
 
 
-# 主たる防御は `git -C <root>` で repo 解決を実行木に固定すること（`--git-dir=<root>/.git` の決め打ちは
-# linked worktree の `.git`（ファイル）で壊れるので使わない）。以下の環境変数除去は**保険**:
+# 主たる防御は `git -C <root>` で repo 解決を実行木に固定すること。`--git-dir`/`--work-tree` の組み合わせと違い、
+# 実行木の配置（通常 checkout か linked worktree か）で渡す値を変える分岐が要らない形を選んだ。
+# 実測 2026-09-29: git 2.50.1（Apple Git-155）では `--git-dir` に gitfile を渡しても正しく解決した
+# （`git --git-dir=<worktree>/.git rev-parse --abbrev-ref HEAD`）。他の git 版での挙動は未確認。
+# 以下の環境変数除去は**保険**:
 # git が hook 実行時に GIT_DIR 等を自ら環境へ入れ、継承すると -C を上書きして別 repo を判定しうる。
 # 一覧は git 自身の定義（`git rev-parse --local-env-vars`）だが、GIT_CEILING_DIRECTORIES /
 # GIT_DISCOVERY_ACROSS_FILESYSTEM など探索に効く変数は含まれず閉じていない＝既知の種別のみ・迂回可能
