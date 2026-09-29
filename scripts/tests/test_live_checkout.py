@@ -283,7 +283,11 @@ class TestTreeInsideAnotherRepo:
 
 
 class TestGitEnvInheritanceIsIgnored:
-    """継承した GIT_DIR / GIT_WORK_TREE で別 repo を判定しない（git の hook 実行時に自ら立つ・#548 巡4 C1）。"""
+    """継承した GIT_DIR / GIT_WORK_TREE で別 repo を判定しない（git の hook 実行時に自ら立つ・#548 巡4 C1）。
+
+    **既知の種別のみ検出・迂回可能**: 閉じているのは環境変数クラスだけで、実行木の直下へ gitfile を
+    置く配置クラスは検出しない（完成条件②が意図的な配置改変を脅威に数えないため対象外・検出は #706）。
+    """
 
     def test_git_dir_pointing_elsewhere_does_not_leak_into_non_git_tree(
         self, tmp_path: Path, monkeypatch, repo_pair: Path,

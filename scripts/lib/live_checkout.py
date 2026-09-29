@@ -106,6 +106,11 @@ def _module_root() -> "Path | None":
 # 一覧は git 自身の定義（`git rev-parse --local-env-vars`）だが、GIT_CEILING_DIRECTORIES /
 # GIT_DISCOVERY_ACROSS_FILESYSTEM など探索に効く変数は含まれず閉じていない＝既知の種別のみ・迂回可能
 # （no-denylist-checks: advisory）。取得失敗時のみ下の静的既定へ落とす。
+# **検出しない入力クラス（既知の種別のみ検出・迂回可能）**: 環境変数を1つも使わず、実行木の直下に
+# gitfile（`gitdir: <別 repo>` を書いた `.git` ファイル）を置く配置クラスは、`-C` でも環境変数除去でも
+# 閉じない（2026-09-29 実測で別 repo の branch/dirty を返した）。完成条件②が「意図的な配置改変」を
+# 脅威に数えないため本変更では対象外とし、検出は #706 の `gitCommitSha` 照合へ送る。
+# 運用ミスでこの形にはならない（cache へのコピーは `.git` を含まない・2026-09-29 実測）。
 _LOCAL_GIT_ENV_FALLBACK = (
     "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
     "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_IMPLICIT_WORK_TREE", "GIT_PREFIX", "GIT_NAMESPACE",
@@ -141,7 +146,8 @@ def _git(cwd: Path, *args: str) -> "tuple[bool, str]":
             ["git", "-C", str(cwd), "--no-optional-locks", *args],
             cwd=str(cwd), env=env, capture_output=True, text=True, timeout=10,
         )
-    except (FileNotFoundError, OSError) as e:
+    except (FileNotFoundError, OSError, subprocess.SubprocessError) as e:
+        # TimeoutExpired は SubprocessError 系で OSError ではないため明示する（docstring の「例外を投げない」を実装と一致させる）
         return False, f"git 実行不能: {e}"
     if out.returncode != 0:
         detail = (out.stderr or out.stdout or "").strip() or f"git {' '.join(args)} failed"
