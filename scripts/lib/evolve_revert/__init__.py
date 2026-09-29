@@ -58,6 +58,7 @@ from ._apply import (  # noqa: E402,F401
     detect_before_after_identical,
     detect_stale_before_snapshot,
     detect_subsequent_change,
+    is_blank_snapshot,
 )
 from ._availability import (  # noqa: E402,F401
     REASON_BEFORE_TOO_LARGE,

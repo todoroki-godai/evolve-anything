@@ -261,6 +261,19 @@ def _diff_added_lines(before_lines: List[str], after_lines: List[str]) -> List[s
     return added
 
 
+def is_blank_snapshot(text: str) -> bool:
+    """#697: 控え（before）が「本当に空」または空白・BOM だけか。
+
+    新規ファイル作成として扱う判定の単一ソース——``detect_stale_before_snapshot``
+    と ``reflect.record_rule_revert_entry`` の両方がこれを使う（片方だけ厳密比較
+    ``== ""`` だと、空白だけの控えで食い違い、revert が空白で既存ファイルを
+    上書きしうる記録が作られる）。既知の限界: ゼロ幅スペース等 ``str.strip()`` が
+    空白と見なさない文字だけの控えは空扱いにならない（見えない文字を名前で列挙する
+    検査は閉じないため入れない）。
+    """
+    return not text.replace("\ufeff", "").strip()
+
+
 def detect_stale_before_snapshot(
     before_path: Path, after_content: str, draft_line: str,
 ) -> Optional[str]:
@@ -282,7 +295,7 @@ def detect_stale_before_snapshot(
     には含まれないため、この1本の判定に自然に畳み込まれる（旧版の「(b) 完全一致」
     は独立した分岐ではなくこの一般形の特殊ケース）。
 
-    新規ファイル作成（before が空文字列）は対象外——常に None を返す
+    新規ファイル作成（before が空、または空白・BOM だけ。``is_blank_snapshot``）は対象外——常に None を返す
     （#475 §8.2「やらないこと」との整合。before が無いので比較のしようがない）。
 
     検出できない既知の限界:
@@ -309,7 +322,7 @@ def detect_stale_before_snapshot(
         その理由をそのまま返す）、該当しなければ ``None``。
     """
     before_content = before_path.read_text(encoding="utf-8")
-    if before_content == "":
+    if is_blank_snapshot(before_content):
         return None
     added_lines = _diff_added_lines(before_content.splitlines(), after_content.splitlines())
     match = match_draft_line_in_lines(added_lines, draft_line)

@@ -4,6 +4,7 @@
 
 ### Fixed
 - **fix(daily): 朝の改善案の相対日付警告を質問文まで届ける提示指示を足す（#699）** — 警告が付く案があるときだけ、提示指示に「警告文を省略・言い換えせず AskUserQuestion の質問文（案と判断材料を示す場所）へ含め、今日を基準に読み替えない」を足す（`proposal_ranking.RELATIVE_DATE_INSTRUCTION`。警告本体と接頭辞定数を共有）。
+- **fix(reflect/revert): 空白だけ・BOM だけの控えから取り消し記録を作らない入口を塞ぐ（#697）** — 記録を作る入口（`record_rule_revert_entry` と `--apply` 時の `detect_stale_before_snapshot` の確認）の判定を `evolve_revert.is_blank_snapshot` に一本化し、空白・BOM だけの控えも新規ファイル扱い（従来は `== ""` の厳密比較）。`apply_revert`（戻す側）は変えていない。既存の空白控えの記録は0件（2026-09-29 tacchi 実測）。
 - **fix(import): SKILL.md frontmatter の `name` から plugin prefix を除去** — `skills/import/SKILL.md` の `name` が `evolve-anything:import` と plugin prefix 込みで宣言されており、スラッシュメニューで `/evolve-anything:evolve-anything:import` と二重表示されていた（CC 2.1.246 が表示側の二重化を修正したが、frontmatter に prefix を自書きすること自体が非推奨で、prefix は CC 側が付与する）。他 23 スキルは prefix 無しで宣言済みで、本件のみの逸脱だった。
 - **fix(discover): `recommended_artifacts_covered` キーを廃止し単一 `recommended_artifacts` へ統合する（#467・巡3是正）** —
   上の3層方式の一次実装は `covered`/`fresh` を `recommended_artifacts_covered`/`recommended_artifacts`

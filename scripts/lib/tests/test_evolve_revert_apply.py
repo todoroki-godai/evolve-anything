@@ -23,6 +23,7 @@ from evolve_revert._apply import (  # noqa: E402
     apply_revert,
     detect_before_after_identical,
     detect_stale_before_snapshot,
+    is_blank_snapshot,
     detect_subsequent_change,
 )
 
@@ -709,17 +710,45 @@ def test_detect_stale_before_snapshot_none_for_new_file(tmp_path):
     assert detect_stale_before_snapshot(before_path, "- 起草した行\n", "起草した行") is None
 
 
-def test_detect_stale_before_snapshot_whitespace_only_before_is_not_treated_as_new_file(tmp_path):
-    """新規ファイルのバイパスは「完全な空文字列」のみに限る——空白だけの控えは
-    別物として扱い、通常の diff 判定にかける（``record_rule_revert_entry`` 側の
-    ``before_content == ""`` という厳密な条件とここでの新規ファイル判定基準を
-    一致させないと、"before が空白のみ" というケースだけ挙動が食い違う）。
+@pytest.mark.parametrize(
+    "blank",
+    ["   \n", "\n", "  \n\t", "\r\n", "\u3000\n", "\ufeff", "\ufeff\n"],
+)
+def test_detect_stale_before_snapshot_blank_before_is_treated_as_new_file(tmp_path, blank):
+    """#697: 空白だけの控え（改行のみ・全角空白・BOM のみ等）も「本当に空」と同じく
+    新規ファイル扱いで常に None を返す（``record_rule_revert_entry`` 側と判定を
+    ``is_blank_snapshot`` 1本に揃える）。
     """
     before_path = tmp_path / "before.txt"
-    before_path.write_text("   \n", encoding="utf-8")
+    before_path.write_text(blank, encoding="utf-8")
 
-    reason = detect_stale_before_snapshot(before_path, "   \n", "起草した行")
+    # after に起草行が「追加行として」無い形にする（有ると通常の diff 判定でも None に
+    # なり、新規ファイル分岐を外しても検出できない＝変異が素通りする）。
+    assert detect_stale_before_snapshot(before_path, "- 別の行\n", "起草した行") is None
+
+
+def test_detect_stale_before_snapshot_zero_width_space_is_a_known_limitation(tmp_path):
+    """既知の限界（#697）: ゼロ幅スペースだけの控えは ``str.strip()`` が空白と見なさない
+    ため新規ファイル扱いにならず、通常の diff 判定にかかる。拡張すると「見えない文字」を名前で列挙する検査に
+    なる（no-denylist-checks）ため入れない。
+    """
+    before_path = tmp_path / "before.txt"
+    before_path.write_text("\u200b\n", encoding="utf-8")
+
+    reason = detect_stale_before_snapshot(before_path, "\u200b\n", "起草した行")
     assert reason == "draft_line_not_added"
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("", True), ("\n", True), ("  \n\t", True), ("\r\n", True),
+        ("\u3000", True), ("\ufeff", True),
+        ("x", False), ("- 既存行\n", False), ("\n- 既存行\n", False),
+    ],
+)
+def test_is_blank_snapshot(text, expected):
+    assert is_blank_snapshot(text) is expected
 
 
 def test_detect_stale_before_snapshot_flags_when_draft_line_not_newly_added(tmp_path):
