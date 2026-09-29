@@ -97,9 +97,12 @@ def _module_root() -> "Path | None":
     return _find_plugin_root(__file__)
 
 
-# git 自身が「repo の場所・状態を決める」と定義する環境変数（`git rev-parse --local-env-vars`）。
-# git が hook 実行時に GIT_DIR 等を自ら環境へ入れるため、継承すると cwd の木ではなく別 repo を判定してしまう。
-# 列挙は git 側の定義に委ねる（自前 denylist にしない）。取得失敗時のみ下の静的既定へ落とす。
+# 主たる防御は `git -C <root>` で repo 解決を実行木に固定すること（`--git-dir=<root>/.git` の決め打ちは
+# linked worktree の `.git`（ファイル）で壊れるので使わない）。以下の環境変数除去は**保険**:
+# git が hook 実行時に GIT_DIR 等を自ら環境へ入れ、継承すると -C を上書きして別 repo を判定しうる。
+# 一覧は git 自身の定義（`git rev-parse --local-env-vars`）だが、GIT_CEILING_DIRECTORIES /
+# GIT_DISCOVERY_ACROSS_FILESYSTEM など探索に効く変数は含まれず閉じていない＝既知の種別のみ・迂回可能
+# （no-denylist-checks: advisory）。取得失敗時のみ下の静的既定へ落とす。
 _LOCAL_GIT_ENV_FALLBACK = (
     "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
     "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_IMPLICIT_WORK_TREE", "GIT_PREFIX", "GIT_NAMESPACE",
@@ -126,13 +129,14 @@ def _local_git_env_vars() -> "tuple[str, ...]":
 def _git(cwd: Path, *args: str) -> "tuple[bool, str]":
     """git を ``cwd`` で実行する。``(成功したか, stdout or エラー理由)`` を返す。例外を投げない。
 
-    repo の場所を決める ``GIT_*`` 環境変数は落として実行する（全 git 呼び出しの単一の口）。
+    ``-C`` で repo 解決を ``cwd`` に固定し、repo の場所を決める ``GIT_*`` 環境変数も保険として落とす（全 git 呼び出しの単一の口）。
     """
     drop = set(_local_git_env_vars()) | set(_LOCAL_GIT_ENV_FALLBACK)
     env = {k: v for k, v in os.environ.items() if k not in drop}
     try:
         out = subprocess.run(
-            ["git", *args], cwd=str(cwd), env=env, capture_output=True, text=True, timeout=10,
+            ["git", "-C", str(cwd), "--no-optional-locks", *args],
+            cwd=str(cwd), env=env, capture_output=True, text=True, timeout=10,
         )
     except (FileNotFoundError, OSError) as e:
         return False, f"git 実行不能: {e}"

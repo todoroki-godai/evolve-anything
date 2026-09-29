@@ -231,6 +231,41 @@ class TestTreeInsideAnotherRepo:
         result = live_checkout.check(str(variant / "hooks" / "fake.py"))
         assert result.status == "safe", result.reason
 
+    def test_symlink_alias_root_is_same_tree(self, tmp_path: Path, monkeypatch, repo_pair: Path):
+        """skip しない同型: symlink 経由の実行木。FS の大文字小文字設定に依存しない。"""
+        alias = tmp_path / "alias"
+        alias.symlink_to(repo_pair, target_is_directory=True)
+        monkeypatch.setattr(live_checkout, "_MODULE_ROOT_OVERRIDE", alias)
+        result = live_checkout.check(str(alias / "hooks" / "fake.py"))
+        assert result.status == "safe", result.reason
+
+    def test_toplevel_reported_via_symlink_path_is_same_tree(self, tmp_path: Path, monkeypatch, repo_pair: Path):
+        """git が非正規（symlink 経由）の toplevel 文字列を返しても同一実体なら別 repo 扱いしない。
+        文字列一致比較への退行はここで落ちる（skip なし・FS 非依存）。"""
+        alias = tmp_path / "alias2"
+        alias.symlink_to(repo_pair, target_is_directory=True)
+        real_git = live_checkout._git
+
+        def fake_git(cwd, *args):
+            if args == ("rev-parse", "--show-toplevel"):
+                return True, str(alias) + "\n"
+            return real_git(cwd, *args)
+
+        monkeypatch.setattr(live_checkout, "_git", fake_git)
+        monkeypatch.setattr(live_checkout, "_MODULE_ROOT_OVERRIDE", repo_pair)
+        result = live_checkout.check(_caller_file(repo_pair))
+        assert result.status == "safe", result.reason
+
+    def test_linked_worktree_as_tree_is_judged_not_unknown(self, tmp_path: Path, monkeypatch, repo_pair: Path):
+        """陽性対照: linked worktree（`.git` がファイル）を実行木にしても unknown へ倒れない。"""
+        wt = tmp_path / "linked_wt"
+        _git(repo_pair, "worktree", "add", "-q", "-b", "feat/x", str(wt))
+        assert (wt / ".git").is_file()
+        monkeypatch.setattr(live_checkout, "_MODULE_ROOT_OVERRIDE", wt)
+        result = live_checkout.check(str(wt / "hooks" / "fake.py"))
+        assert result.status == "danger", result.reason  # 非既定ブランチ＝従来判定に進んだ
+        assert result.branch == "feat/x"
+
     def test_non_git_tree_still_takes_head_unresolved_path(self, tmp_path: Path, monkeypatch):
         """新条件が既存の HEAD 解決不能経路を奪わない。"""
         tree = tmp_path / "plain"
