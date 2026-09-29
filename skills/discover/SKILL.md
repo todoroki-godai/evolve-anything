@@ -62,9 +62,27 @@ evolve-discover [--session-scan]
 `recommended_artifacts`（未導入の推奨 rule/hook）の提示でユーザーが「導入しない」と
 判断した場合、その artifact id を suppression に記録する（MUST。#26）。記録には
 `scripts/lib/discover/suppression.py` の `add_artifact_suppression(<artifact_id>)` を
-`${CLAUDE_PLUGIN_ROOT}` 経由で呼ぶ。`detect_recommended_artifacts` が TTL（既定45日）
-窓内は再提示を畳み、窓を過ぎたら1回だけ再評価のため再提示する。記録しないと毎回
-再提示され、本当に必要な提案の signal が薄まる。
+`${CLAUDE_PLUGIN_ROOT}` 経由で呼ぶ。渡す値は Step 5 で提示した
+`recommended_artifacts[].id`（`RECOMMENDED_ARTIFACTS` の閉じたカタログに実在する id）
+そのもの。`detect_recommended_artifacts` が TTL（既定45日）窓内は再提示を畳み、
+窓を過ぎたら1回だけ再評価のため再提示する。記録しないと毎回再提示され、本当に
+必要な提案の signal が薄まる。
+
+```bash
+PYTHONPATH="${CLAUDE_PLUGIN_ROOT}/scripts/lib" python3 -c '
+import sys
+from discover import RECOMMENDED_ARTIFACTS
+from discover.suppression import add_artifact_suppression, is_artifact_suppressed
+artifact_id = "<artifact_id>"  # recommended_artifacts[].id をそのまま渡す
+known_ids = {a["id"] for a in RECOMMENDED_ARTIFACTS}
+if artifact_id not in known_ids:
+    sys.exit(f"unknown artifact id: {artifact_id!r}（カタログに無い id は記録しない）")
+add_artifact_suppression(artifact_id)
+if not is_artifact_suppressed(artifact_id):
+    sys.exit("記録に失敗しました")
+print(f"suppressed: {artifact_id}")
+'
+```
 
 ### Step 5.5: 検証知見の検出
 

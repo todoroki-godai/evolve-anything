@@ -46,10 +46,15 @@ def _suppression_file() -> Path:
 def load_suppression_list() -> set:
     """抑制リスト（2回 reject されたパターン）を読み込む。
 
-    type: "merge" エントリは除外し、type 未指定エントリのみを返す。
+    type: "merge" / type: "artifact" エントリは除外し、type 未指定エントリのみを返す。
+    artifact suppression の pattern は RECOMMENDED_ARTIFACTS の id（例: "ship" /
+    "spec-keeper"）であり、これがスキル名（usage.jsonl の skill_name）と衝突すると
+    無関係なスキル候補パターンまで誤って抑制されてしまうため（レビュー指摘）。
     """
     records = load_jsonl(_suppression_file())
-    return set(r.get("pattern", "") for r in records if r.get("type") != "merge")
+    return set(
+        r.get("pattern", "") for r in records if r.get("type") not in ("merge", "artifact")
+    )
 
 
 def load_merge_suppression() -> set:
@@ -97,8 +102,17 @@ def add_artifact_suppression(
 ) -> None:
     """artifact 導入見送りを記録する（type:"artifact" + decided_at）。
 
-    書き込み失敗時は stderr に出力し例外を送出しない（merge suppression と同方針）。
+    未知の id（`RECOMMENDED_ARTIFACTS` のどのエントリの `id` とも一致しない）は
+    `ValueError` で拒否する（レビュー指摘。閉じたカタログとの照合による決定論チェック）。
+    書き込み失敗時は stderr に出力し例外を送出しない（merge suppression と同方針。
+    こちらは id 検証を通過した後の I/O エラーのみが対象）。
     """
+    from . import RECOMMENDED_ARTIFACTS
+    known_ids = {a["id"] for a in RECOMMENDED_ARTIFACTS}
+    if artifact_id not in known_ids:
+        raise ValueError(
+            f"unknown artifact id: {artifact_id!r} (RECOMMENDED_ARTIFACTS に無い)"
+        )
     from . import DATA_DIR
     decided_at = time.time() if now is None else now
     try:
