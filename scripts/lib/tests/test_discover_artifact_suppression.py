@@ -39,8 +39,8 @@ def supp_file(tmp_path, monkeypatch):
 
 class TestArtifactSuppressionStore:
     def test_add_then_load_contains_id(self, supp_file):
-        add_artifact_suppression("release-notes-check")
-        assert "release-notes-check" in load_artifact_suppression()
+        add_artifact_suppression("commit-version")
+        assert "commit-version" in load_artifact_suppression()
 
     def test_load_empty_when_no_file(self, supp_file):
         assert load_artifact_suppression() == set()
@@ -70,6 +70,39 @@ class TestArtifactSuppressionStore:
     def test_unknown_id_not_suppressed(self, supp_file):
         add_artifact_suppression("deploy-lock", now=1_000_000.0)
         assert not is_artifact_suppressed("kill-guard", now=1_000_000.0)
+
+    def test_unknown_catalog_id_rejected(self, supp_file):
+        """RECOMMENDED_ARTIFACTS に無い id は ValueError で拒否され、何も書かれない（レビュー指摘）。"""
+        with pytest.raises(ValueError):
+            add_artifact_suppression("this-id-does-not-exist-in-catalog")
+        assert not supp_file.exists()
+        assert load_artifact_suppression() == set()
+
+
+# ---------------------------------------------------------------------------
+# artifact suppression の pattern と usage skill_name の衝突防止
+#
+# RECOMMENDED_ARTIFACTS の id には "ship" / "spec-keeper" のように実スキル名と
+# 同じ文字列が使われうる。artifact 見送り記録が discover.load_suppression_list()
+# （ad-hoc スキル候補の抑制判定）に混入すると、無関係なスキル候補が誤って
+# 抑制されたままになる（レビュー指摘 Should→今回直す）。
+# ---------------------------------------------------------------------------
+
+
+class TestArtifactSuppressionDoesNotLeakIntoPatternSuppression:
+    def test_artifact_entry_excluded_from_skill_pattern_suppression(self, supp_file):
+        # "ship" / "spec-keeper" は RECOMMENDED_ARTIFACTS の実 id（スキル名と衝突しうる）。
+        add_artifact_suppression("ship")
+        add_artifact_suppression("spec-keeper")
+        discover.add_to_suppression_list("real-error-pattern")
+
+        pattern_suppressed = discover.load_suppression_list()
+        assert "ship" not in pattern_suppressed
+        assert "spec-keeper" not in pattern_suppressed
+        assert "real-error-pattern" in pattern_suppressed
+
+        # artifact suppression 自体は引き続き有効（読み先が違うだけ）。
+        assert load_artifact_suppression() == {"ship", "spec-keeper"}
 
 
 # ---------------------------------------------------------------------------

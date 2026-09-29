@@ -58,6 +58,16 @@ for a in agents:
    - 初回 → ハッシュ保存のみ
    - エラー → "upstream チェックをスキップしました" と表示
 
+```python
+import os, sys
+_root = os.environ.get("CLAUDE_PLUGIN_ROOT") or os.getcwd()
+sys.path.insert(0, os.path.join(_root, "scripts", "lib"))
+from agent_quality import check_upstream
+from rl_common import DATA_DIR
+result = check_upstream(state_file=DATA_DIR / "agent-brushup-state.json")
+print(result)
+```
+
 レポートフォーマット:
 
 ```

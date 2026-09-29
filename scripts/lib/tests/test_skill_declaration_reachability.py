@@ -17,6 +17,16 @@
 - 複数モジュールに同名定義がある candidate は誤帰属回避のため判定対象から除外する（ambiguous）。
 - 自コードベースに定義が無い candidate（Python 標準関数・外部ライブラリ・CLI コマンド形）は
   対象外（unresolved）。
+- caller 判定は SKILL.md 本体だけでなく `references/*.md` の fenced code block も見る
+  （`dogfood.layer3.find_skill_mds` と同じ走査範囲）。ただし識別子の文字列一致による検出
+  であり、**既知の形のみ検出・迂回可能**（`no-denylist-checks.md`）。dogfood gate では
+  非ブロッキング advisory としてのみ使う。
+- `references/` の**さらに下の階層**（`references/sub/*.md` 等）は走査対象外
+  （Layer 3 自身がその階層まで見ないため。境界確認済み・tacchi round1 [Should]）。
+- 既知の迂回（tacchi round1 [Nit] — テスト名で現状挙動として固定）: コメント中の
+  `name(...)`／文字列リテラル中の `name(...)`／別ファイルでの `def name():` という
+  定義・再定義は、いずれも呼び出しでないのに caller と誤判定する（正規表現一致の性質上、
+  修正対象外）。
 """
 from __future__ import annotations
 
@@ -172,6 +182,113 @@ def test_reachable_via_skill_md_code_block(tmp_path: Path) -> None:
         "result = check_quality(a)\n"
         "```\n"
         "各エージェントに `check_quality()` を実行する。\n",
+    )
+    report = sdr.detect_unreachable_declarations(root)
+    assert report.unreachable == []
+
+
+def test_reachable_via_references_code_block(tmp_path: Path) -> None:
+    """SKILL.md 本体でなく `references/*.md` の fenced code block だけに呼び出しがある場合も
+    到達可能と判定する（#191 FP 再発防止 — correction-review.md 型の `mark_done()` 等、
+    実行コードが SKILL.md から参照される references/ の手順書に書かれているケース）。"""
+    root = _make_repo(tmp_path)
+    _write(root / "scripts/lib/bootstrap_backlog.py", "def mark_done(slug, dry_run=False):\n    return {}\n")
+    _write(
+        root / "skills/evolve/SKILL.md",
+        "Step 6.1 の完了 marker は `bootstrap_backlog.mark_done(slug, dry_run=dry_run)` で立てる。\n"
+        "詳細手順は references/correction-review.md を参照。\n",
+    )
+    _write(
+        root / "skills/evolve/references/correction-review.md",
+        "```python\n"
+        "from correction_semantic import bootstrap_backlog\n"
+        "res = bootstrap_backlog.mark_done(slug, dry_run=dry_run)\n"
+        "```\n",
+    )
+    report = sdr.detect_unreachable_declarations(root)
+    assert report.unreachable == []
+
+
+def test_still_unreachable_when_no_caller_anywhere_including_references(tmp_path: Path) -> None:
+    """陽性対照: references/*.md を走査対象に加えても、実際に呼び出しが無ければ
+    到達不能のまま検出される（references 追加が過検出側に倒れていないことの確認）。"""
+    root = _make_repo(tmp_path)
+    _write(root / "scripts/lib/foo.py", "def zombie_func():\n    return 1\n")
+    _write(root / "skills/demo/SKILL.md", "`zombie_func()` を実行する。\n")
+    _write(
+        root / "skills/demo/references/unrelated.md",
+        "```python\n"
+        "print('zombie_func is mentioned as text but not called: zombie_func')\n"
+        "```\n",
+    )
+    report = sdr.detect_unreachable_declarations(root)
+    assert [u.name for u in report.unreachable] == ["zombie_func"]
+
+
+def test_nested_references_subdir_not_scanned_stays_unreachable(tmp_path: Path) -> None:
+    """境界確認: `references/` の**さらに下の階層**（`references/sub/*.md`）は走査対象外。
+    Layer 3（`dogfood.layer3.find_skill_mds`）自身がその階層まで見ない設計に caller 判定を
+    合わせているため、そこにしか呼び出しが無い宣言は到達不能のままになる（レビュー指摘・
+    tacchi round1 [Should]）。"""
+    root = _make_repo(tmp_path)
+    _write(root / "scripts/lib/foo.py", "def zombie_func():\n    return 1\n")
+    _write(root / "skills/demo/SKILL.md", "`zombie_func()` を実行する。\n")
+    _write(
+        root / "skills/demo/references/sub/y.md",
+        "```python\n"
+        "zombie_func()\n"
+        "```\n",
+    )
+    report = sdr.detect_unreachable_declarations(root)
+    assert [u.name for u in report.unreachable] == ["zombie_func"]
+
+
+def test_known_bypass_comment_call_counts_as_caller(tmp_path: Path) -> None:
+    """既知の迂回（advisory の限界・blocking に使わない理由）: caller 判定は正規表現の
+    テキスト一致で行うため、コメント中の `name(...)` も呼び出しとして数えてしまう
+    （実際には呼ばれていないのに到達可能と誤判定する）。これは仕様であり修正対象ではない
+    （レビュー指摘・tacchi round1 [Nit] — 現状挙動をテスト名で固定し docstring にも明記）。"""
+    root = _make_repo(tmp_path)
+    _write(root / "scripts/lib/foo.py", "def zombie_func():\n    return 1\n")
+    _write(root / "skills/demo/SKILL.md", "`zombie_func()` を実行する。\n")
+    _write(
+        root / "skills/demo/references/notes.md",
+        "```python\n"
+        "# zombie_func() はここではコメントに書かれているだけで実行されない\n"
+        "```\n",
+    )
+    report = sdr.detect_unreachable_declarations(root)
+    assert report.unreachable == []
+
+
+def test_known_bypass_string_literal_call_counts_as_caller(tmp_path: Path) -> None:
+    """既知の迂回: 文字列リテラル中の `name(...)` も呼び出しとして数える
+    （実行されない例示コードでも到達可能と誤判定する。上記コメントの場合と同型・仕様）。"""
+    root = _make_repo(tmp_path)
+    _write(root / "scripts/lib/foo.py", "def zombie_func():\n    return 1\n")
+    _write(root / "skills/demo/SKILL.md", "`zombie_func()` を実行する。\n")
+    _write(
+        root / "skills/demo/references/notes.md",
+        "```python\n"
+        "example_text = 'この関数は zombie_func() のように呼ぶ（例示であり実行しない）'\n"
+        "```\n",
+    )
+    report = sdr.detect_unreachable_declarations(root)
+    assert report.unreachable == []
+
+
+def test_known_bypass_def_signature_counts_as_caller(tmp_path: Path) -> None:
+    """既知の迂回: 呼び出しでなく `def name():` という**定義**の再掲・別名再定義も
+    `name(` のテキスト一致にヒットし、呼び出しとして数えてしまう（仕様・修正対象外）。"""
+    root = _make_repo(tmp_path)
+    _write(root / "scripts/lib/foo.py", "def zombie_func():\n    return 1\n")
+    _write(root / "skills/demo/SKILL.md", "`zombie_func()` を実行する。\n")
+    _write(
+        root / "skills/demo/references/notes.md",
+        "```python\n"
+        "def zombie_func():  # 別ファイルでの再定義。呼び出しではない\n"
+        "    pass\n"
+        "```\n",
     )
     report = sdr.detect_unreachable_declarations(root)
     assert report.unreachable == []

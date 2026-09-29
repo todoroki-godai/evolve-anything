@@ -53,8 +53,13 @@ def build_weekly_board(queue_path: Path, project_root: Path, *, now=None) -> dic
             "week_id": week_id, "computed_on": now.date().isoformat(), "measured": True,
             "pillar2_count": pillar2["count"],
             "point_week": correction["gate"]["point_week"],
-            "pillar4_count": sum(1 for it in items
-                                 if it["revert_available"] and not it.get("subsequent_change")),
+            # #696 レビュー Must2: 判定式は evolve_revert_listing.is_revertible に
+            # 一本化（render_revert_listing の「戻せる」件数と同じ関数・同じ結果に
+            # する。個別に書くと stale_before_snapshot 等の追加時に片方だけ追従
+            # せず柱4 の数字が --list と食い違う）。
+            "pillar4_count": sum(
+                1 for it in items if evolve_revert_listing.is_revertible(it)
+            ),
         }
 
     result, health = read_measurement(measure, fallback=None, reader_name="weekly_board")
