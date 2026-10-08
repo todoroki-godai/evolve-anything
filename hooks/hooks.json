@@ -7,17 +7,17 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/correction_detect.py\"",
-            "timeout": 5000
+            "timeout": 5
           },
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/ctx_guard.py\"",
-            "timeout": 3000
+            "timeout": 3
           },
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/pitfall_injector.py\"",
-            "timeout": 3000
+            "timeout": 3
           }
         ]
       }
@@ -29,7 +29,7 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/workflow_context.py\"",
-            "timeout": 5000
+            "timeout": 5
           }
         ]
       },
@@ -39,7 +39,7 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/pitfall_commit_gate.py\"",
-            "timeout": 5000
+            "timeout": 5
           }
         ]
       }
@@ -51,12 +51,12 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/skill_activation_log.py\"",
-            "timeout": 3000
+            "timeout": 3
           },
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/observe.py\"",
-            "timeout": 5000
+            "timeout": 5
           }
         ]
       },
@@ -66,7 +66,7 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/observe.py\"",
-            "timeout": 5000
+            "timeout": 5
           }
         ]
       },
@@ -76,12 +76,12 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/post_tool_use_memory.py\"",
-            "timeout": 3000
+            "timeout": 3
           },
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/pitfall_lint.py\"",
-            "timeout": 3000
+            "timeout": 3
           }
         ]
       },
@@ -91,12 +91,12 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/post_tool_use_memory.py\"",
-            "timeout": 3000
+            "timeout": 3
           },
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/pitfall_lint.py\"",
-            "timeout": 3000
+            "timeout": 3
           }
         ]
       },
@@ -106,12 +106,12 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/post_tool_use_memory.py\"",
-            "timeout": 3000
+            "timeout": 3
           },
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/pitfall_lint.py\"",
-            "timeout": 3000
+            "timeout": 3
           }
         ]
       }
@@ -123,7 +123,7 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/subagent_observe.py\"",
-            "timeout": 5000
+            "timeout": 5
           }
         ]
       }
@@ -135,12 +135,12 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/session_summary.py\"",
-            "timeout": 5000
+            "timeout": 5
           },
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/record_verbosity.py\"",
-            "timeout": 5000
+            "timeout": 5
           }
         ]
       }
@@ -152,7 +152,7 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/stop_failure.py\"",
-            "timeout": 5000
+            "timeout": 5
           }
         ]
       }
@@ -164,7 +164,7 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/instructions_loaded.py\"",
-            "timeout": 5000
+            "timeout": 5
           }
         ]
       }
@@ -176,7 +176,7 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/save_state.py\"",
-            "timeout": 5000
+            "timeout": 5
           }
         ]
       }
@@ -188,7 +188,7 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/post_compact.py\"",
-            "timeout": 5000
+            "timeout": 5
           }
         ]
       }
@@ -200,7 +200,7 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/file_changed.py\"",
-            "timeout": 5000
+            "timeout": 5
           }
         ]
       }
@@ -212,7 +212,7 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/permission_denied.py\"",
-            "timeout": 5000
+            "timeout": 5
           }
         ]
       }
@@ -224,7 +224,7 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/restore_state.py\"",
-            "timeout": 5000
+            "timeout": 30
           }
         ]
       }
