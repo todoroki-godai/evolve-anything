@@ -1,15 +1,17 @@
 """hooks.json の timeout は秒単位（Claude Code の hook 仕様）。
 
 過去に 3000 / 5000 をミリ秒のつもりで書いており、実際は 50〜83 分待つ設定だった。
-hook が固まったときの歯止めとして働く値であることを検査する。
+timeout は「固まった hook を切る歯止め」であって処理時間の予算ではない。hook 内部の
+時間予算（save_state の git 2秒×複数回・live_checkout の git 10秒×5回 など）より
+短くすると正常処理を切るので、全 hook を同じ歯止めの値に揃える。
 """
 import json
 from pathlib import Path
 
 HOOKS_JSON = Path(__file__).resolve().parents[1] / "hooks.json"
 
-# 歯止めとして許す上限（秒）。実測は全 hook 0.31 秒以内（2026-10-09）。
-MAX_TIMEOUT_SECONDS = 60
+# 歯止めの値（秒）。内部予算の合計の最大（live_checkout の 50 秒）より長く、分単位では待たせない。
+HOOK_TIMEOUT_SECONDS = 60
 
 
 def _handlers():
@@ -24,12 +26,16 @@ def test_hooks_json_has_handlers():
     assert list(_handlers())
 
 
-def test_every_hook_timeout_is_seconds_within_bound():
+def test_every_hook_timeout_is_the_backstop_value():
     offenders = [
         (event, handler.get("command"), handler.get("timeout"))
         for event, handler in _handlers()
-        if not isinstance(handler.get("timeout"), (int, float))
-        or isinstance(handler.get("timeout"), bool)
-        or not 0 < handler["timeout"] <= MAX_TIMEOUT_SECONDS
+        if type(handler.get("timeout")) is not int or handler["timeout"] != HOOK_TIMEOUT_SECONDS
     ]
+    assert offenders == []
+
+
+def test_no_hook_runs_async():
+    # async: true の command hook には timeout が適用されない（歯止めが消える）
+    offenders = [(event, handler.get("command")) for event, handler in _handlers() if handler.get("async")]
     assert offenders == []
