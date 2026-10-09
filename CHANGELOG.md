@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [1.126.1] - 2026-10-09
+
+### Fixed
+- **fix(hooks): hook が固まったとき50〜83分待つ設定だった timeout を秒単位の値に直す（#712）** — `hooks/hooks.json` の `timeout` は秒単位なのに、ミリ秒のつもりで 3000 / 5000 と書かれていた。固まった hook を切る歯止めとして 60 秒（SessionStart のみ 120 秒。`live_checkout` の内部の待ちが最大 100 秒あるため）に直し、値と `async` 指定を `hooks/tests/test_hooks_json_timeout.py` で固定する。
+- **test(weak_signals): 固定日付の fixture が 45 日の期限を過ぎて 2026-10-09 から赤になっていたテスト2件を直す** — `test_weak_signal_rephrase_dedup.py` の検出日時を「実行時刻の1日前」に変える（製品コードは変更なし）。
+
+### Docs
+- **docs(site): 説明サイトの版表記を v1.126.0 へ更新し、package 分割済みの参照を実体へ直す（#711）**
+
 ## [1.126.0] - 2026-09-29
 
 ### Changed

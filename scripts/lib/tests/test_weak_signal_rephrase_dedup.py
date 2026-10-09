@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -19,6 +20,8 @@ from weak_signals.rephrase_dedup import (  # noqa: E402
     expand_seen_keys_for_rephrase_dupes,
 )
 from weak_signals.store import WeakSignal, append_signals  # noqa: E402
+
+_SIGNAL_AGE = timedelta(days=1)
 
 
 def _rec(
@@ -59,7 +62,8 @@ def _signal(*, similarity: float, line_no: int = 11, prev_line_no: int = 10) -> 
             "text": "開発サーバーを起動して目視確認してください",
             "source_path": "/sessions/one.jsonl",
         },
-        detected_at="2026-08-25T00:00:00+00:00",
+        # 固定日付にすると 45 日 TTL を過ぎた日から期限切れ扱いで落ちる（2026-10-09 に発生）
+        detected_at=(datetime.now(timezone.utc) - _SIGNAL_AGE).isoformat(),
         session_id="session-1",
         pj_slug="evolve-anything",
     )
