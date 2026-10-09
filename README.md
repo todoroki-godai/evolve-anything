@@ -6,7 +6,7 @@
 
 A Claude Code Plugin that **autonomously observes, discovers, prunes, and evolves** Claude Code skills/rules, and **optimizes them via direct LLM patches**.
 
-> Release metadata: **v1.126.0** · **24 userConfig options**
+> Release metadata: **v1.126.1** · **24 userConfig options**
 
 ## Quickstart
 
