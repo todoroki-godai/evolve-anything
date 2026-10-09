@@ -75,9 +75,10 @@ LLM_JUDGE_CHANNEL = "llm_judge"
 # ─────────────────────────────────────────────────────────────────
 # #690 変更1: 判定器の版を系列の軸にする（read 時導出・書込みゼロ）
 # ─────────────────────────────────────────────────────────────────
-# 版の切替は生涯で2回のみ・単調・交互出現なし（2026-09-26 実測・#690 issue 本文の表。
-# weak_signals.jsonl の provenance.prompt_fingerprint 実測値と correction_judged.jsonl の
-# judged_at 分布から導出した固定値）。
+# 版の切替は単調・交互出現なし（2026-09-26 実測・#690 issue 本文の表。第3版は 2026-10-09 に
+# 同じ取り方で追記）。switch_at = その版の**最初の TP**（channel=llm_judge）の
+# weak_signals.detected_at を秒へ切り捨てた値（weak_signals.jsonl の
+# provenance.prompt_fingerprint 実測値から導出した固定値）。
 #
 # **保守契約（巡2後 [Must] 是正）**: この固定テーブルは「更新しないと静かに腐る」。
 # 新しい fingerprint が本番の weak_signals.jsonl に現れたら（＝下記 _resolve_judge_version
@@ -87,6 +88,7 @@ LLM_JUDGE_CHANNEL = "llm_judge"
 _VERSION_SWITCHES: List["tuple[datetime, str]"] = [
     (datetime(2026, 8, 14, 0, 8, 48, tzinfo=timezone.utc), "28c25437f34a"),
     (datetime(2026, 9, 6, 0, 7, 45, tzinfo=timezone.utc), "53c3982a2738"),
+    (datetime(2026, 9, 28, 0, 9, 46, tzinfo=timezone.utc), "e6a3814e11e7"),
 ]
 
 # _VERSION_SWITCHES に載っている既知ラベルの集合（None は「版なし」を表す既知の状態

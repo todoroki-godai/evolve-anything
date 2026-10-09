@@ -417,6 +417,12 @@ class TestPjBreakdown:
 
 # ── #690 変更1: 判定基準の版を系列の軸にする ─────────────────────────
 
+# どの _VERSION_SWITCHES にも載せない架空の fingerprint（未知版検出のテスト専用）。
+_UNREGISTERED_FP = "000000000000"
+# 第3版 e6a3814e11e7 の切替時刻。取り方は既存2件と同じ（その版の最初の TP の
+# weak_signals.detected_at を秒に切り捨て: 2026-09-28T00:09:46.984961Z → 00:09:46）。
+_THIRD_SWITCH_AT = datetime(2026, 9, 28, 0, 9, 46, tzinfo=timezone.utc)
+
 
 class TestJudgeVersionForJudgedAt:
     def test_before_first_switch_is_none(self):
@@ -441,6 +447,25 @@ class TestJudgeVersionForJudgedAt:
     def test_none_judged_at_returns_none(self):
         assert correction_rate._judge_version_for_judged_at(None) is None
 
+    def test_third_version_switch_boundary(self):
+        """第3版 e6a3814e11e7（#682 適用後）の切替時刻ちょうどから導出される。"""
+        assert correction_rate._judge_version_for_judged_at(_THIRD_SWITCH_AT) == "e6a3814e11e7"
+        assert correction_rate._judge_version_for_judged_at(
+            _THIRD_SWITCH_AT + timedelta(days=10)
+        ) == "e6a3814e11e7"
+
+    def test_just_before_third_switch_is_second_version(self):
+        assert correction_rate._judge_version_for_judged_at(
+            _THIRD_SWITCH_AT - timedelta(seconds=1)
+        ) == "53c3982a2738"
+
+    def test_switch_table_is_strictly_increasing_and_labels_unique(self):
+        """表が時刻順でないと先頭一致の break で後ろの版が永久に導出されない（順序違いの変異対策）。"""
+        times = [at for at, _ in correction_rate._VERSION_SWITCHES]
+        labels = [label for _, label in correction_rate._VERSION_SWITCHES]
+        assert times == sorted(times) and len(set(times)) == len(times)
+        assert len(set(labels)) == len(labels)
+
 
 # ── #690 巡2後 [Must]: judged_at 由来と provenance 実測値の突合 ─────────────
 
@@ -457,11 +482,11 @@ class TestResolveJudgeVersion:
 
     def test_unknown_fingerprint_is_not_rounded_to_known_label(self):
         """陰性試験(i)対応の単体版: 未知の fingerprint は既知ラベルに丸め込まない。"""
-        resolved = correction_rate._resolve_judge_version("53c3982a2738", "e6a3814e11e7")
+        resolved = correction_rate._resolve_judge_version("53c3982a2738", _UNREGISTERED_FP)
         assert resolved != "53c3982a2738"
-        assert resolved != "e6a3814e11e7"  # 生の fingerprint そのままでもない（未知版と明示）
+        assert resolved != _UNREGISTERED_FP  # 生の fingerprint そのままでもない（未知版と明示）
         assert resolved.startswith(correction_rate._UNKNOWN_VERSION_PREFIX)
-        assert "e6a3814e11e7" in resolved
+        assert _UNREGISTERED_FP in resolved
 
     def test_mismatch_between_sources_is_flagged(self):
         """陰性試験(ii)対応の単体版: 既知ラベルでも judged_at 由来と食い違えば専用バケット。"""
@@ -474,6 +499,58 @@ class TestResolveJudgeVersion:
 _W36_TS = datetime(2026, 8, 31, 12, tzinfo=timezone.utc)
 _W36_INGESTED = datetime(2026, 8, 31, 13, tzinfo=timezone.utc)
 _W36_NOW_AFTER_CUTOFF = datetime(2026, 9, 11, tzinfo=timezone.utc)  # W36 cutoff は 09-10
+
+
+_W39_TS = datetime(2026, 9, 24, 12, tzinfo=timezone.utc)
+_W39_INGESTED = datetime(2026, 9, 24, 13, tzinfo=timezone.utc)
+_W40_TS = datetime(2026, 9, 30, 12, tzinfo=timezone.utc)
+_W40_INGESTED = datetime(2026, 9, 30, 13, tzinfo=timezone.utc)
+_W40_NOW_AFTER_CUTOFF = datetime(2026, 10, 9, tzinfo=timezone.utc)  # W40 cutoff は 10-08
+
+
+class TestThirdVersionWeeks:
+    """本番で実際に起きた症状の固定: 第3版の切替時刻が無いと、切替後の判定が旧版の分母に入り、
+    新版の TP だけが「未知版」へ分かれて 100% に見えた（W39・W40 の版別表示・#690）。"""
+
+    def test_week_judged_after_switch_has_single_third_version(self):
+        u1 = _utt("n1", ts=_W40_TS, ingested_at=_W40_INGESTED)
+        u2 = _utt("n2", ts=_W40_TS, ingested_at=_W40_INGESTED)
+        raw = _raw(
+            [u1, u2],
+            [_judged(u1, judged_at=_THIRD_SWITCH_AT + timedelta(days=1)),
+             _judged(u2, judged_at=_THIRD_SWITCH_AT + timedelta(days=2))],
+            [_tp(u1, prompt_fingerprint="e6a3814e11e7",
+                 detected_at=_THIRD_SWITCH_AT + timedelta(days=1))],
+        )
+        result = correction_rate.compute_weekly_correction_rate(now=_W40_NOW_AFTER_CUTOFF, raw=raw)
+        w = next(w for w in result["weeks"] if w["week_id"] == "2026-W40")
+        assert w["version_breakdown"] == {
+            "e6a3814e11e7": {"judged": 2, "tp": 1, "rate": pytest.approx(0.5)},
+        }
+        assert result["diagnostics"]["version_unknown_tp_count"] == 0
+        assert result["diagnostics"]["version_mismatch_tp_count"] == 0
+
+    def test_week_straddling_switch_splits_second_and_third_without_unknown(self):
+        """W39: 切替前に判定された発話は 53c3…、切替後に判定された発話は e6a3…。"""
+        u_old = _utt("s1", ts=_W39_TS, ingested_at=_W39_INGESTED)
+        u_new = _utt("s2", ts=_W39_TS, ingested_at=_W39_INGESTED)
+        raw = _raw(
+            [u_old, u_new],
+            [_judged(u_old, judged_at=_THIRD_SWITCH_AT - timedelta(days=2)),
+             _judged(u_new, judged_at=_THIRD_SWITCH_AT + timedelta(minutes=1))],
+            [_tp(u_old, prompt_fingerprint="53c3982a2738"),
+             _tp(u_new, prompt_fingerprint="e6a3814e11e7")],
+        )
+        result = correction_rate.compute_weekly_correction_rate(
+            now=datetime(2026, 10, 9, tzinfo=timezone.utc), raw=raw,
+        )
+        w = next(w for w in result["weeks"] if w["week_id"] == "2026-W39")
+        assert w["version_breakdown"] == {
+            "53c3982a2738": {"judged": 1, "tp": 1, "rate": pytest.approx(1.0)},
+            "e6a3814e11e7": {"judged": 1, "tp": 1, "rate": pytest.approx(1.0)},
+        }
+        assert result["diagnostics"]["version_unknown_tp_count"] == 0
+        assert result["diagnostics"]["version_mismatch_tp_count"] == 0
 
 
 class TestVersionBreakdown:
@@ -509,7 +586,7 @@ class TestVersionBreakdown:
         assert vb["28c25437f34a"]["judged"] == 1
 
     def test_unknown_fingerprint_tp_is_not_merged_into_known_version(self):
-        """陰性試験(i): 未知の fingerprint（例 e6a3814e11e7・#682 適用後の実際の HEAD 値）を
+        """陰性試験(i): 未知の fingerprint（どの版切替にも未登録の架空値）を
         持つ TP が混ざった週は、既知版として単一値の系列に並ばず、未知版バケットへ
         分離される。診断カウンタも1件増える（silence != evaluated）。"""
         u_known = _utt("known")
@@ -519,7 +596,7 @@ class TestVersionBreakdown:
             [_judged(u_known), _judged(u_unknown)],
             [
                 _tp(u_known, prompt_fingerprint="28c25437f34a"),
-                _tp(u_unknown, prompt_fingerprint="e6a3814e11e7"),
+                _tp(u_unknown, prompt_fingerprint=_UNREGISTERED_FP),
             ],
         )
         result = correction_rate.compute_weekly_correction_rate(now=_AFTER_CUTOFF, raw=raw)
@@ -532,7 +609,7 @@ class TestVersionBreakdown:
         unknown_keys = [k for k in vb if k != "28c25437f34a"]
         assert len(unknown_keys) == 1
         assert unknown_keys[0].startswith(correction_rate._UNKNOWN_VERSION_PREFIX)
-        assert "e6a3814e11e7" in unknown_keys[0]
+        assert _UNREGISTERED_FP in unknown_keys[0]
         assert len(vb) == 2  # 単一値の系列に混ざっていない（2バケットに分離）
         assert result["diagnostics"]["version_unknown_tp_count"] == 1
 
