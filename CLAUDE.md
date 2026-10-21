@@ -90,6 +90,7 @@ bin/evolve-revert --list   # 柱4（採用のうち戻せる件数）
 - `correction_semantic`: フェーズ昇格は human-source のみ駆動
 - `judge_runner` / `safe_llm_call`: 無人呼び出しは `safe_llm_call` に一点集約し4重防御、費用は呼び出し直前に事前予約
 - `daily_review`: 新規 weak_signal を最大5件 y/n 確認し promote 成功後のみ既読追記（部分失敗は対象外）
+- `EVOLVE_SESSION_PROPOSALS=off` で朝の改善案を停止（生成・既読不変）。戻すには `~/.claude/settings.json` の `env` から行を削除し、Claude Code を終了して起動し直す。
 - `review_channels`: y/n 確認に出す weak チャネルの単一ソース。content-rich チャネルのみ対象
 - `idiom_autopromote`: confirmed idiom の再発 weak_signal を機械昇格。**#379 Step1 で凍結中、`autopromote()` は no-op**
 - `growth_report`: あと N 件で次フェーズ。閾値は growth_engine が単一ソース

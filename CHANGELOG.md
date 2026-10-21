@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Added
+- `EVOLVE_SESSION_PROPOSALS=off` で SessionStart の改善案提示を停止できる（生成・既読ストアは変更しない、#379）。
+
 ## [1.126.1] - 2026-10-09
 
 ### Fixed
