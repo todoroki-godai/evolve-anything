@@ -499,6 +499,12 @@ def _build_session_proposal_output(shared: "tuple | None" = None) -> "dict | Non
     （#412 [Should]6: evolve-queue.json の3重読みを1回に集約）。None（省略）なら本関数が
     自前で解決する（直接呼び出す単体テストとの後方互換）。
     """
+    try:
+        if os.environ.get("EVOLVE_SESSION_PROPOSALS", "").strip().lower() in {"off", "0", "false", "no"}:
+            return None
+    except Exception:
+        pass  # スイッチ判定の失敗は従来の提示へ倒す（fail-open）。
+
     if _proposal_digest is None or _queue_notice is None or _data_dir_migration is None:
         return None
     try:

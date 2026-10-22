@@ -24,6 +24,8 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pytest
+
 _HOOKS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_HOOKS))
 sys.path.insert(0, str(_HOOKS.parent / "scripts" / "lib"))
@@ -31,6 +33,12 @@ sys.path.insert(0, str(_HOOKS.parent / "scripts" / "lib"))
 import data_dir_migration as ddm  # noqa: E402
 import restore_state  # noqa: E402
 from session_notify.model import NotificationItem  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _default_session_proposals_env(monkeypatch):
+    """運用環境で off が設定されていても、既存の陽性テストは表示を検証する。"""
+    monkeypatch.delenv("EVOLVE_SESSION_PROPOSALS", raising=False)
 
 
 def _fresh_generated_at() -> str:
@@ -143,6 +151,125 @@ def test_build_fires_with_proposals_for_this_pj(tmp_path, monkeypatch):
     assert "git diff" in output["systemMessage"]
     # ADR-054 Phase 0 §4.2: digest（2件以上発火時用の短縮形）も同時に返す
     assert output["digest"] == "改善案1件"
+
+
+# --- #379: SessionStart の改善案だけを環境変数で停止する ---
+
+@pytest.fixture
+def session_proposal_data(tmp_path, monkeypatch):
+    source = _install_env(tmp_path, monkeypatch)
+    slug = _set_project_dir(tmp_path, monkeypatch)
+    _write_queue(source, {"per_pj": {slug: [_group(["k1"])]}, "global": []})
+    return source
+
+
+@pytest.mark.parametrize("value", ["off", "OFF", " 0 ", "false", "no", " FaLsE\t", "\nNO "])
+def test_session_proposals_disabled_values(session_proposal_data, monkeypatch, capsys, value):
+    monkeypatch.setenv("EVOLVE_SESSION_PROPOSALS", value)
+    assert restore_state._build_session_proposal_output() is None
+    captured = capsys.readouterr()
+    assert captured.out == captured.err == ""
+
+
+@pytest.mark.parametrize("value", [None, "", "on", "1", " \t", "unknown", "falsey", "officer"])
+def test_session_proposals_enabled_values(session_proposal_data, monkeypatch, value):
+    baseline = restore_state._build_session_proposal_output()
+    assert baseline is not None
+    assert "git diff" in baseline["systemMessage"]
+    assert "AskUserQuestion" in baseline["hookSpecificOutput"]["additionalContext"]
+    if value is not None:
+        monkeypatch.setenv("EVOLVE_SESSION_PROPOSALS", value)
+    assert restore_state._build_session_proposal_output() == baseline
+
+
+def test_session_proposals_switch_at_call_time(session_proposal_data, monkeypatch):
+    # 同じ import・同じ digest を使い、停止後にも元の内容で再開する。
+    monkeypatch.setenv("EVOLVE_SESSION_PROPOSALS", "on")
+    baseline = restore_state._build_session_proposal_output()
+    assert baseline is not None
+    monkeypatch.setenv("EVOLVE_SESSION_PROPOSALS", "off")
+    assert restore_state._build_session_proposal_output() is None
+    monkeypatch.setenv("EVOLVE_SESSION_PROPOSALS", "on")
+    assert restore_state._build_session_proposal_output() == baseline
+
+
+@pytest.mark.parametrize("failure", ["read", "strip", "lower"])
+def test_session_proposals_env_failure_is_fail_open(session_proposal_data, monkeypatch, failure):
+    from session_notify import collectors
+
+    baseline = restore_state._build_session_proposal_output()
+    assert baseline is not None
+    original_get = collectors.os.environ.get
+
+    class BrokenValue:
+        def strip(self):
+            if failure == "strip":
+                raise ValueError("env strip failed")
+            return self
+
+        def lower(self):
+            raise ValueError("env lower failed")
+
+    def broken_get(key, default=None):
+        if key == "EVOLVE_SESSION_PROPOSALS":
+            if failure == "read":
+                raise ValueError("env read failed")
+            return BrokenValue()
+        return original_get(key, default)
+
+    monkeypatch.setattr(collectors.os.environ, "get", broken_get)
+    assert restore_state._build_session_proposal_output() == baseline
+
+
+def test_session_proposals_off_skips_queue_resolution(session_proposal_data, monkeypatch):
+    from session_notify import collectors
+
+    def unexpected_read():
+        pytest.fail("off must return before resolving proposal data")
+
+    monkeypatch.setenv("EVOLVE_SESSION_PROPOSALS", "off")
+    monkeypatch.setattr(collectors, "_resolve_queue_data", unexpected_read)
+    assert restore_state._build_session_proposal_output() is None
+
+
+def test_session_proposals_off_preserves_other_notification(
+    session_proposal_data, monkeypatch, capsys,
+):
+    monkeypatch.setenv("EVOLVE_SESSION_PROPOSALS", "off")
+    monkeypatch.setattr("common.find_latest_checkpoint", lambda _: None)
+    monkeypatch.setattr(restore_state, "_build_live_checkout_output", lambda: None)
+    monkeypatch.setattr(
+        restore_state, "_build_evolve_drain_output",
+        lambda: NotificationItem(label="drain", tier=1, text="別通知は残る", digest="別通知"),
+    )
+    restore_state.handle_session_start({})
+    out = capsys.readouterr().out
+    payload = json.loads(out)  # 最終 stdout が単一 JSON であることも検査する。
+    assert "別通知は残る" in payload["systemMessage"]
+    assert "git diff" not in out
+    assert "改善案" not in out
+    assert "AskUserQuestion" not in payload.get("hookSpecificOutput", {}).get("additionalContext", "")
+    assert "promote-weak" not in out
+
+
+@pytest.mark.parametrize("existing", [False, True], ids=["absent", "existing"])
+def test_session_proposals_off_keeps_seen_store_bytes(
+    session_proposal_data, monkeypatch, existing,
+):
+    source = session_proposal_data
+    seen_path = source / "correction_review_seen.jsonl"
+    # 未既読 k1 の案が残るよう別キーを入れ、非 ASCII・末尾改行もバイト単位で保護する。
+    before = '{"key":"other","decision":"rejected","note":"保持"}\n'.encode("utf-8")
+    if existing:
+        seen_path.write_bytes(before)
+    queue_before = (source / "evolve-queue.json").read_bytes()
+    monkeypatch.setenv("EVOLVE_SESSION_PROPOSALS", "off")
+    assert restore_state._build_session_proposal_output() is None
+    if existing:
+        assert seen_path.read_bytes() == before
+    else:
+        assert not seen_path.exists()
+    assert (source / "evolve-queue.json").read_bytes() == queue_before
 
 
 # --- #503: decision_text（判断を求める本文）の配線 ---
