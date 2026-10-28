@@ -85,7 +85,7 @@ def _expected_effort_for_agent_type(agents: List[Any], agent_type: str) -> Optio
     - 一致する agent 定義が無い → None（判定不能。drift 非表示）。
     - frontmatter に ``tier:`` が無い / 未知の tier 値 → None（同上）。
     - tier_policy（model-tiers.json、無ければ DEFAULT_TIER_POLICY）の該当 tier の
-      ``effort`` をそのまま返す（MECH 等 effort 非対応 tier は None を返しうる）。
+      ``effort`` をそのまま返す（effort が未指定の tier は None を返しうる）。
     """
     for agent in agents:
         fm = getattr(agent, "frontmatter", None) or {}

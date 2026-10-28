@@ -40,7 +40,7 @@ DEFAULT_TIER_POLICY: Dict[str, Dict[str, Any]] = {
     "MECH": {
         "model": "haiku",
         "effort": None,
-        "description": "検索掃き出し・変換・機械的編集、effort 非対応",
+        "description": "検索掃き出し・変換・機械的編集",
     },
     "REVIEW": {
         "model": "fable",
@@ -161,14 +161,16 @@ def set_tier(
     effort: Optional[str],
     *,
     config_path: Optional[Path] = None,
+    description: Optional[str] = None,
 ) -> Dict[str, Any]:
     """config の該当 tier を更新する（不在なら DEFAULT から生成して作成）。
+
+    description は指定時だけ置き換え、未指定（None）なら既存値を保持する。
 
     バリデーション:
     - model は既知エイリアスのみ（``agent_quality_catalog.MODEL_ALIASES``）。
       "inherit" は tier の model として不可。exact ID（claude-sonnet-5 等）は拒否。
     - effort は ``low``/``medium``/``high``/``xhigh``/``max`` または None。
-    - model=haiku で effort が非 None は拒否（haiku は effort 非対応）。
 
     Returns:
         ``{"tier", "old", "new", "path"}``。atomic write（tmp+rename）。
@@ -200,8 +202,12 @@ def set_tier(
                 f"{effort!r}"
             )
 
-    if model_key == "haiku" and effort_key is not None:
-        raise ValueError("haiku は effort 非対応です（--effort を指定しないでください）")
+    if description is not None:
+        description = description.strip()
+        if not description:
+            raise ValueError("説明文は空にできません")
+        if "\n" in description or "\r" in description:
+            raise ValueError("説明文に改行は使えません")
 
     path = config_path if config_path is not None else tiers_config_path()
     # strict=True: 破損 config を fail-open の defaults で黙って上書きすると
@@ -221,6 +227,8 @@ def set_tier(
     new_entry["model"] = model_key
     new_entry["effort"] = effort_key
     new_entry.setdefault("description", DEFAULT_TIER_POLICY[tier_key]["description"])
+    if description is not None:
+        new_entry["description"] = description
     config["tiers"][tier_key] = new_entry
 
     _atomic_write_json(path, config)

@@ -143,8 +143,8 @@ def check_agent_tier(frontmatter: Mapping[str, Any]) -> List[Dict[str, Any]]:
             })
 
     # effort mismatch:
-    #   - MECH（expected None）: effort フィールドがあれば違反（haiku は effort 非対応）。
-    #   - その他: effort 宣言があり期待値と異なれば違反。未宣言はセッション既定に委ねる
+    #   - tier の effort が未指定（expected None）: agent が effort を宣言していれば違反。
+    #   - tier の effort が指定済み: effort 宣言があり期待値と異なれば違反。未宣言はセッション既定に委ねる
     #     正当な選択なので対象外（FP 回避）。
     if expected_effort is None:
         if effort is not None:
@@ -152,7 +152,7 @@ def check_agent_tier(frontmatter: Mapping[str, Any]) -> List[Dict[str, Any]]:
                 "type": "tier_effort_mismatch",
                 "agent": name,
                 "detail": (
-                    f"tier:{tier} は effort 非対応（haiku）だが effort:{effort!r} が宣言されている"
+                    f"tier:{tier} の effort は未指定だが effort:{effort!r} が宣言されている"
                 ),
                 "severity": "medium",
             })

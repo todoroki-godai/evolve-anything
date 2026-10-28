@@ -52,8 +52,8 @@ ${CLAUDE_PLUGIN_ROOT}/bin/evolve-tier show
 - **tier**: 選択肢は必ず `HEAD` / `HARD` / `NORMAL` / `MECH` / `REVIEW` の5つ
 - **model**: 選択肢は `opus` / `sonnet` / `haiku` / `fable`（エイリアスのみ。exact ID や
   `inherit` は tier の model として使えない — 指定すると CLI が拒否する）
-- **effort**: `low` / `medium` / `high` / `xhigh` / `max`、または `haiku` を選んだ場合は
-  「effort なし」（haiku は effort 非対応で、指定すると CLI がエラーを返す）
+- **effort**: `low` / `medium` / `high` / `xhigh` / `max`、または「effort 未指定」。
+  `haiku` でも effort を指定できる
 
 ### Step 3: 正典を更新する
 
@@ -61,10 +61,11 @@ ${CLAUDE_PLUGIN_ROOT}/bin/evolve-tier show
 ${CLAUDE_PLUGIN_ROOT}/bin/evolve-tier set <TIER> --model <MODEL> --effort <EFFORT>
 ```
 
-haiku の場合は `--effort <EFFORT>` の代わりに `--no-effort` を付ける。
+effort を未指定にしたいときは `--effort <EFFORT>` の代わりに `--no-effort` を付ける。
+説明文も更新する場合は `--description "<説明文>"` を足す（未指定なら既存の説明文を保持）。前後の空白は除去され、空・空白のみ・改行入りは CLI が拒否する。
 
-バリデーションは CLI 側が行う（model は既知エイリアスのみ・effort は5値のみ・haiku+effort 併用は
-拒否・exact ID や `inherit` は拒否）。**スキル側で事前チェックはしない** — CLI がエラー
+バリデーションは CLI 側が行う（model は既知エイリアスのみ・effort は5値のみ・haiku でも effort 指定可・
+exact ID や `inherit` は拒否）。**スキル側で事前チェックはしない** — CLI がエラー
 （exit code 2）を返したら、そのエラーメッセージをそのままユーザーに提示する（言い換えたり
 握りつぶしたりしない）。
 

@@ -9,6 +9,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 _LIB = Path(__file__).resolve().parent.parent
 if str(_LIB) not in sys.path:
     sys.path.insert(0, str(_LIB))
@@ -24,6 +26,7 @@ class TestShow:
         out = capsys.readouterr().out
         assert "HEAD" in out
         assert "defaults" in out
+        assert "(未指定)" in out
 
     def test_show_json_contains_tiers(self, capsys):
         rc = cli.main(["show", "--json"])
@@ -59,6 +62,53 @@ class TestSet:
         assert rc == 0
         policy = tier_policy.load_tier_policy()
         assert policy["MECH"] == {"model": "haiku", "effort": None}
+
+    @pytest.mark.parametrize("description", ["機械作業の説明"])
+    def test_set_description_replaced(self, description):
+        path = tier_policy.tiers_config_path()
+        tier_policy.init_config(config_path=path)
+        before = json.loads(path.read_text())
+        rc = cli.main(["set", "MECH", "--model", "haiku", "--effort", "low",
+                       "--description", description])
+        assert rc == 0
+        data = json.loads(path.read_text())
+        assert data["tiers"]["MECH"]["description"] == description
+        assert data["tiers"]["MECH"]["effort"] == "low"
+        for tier in tier_policy.TIER_ORDER:
+            if tier != "MECH":
+                assert data["tiers"][tier] == before["tiers"][tier]
+
+    @pytest.mark.parametrize("description", ["", "  ", "a\nb", "a\rb", "a\r\nb"])
+    def test_set_invalid_description_does_not_write(self, description, capsys):
+        path = tier_policy.tiers_config_path()
+        tier_policy.init_config(config_path=path)
+        before = path.read_bytes()
+        assert cli.main([
+            "set", "MECH", "--model", "haiku", "--effort", "low",
+            "--description", description,
+        ]) == 2
+        assert "説明文" in capsys.readouterr().err
+        assert path.read_bytes() == before
+
+    def test_set_description_omitted_preserves_existing(self):
+        path = tier_policy.tiers_config_path()
+        tier_policy.init_config(config_path=path)
+        data = json.loads(path.read_text())
+        data["tiers"]["MECH"]["description"] = "カスタム説明"
+        path.write_text(json.dumps(data))
+        assert cli.main(["set", "MECH", "--model", "haiku", "--effort", "max"]) == 0
+        saved = json.loads(path.read_text())["tiers"]["MECH"]
+        assert saved == {"model": "haiku", "effort": "max", "description": "カスタム説明"}
+
+    @pytest.mark.parametrize("model,effort", [
+        ("haiku", "huge"), ("claude-haiku-5-5", "low"), ("inherit", "low"),
+    ])
+    def test_set_invalid_value_does_not_write(self, model, effort):
+        path = tier_policy.tiers_config_path()
+        tier_policy.init_config(config_path=path)
+        before = path.read_bytes()
+        assert cli.main(["set", "MECH", "--model", model, "--effort", effort]) == 2
+        assert path.read_bytes() == before
 
     def test_set_invalid_model_returns_two(self, capsys):
         rc = cli.main(["set", "HEAD", "--model", "gpt5", "--effort", "high"])
