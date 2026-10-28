@@ -8,10 +8,13 @@
     HEAD   → model=sonnet, effort=max
     HARD   → model=sonnet, effort=xhigh
     NORMAL → model=sonnet, effort=medium
-    MECH   → model=haiku,  effort=無し（haiku は effort 非対応）
+    MECH   → model=haiku,  effort=未指定（既定値）
     REVIEW → model=fable,  effort=high
 """
+import pytest
+
 import agent_tier
+import tier_policy
 
 
 def _types(findings):
@@ -87,7 +90,7 @@ def test_tier_effort_mismatch_head_with_medium():
 
 
 def test_mech_with_effort_is_mismatch():
-    # haiku は effort 非対応。effort フィールドがあれば違反
+    # tier の effort が未指定なのに agent が宣言していれば違反
     fm = {"name": "m", "tier": "MECH", "model": "haiku", "effort": "high"}
     findings = agent_tier.check_agent_tier(fm)
     assert "tier_effort_mismatch" in _types(findings)
@@ -213,3 +216,15 @@ def test_findings_have_required_fields():
     for f in agent_tier.check_agent_tier(fm):
         assert set(f) >= {"type", "agent", "detail", "severity"}
         assert f["severity"] in ("low", "medium", "high")
+
+
+@pytest.mark.parametrize("effort,expected_types", [
+    ("low", set()), ("high", {"tier_effort_mismatch"}),
+])
+def test_mech_configured_effort(effort, expected_types):
+    tier_policy.set_tier("MECH", "haiku", "low")
+    fm = {"name": "m", "tier": "MECH", "model": "haiku", "effort": effort}
+    findings = agent_tier.check_agent_tier(fm)
+    assert _types(findings) == expected_types
+    if findings:
+        assert "effort:low" in findings[0]["detail"]

@@ -3,7 +3,7 @@
 サブコマンド:
 - ``show [--json]``: ティア表 + 正典ソース（file/defaults）+ targets 件数
 - ``init``: config 不在時に DEFAULT + 空 targets の雛形を書く（既存なら拒否）
-- ``set TIER --model M [--effort E | --no-effort]``: 正典更新
+- ``set TIER --model M [--effort E | --no-effort] [--description TEXT]``: 正典更新
 - ``sync [--apply] [--json]``: 既定 dry-run（plan の diff 表示）。``--apply`` で書込
 - ``drift [--json]``: stale-mention advisory の列挙
 
@@ -40,7 +40,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     set_p.add_argument("--model", required=True, help="model エイリアス（opus/sonnet/haiku/fable）")
     effort_group = set_p.add_mutually_exclusive_group()
     effort_group.add_argument("--effort", default=None, help="effort（low/medium/high/xhigh/max）")
-    effort_group.add_argument("--no-effort", action="store_true", help="effort を無しにする（haiku 等）")
+    effort_group.add_argument("--no-effort", action="store_true", help="effort を未指定にする")
+
+    set_p.add_argument("--description", default=None, help="指定した tier の説明文を置き換える")
 
     sync_p = sub.add_parser("sync", help="ティア正典を targets へ同期（既定 dry-run）")
     sync_p.add_argument("--apply", action="store_true", help="drift を実際に書き込む（既定は diff 表示のみ）")
@@ -88,7 +90,7 @@ def _run_show(args) -> int:
         model = policy.get("model")
         effort = policy.get("effort")
         desc = policy.get("description", "")
-        effort_str = effort if effort else "(非対応)"
+        effort_str = effort if effort else "(未指定)"
         print(f"  {tier:6s} model={model!s:8s} effort={effort_str!s:8s} — {desc}")
     print(f"[evolve-tier] targets: {target_count} 件")
     return 0
@@ -108,7 +110,9 @@ def _run_init(args) -> int:
 def _run_set(args) -> int:
     effort = None if args.no_effort else args.effort
     try:
-        result = tier_policy.set_tier(args.tier, args.model, effort)
+        result = tier_policy.set_tier(
+            args.tier, args.model, effort, description=args.description
+        )
     except ValueError as e:
         print(f"[evolve-tier] エラー: {e}", file=sys.stderr)
         return 2
