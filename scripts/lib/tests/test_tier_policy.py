@@ -208,7 +208,7 @@ class TestSetTier:
     def test_invalid_effort_raises(self, tmp_path):
         with pytest.raises(ValueError):
             tier_policy.set_tier(
-                "NORMAL", "sonnet", "huge", config_path=tmp_path / "x.json"
+                "NORMAL", "sonnet", "super-high", config_path=tmp_path / "x.json"
             )
 
     @pytest.mark.parametrize("effort", ["low", "medium", "high", "xhigh", "max", " LOW "])
@@ -219,7 +219,7 @@ class TestSetTier:
         assert result["new"] == expected
         assert json.loads(path.read_text())["tiers"]["MECH"] == expected
 
-    @pytest.mark.parametrize("description", ["機械作業の説明", ""])
+    @pytest.mark.parametrize("description", ["機械作業の説明"])
     def test_description_replaced(self, tmp_path, description):
         path = tmp_path / "x.json"
         config = tier_policy._default_config()
@@ -235,6 +235,25 @@ class TestSetTier:
         for tier in tier_policy.TIER_ORDER:
             if tier != "MECH":
                 assert data["tiers"][tier] == config["tiers"][tier]
+
+    @pytest.mark.parametrize("description", ["", "  ", "a\nb", "a\rb", "a\r\nb"])
+    def test_invalid_description_does_not_write(self, tmp_path, description):
+        path = tmp_path / "x.json"
+        tier_policy.init_config(config_path=path)
+        before = path.read_bytes()
+        with pytest.raises(ValueError, match="説明文"):
+            tier_policy.set_tier(
+                "MECH", "haiku", "low", description=description, config_path=path
+            )
+        assert path.read_bytes() == before
+
+    def test_description_stripped_before_saving(self, tmp_path):
+        path = tmp_path / "x.json"
+        result = tier_policy.set_tier(
+            "MECH", "haiku", "low", description="  説明  ", config_path=path
+        )
+        assert result["new"]["description"] == "説明"
+        assert json.loads(path.read_text())["tiers"]["MECH"]["description"] == "説明"
 
     def test_description_omitted_preserves_existing(self, tmp_path):
         path = tmp_path / "x.json"

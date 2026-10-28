@@ -62,7 +62,7 @@ ${CLAUDE_PLUGIN_ROOT}/bin/evolve-tier set <TIER> --model <MODEL> --effort <EFFOR
 ```
 
 effort を未指定にしたいときは `--effort <EFFORT>` の代わりに `--no-effort` を付ける。
-説明文も更新する場合は `--description "<説明文>"` を足す（未指定なら既存の説明文を保持）。
+説明文も更新する場合は `--description "<説明文>"` を足す（未指定なら既存の説明文を保持）。前後の空白は除去され、空・空白のみ・改行入りは CLI が拒否する。
 
 バリデーションは CLI 側が行う（model は既知エイリアスのみ・effort は5値のみ・haiku でも effort 指定可・
 exact ID や `inherit` は拒否）。**スキル側で事前チェックはしない** — CLI がエラー

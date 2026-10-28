@@ -202,6 +202,13 @@ def set_tier(
                 f"{effort!r}"
             )
 
+    if description is not None:
+        description = description.strip()
+        if not description:
+            raise ValueError("説明文は空にできません")
+        if "\n" in description or "\r" in description:
+            raise ValueError("説明文に改行は使えません")
+
     path = config_path if config_path is not None else tiers_config_path()
     # strict=True: 破損 config を fail-open の defaults で黙って上書きすると
     # targets manifest が silent 消失するため、書込系は明示エラーで止める

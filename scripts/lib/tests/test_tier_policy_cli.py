@@ -63,7 +63,7 @@ class TestSet:
         policy = tier_policy.load_tier_policy()
         assert policy["MECH"] == {"model": "haiku", "effort": None}
 
-    @pytest.mark.parametrize("description", ["機械作業の説明", ""])
+    @pytest.mark.parametrize("description", ["機械作業の説明"])
     def test_set_description_replaced(self, description):
         path = tier_policy.tiers_config_path()
         tier_policy.init_config(config_path=path)
@@ -77,6 +77,18 @@ class TestSet:
         for tier in tier_policy.TIER_ORDER:
             if tier != "MECH":
                 assert data["tiers"][tier] == before["tiers"][tier]
+
+    @pytest.mark.parametrize("description", ["", "  ", "a\nb", "a\rb", "a\r\nb"])
+    def test_set_invalid_description_does_not_write(self, description, capsys):
+        path = tier_policy.tiers_config_path()
+        tier_policy.init_config(config_path=path)
+        before = path.read_bytes()
+        assert cli.main([
+            "set", "MECH", "--model", "haiku", "--effort", "low",
+            "--description", description,
+        ]) == 2
+        assert "説明文" in capsys.readouterr().err
+        assert path.read_bytes() == before
 
     def test_set_description_omitted_preserves_existing(self):
         path = tier_policy.tiers_config_path()
