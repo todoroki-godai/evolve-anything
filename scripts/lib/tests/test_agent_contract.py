@@ -24,6 +24,19 @@ def test_shared_policy_defines_primary_and_lane_invariants() -> None:
         assert invariant in text
 
 
+def test_known_stale_statements_stay_corrected_advisory() -> None:
+    """既知の種別のみ検出・迂回可能。2026-11-01 の #268 レビューで見つけた旧記述の戻りだけを見る。
+
+    毎朝の処理を本人の指示で再開するときは、停止の記述と一緒にこのテストの該当行も消す。
+    """
+    fleet = (ROOT / "spec/components-fleet.md").read_text(encoding="utf-8")
+    assert "Claude Code 主担当" not in fleet
+    for name in ("CLAUDE.md", "SPEC.md", "spec/quickstart.md"):
+        text = (ROOT / name).read_text(encoding="utf-8")
+        assert "2026-10-31" in text, name
+        assert "再登録しない" in text or "実行しない" in text, name
+
+
 def test_codex_adapter_has_no_known_machine_replacement_fingerprints() -> None:
     text = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
     for forbidden in (
