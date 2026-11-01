@@ -6,7 +6,7 @@
 
 ## Codex固有
 
-- 通常のprimary executorはClaude Code。Codexはユーザー指定、cold review、独立検証で使う。
+- 実装の既定はCodex。Claude Codeが設計・実装レビュー・統合・実環境の確認を担う。
 - top-level実装はrepo外の`codex/<issue>-<slug>` laneで行う。
 - `.claude-plugin`、`claude plugin validate`などClaude側の実在識別子をCodex名へ置換しない。
 - Codex CLI/plugin/hooksの存在はhelp・実設定で確認し、Claude形式との互換を推測しない。

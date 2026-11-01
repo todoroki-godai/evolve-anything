@@ -2,7 +2,7 @@
 
 > **Agent contract:** 作業開始前に
 > [`docs/agent-contract/policy.md`](docs/agent-contract/policy.md) を全文読むこと。
-> 通常のprimary executorはClaude Code、Codexはcold review・独立検証・ユーザー指定時に使う。
+> 実装の既定はCodex、Claude Codeは設計・実装レビュー・統合・実環境の確認を担う。
 > runtime差は
 > [`docs/agent-contract/capability-matrix.md`](docs/agent-contract/capability-matrix.md) が正典。
 
@@ -26,7 +26,7 @@ bin/evolve-revert --list   # 柱4（採用のうち戻せる件数）
 ```
 
 1. **普段**: ユーザーは各PJで普通にチャットするだけ。プラグインの存在を忘れている（observe は全自動・無音）
-2. **朝**: セッション開始の1行通知 → 改善案を**ユーザーの言葉**で1件ずつ提示 → y/n だけ。cd もコマンド暗記も不要
+2. **朝**: セッション開始の1行通知 → 改善案を**ユーザーの言葉**で1件ずつ提示 → y/n だけ。cd もコマンド暗記も不要（2026-10-31 時点で自動の取り込みと提示は本人判断で停止中。再開も本人判断）
 3. **週1**: 戦果ボードで事実を棚卸しする（採用件数・一発成功率・戻せる採用の一覧）。
    **効果の因果判定（「手直し回数の減少」＝(a) / 「採用した改善が効いたか」＝(b)）は分母が揃った
    項目だけ表示し、揃うまで `not_measured` と明示する**。効いていないものの自動取り下げも (b) が
@@ -110,8 +110,8 @@ bin/evolve-revert --list   # 柱4（採用のうち戻せる件数）
 - `memory_capability`: memory dir 解決は `resolve_cc_memory_dir` が単一ソース
 - `skill_vuln_scan`: remote_exec/secret_exfil 等を combo 必須で検出。配布 Markdown の全 code block（info string 非依存・4-space indent 含む）と `.sh`/`.bash` を shell 候補化し、複数行 `$()`/quote/backtick を論理行結合。heredoc は shell 実行本文のみ検査し data 本文は除外（#555）
 - `memory_guard`: auto-memory 書込境界の runtime 記憶汚染検出。secret_exfil のみ reject、prompt_injection は advisory（reject せず書込は継続・検出結果は可視化）（検査失敗は fail-closed・#570）。同名エントリの上書きは決定論遷移検証でゲート
-- `daily`: 毎朝の evolve queue 自動実行。適用は対話で人間承認
-- `weekly_board`: daily runner がその ISO 週の最初の実行でだけ柱2・3・4を集計し `evolve-queue.json` に保存。SessionStart は読むだけ（`commit=None`）で計算日だけ表示、形の壊れ・読取障害は Tier1 health（fail-visible）（#401）
+- `daily`: 毎朝の evolve queue 実行の仕組み。**2026-10-31 に本人指示で launchd 登録を撤去し停止中**（無断で再登録しない・再開は `bin/evolve-daily-install`）。適用は対話で人間承認
+- `weekly_board`: daily 停止中は更新されない。daily runner がその ISO 週の最初の実行でだけ柱2・3・4を集計し `evolve-queue.json` に保存。SessionStart は読むだけ（`commit=None`）で計算日だけ表示、形の壊れ・読取障害は Tier1 health（fail-visible）（#401）
 - `icebox_notice`: fail-open で既存ファイル非破壊、閾値未満は無音
 - `memory_hygiene`: 重複残骸は手順提案のみで auto-apply しない
 - `invalid_frontmatter`: 壊れた frontmatter で発火不能なスキルを直接 surface（auto-fix せず人手修正提案）

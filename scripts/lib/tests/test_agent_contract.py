@@ -14,7 +14,7 @@ def test_runtime_entrypoints_require_shared_policy() -> None:
 def test_shared_policy_defines_primary_and_lane_invariants() -> None:
     text = (ROOT / "docs/agent-contract/policy.md").read_text(encoding="utf-8")
     for invariant in (
-        "primary executor は Claude Code",
+        "実装の既定は Codex",
         "1 lane = 1 owner = 1 writer",
         "<issue>-<slug>",
         "自動 checkout",
