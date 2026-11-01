@@ -6,9 +6,9 @@
 
 ## 既定の運用
 
-- primary executor は Claude Code とする。
-- Codex は architecture cold review、独立検証、行き詰まり時、またはユーザーが明示した
-  場合に使う。
+- 実装の既定は Codex とする。Claude Code は設計、実装レビュー、統合（push・PR）、
+  実環境の確認を担う。
+- Codex が使えないときは Claude Code が実装し、別系統レビューが未充足であることを明示する。
 - merge、release、Issue close は人間だけが決定する。
 - agent は別 agent を常時・無制限に自動起動しない。
 

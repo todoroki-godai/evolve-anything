@@ -47,6 +47,7 @@ bin/evolve-fleet detect --pj amamo --dry-run
 bin/evolve-fleet queue                    # weak 未処理 + 新規 corr >= 閾値、または修正在庫1件以上の PJ を表示
 bin/evolve-fleet queue --json --threshold 3
 # 毎朝の evolve queue 自動実行を launchd に登録（#80・既定 09:00 / --time HH:MM / --uninstall）
+# 2026-10-31 に本人指示で撤去して停止中。本人の指示なしに次の行を実行しない
 bin/evolve-daily-install
 bin/evolve-daily-install --uninstall
 

@@ -1,6 +1,6 @@
 # ADR-052: Claude Code primary / Codex opt-in executor lanes
 
-- Status: Accepted
+- Status: Accepted（主担当の部分のみ 2026-11-01 の本人決定で撤回。費用の理由と Codex の利用上限の記録を示したうえでの再確認。実装の既定は Codex。lane の規約は継続）
 - Date: 2026-07-26
 - Related: #268, #266, ADR-040, ADR-049
 
