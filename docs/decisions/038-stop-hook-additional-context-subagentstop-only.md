@@ -1,7 +1,7 @@
 # ADR-038: Stop/SubagentStop の additionalContext は SubagentStop のみ採用、Stop は HOLD
 
 Date: 2026-06-05
-Status: Accepted
+Status: Partially superseded (SubagentStop の additionalContext 採用部分は #729 で撤回。Stop HOLD は有効)
 Related: release-notes-review (CC v2.1.163), second-opinion レビュー, subagent-guard.md, [ADR-028]（observability contract）
 
 ## Context
@@ -63,3 +63,7 @@ additionalContext は user transcript に見えない（Claude のみ）。閾�
 - Auto Trigger の非介入設計は保たれる（Stop は不変）。
 - 将来 Stop で additionalContext を別用途に使う場合は、本 ADR の HOLD 判断とは独立に、その用途で「ターン継続強制」が許容されるかを評価し直す。
 - 決定論・LLM 非依存（出力は固定文字列の dict）。`no-llm-in-tests.md` に抵触しない。
+
+## Update 2026-11-27: SubagentStop の additionalContext 採用を撤回（#729）
+
+「1. SubagentStop → 採用」の決定は #729 で撤回した（Stop の HOLD は変更なし）。SubagentStop の additionalContext は、止まった作業役自身の文脈に入る。警告を読んだ作業役が起き直し、作業を続けようとして空回りしたため（2026-11-27 本人裁定）。現在は systemMessage（画面表示）のみを出し、subagents.jsonl への記録は従来どおり。頭（main agent）へ知らせる仕組みは #730 で扱う。subagent-guard.md の「実エンフォース」は、それまで再び未接続となる。

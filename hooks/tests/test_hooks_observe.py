@@ -524,6 +524,15 @@ class TestObserve:
 class TestSubagentObserve:
     """subagent_observe.py のテスト。"""
 
+    @pytest.fixture(autouse=True)
+    def _pin_default_thresholds(self, monkeypatch):
+        """実行環境の userConfig 上書き（CLAUDE_PLUGIN_OPTION_*）が既定閾値・窓を変えないよう外す。
+
+        値を変える試験は、この後に mock.patch.dict で自分で設定する。
+        """
+        for key in ("subagent_warning_threshold", "subagent_window_minutes"):
+            monkeypatch.delenv(f"CLAUDE_PLUGIN_OPTION_{key}", raising=False)
+
     def test_subagent_stop_recorded(self, patch_data_dir):
         """SubagentStop イベントが subagents.jsonl に記録される。"""
         event = {
@@ -757,13 +766,13 @@ class TestSubagentObserve:
         output = json.loads(out)
         assert "systemMessage" in output
 
-    def test_warning_includes_additional_context_for_claude(self, patch_data_dir, tmp_path, capsys):
-        """閾値超過時、Claude が読んで行動できる hookSpecificOutput.additionalContext を出力する。
+    def test_warning_excludes_additional_context(self, patch_data_dir, tmp_path, capsys, monkeypatch):
+        """閾値超過時は systemMessage（画面表示）だけ出し、additionalContext は出さない（#729）。
 
-        systemMessage は user UI 向けで Claude には届かない。subagent-guard.md の
-        「閾値超過警告が出たら作業を一時停止してユーザーに現状説明」を実際にエンフォース
-        するには Claude が読める additionalContext が必要（CC v2.1.163）。
+        SubagentStop の additionalContext は止まった作業役自身の文脈に入り、起こし直しの
+        空回りを生む。頭へ知らせる仕組みは別課題 #730。
         """
+        monkeypatch.delenv("CLAUDE_PLUGIN_OPTION_subagent_warning_threshold", raising=False)
         session_id = "sess-warn-ac-001"
         for _ in range(4):
             common.append_jsonl(
@@ -783,11 +792,8 @@ class TestSubagentObserve:
 
         out = capsys.readouterr().out
         output = json.loads(out)
-        hso = output["hookSpecificOutput"]
-        assert hso["hookEventName"] == "SubagentStop"
-        assert "5" in hso["additionalContext"]
-        # subagent-guard の行動指示（一時停止）が文面に含まれる
-        assert "一時停止" in hso["additionalContext"]
+        assert output["systemMessage"]
+        assert set(output) == {"systemMessage"}  # additionalContext をどの階層にも出さない
 
     def test_no_warning_below_threshold(self, patch_data_dir, tmp_path, capsys):
         """セッション内 subagent 数が閾値未満なら stdout は空。"""
