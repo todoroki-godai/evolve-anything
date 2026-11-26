@@ -524,6 +524,15 @@ class TestObserve:
 class TestSubagentObserve:
     """subagent_observe.py のテスト。"""
 
+    @pytest.fixture(autouse=True)
+    def _pin_default_thresholds(self, monkeypatch):
+        """実行環境の userConfig 上書き（CLAUDE_PLUGIN_OPTION_*）が既定閾値・窓を変えないよう外す。
+
+        値を変える試験は、この後に mock.patch.dict で自分で設定する。
+        """
+        for key in ("subagent_warning_threshold", "subagent_window_minutes"):
+            monkeypatch.delenv(f"CLAUDE_PLUGIN_OPTION_{key}", raising=False)
+
     def test_subagent_stop_recorded(self, patch_data_dir):
         """SubagentStop イベントが subagents.jsonl に記録される。"""
         event = {
