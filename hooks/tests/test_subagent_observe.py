@@ -54,8 +54,7 @@ def test_本物のsubagentバーストは閾値警告を出す(patch_data_dir, c
     # 文脈に入り起こし直しの空回りを生むため出さない。
     payload = json.loads(out.strip().splitlines()[-1])
     assert payload.get("systemMessage")
-    assert "additionalContext" not in payload.get("hookSpecificOutput", {})
-    assert "hookSpecificOutput" not in payload
+    assert set(payload) == {"systemMessage"}  # additionalContext をどの階層にも出さない
     # 5件すべて本物なので記録もされる
     assert len(_read_subagents(patch_data_dir)) == 5
 

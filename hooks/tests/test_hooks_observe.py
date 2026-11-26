@@ -784,7 +784,7 @@ class TestSubagentObserve:
         out = capsys.readouterr().out
         output = json.loads(out)
         assert output["systemMessage"]
-        assert "hookSpecificOutput" not in output
+        assert set(output) == {"systemMessage"}  # additionalContext をどの階層にも出さない
 
     def test_no_warning_below_threshold(self, patch_data_dir, tmp_path, capsys):
         """セッション内 subagent 数が閾値未満なら stdout は空。"""
