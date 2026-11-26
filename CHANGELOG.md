@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [1.127.1] - 2026-11-27
+
+### Fixed
+- **fix(subagent-observe): SubagentStop の閾値警告で止まった作業役が起こし直される空回りを止める（#729）** — 警告は画面表示（systemMessage）のみとし、止まった作業役の文脈に入る additionalContext を出さない（記録は従来どおり）。
+
 ## [1.127.0] - 2026-10-22
 
 ### Added
