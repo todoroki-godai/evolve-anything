@@ -3,7 +3,7 @@
 > このファイルは SPEC.md から分離された詳細仕様です。
 > 概要は [SPEC.md](../SPEC.md) を参照してください。
 
-Last updated: 2026-06-05 (ADR-038: subagent_observe additionalContext)
+Last updated: 2026-11-27 (#729: SubagentStop の additionalContext を撤回、ADR-038)
 
 ## コンポーネント構成
 
@@ -12,7 +12,7 @@ hooks/                  ← Observe 層（16個 + helpers、LLMコストゼロ�
   common.py             ← scripts/lib/rl_common の re-exporter（後方互換）[ADR-019]
   observe.py            ← usage/errors/corrections 記録
   correction_detect.py  ← corrections 自動検出
-  subagent_observe.py   ← subagents.jsonl 記録 + 閾値超過警告（systemMessage + additionalContext、ADR-038）
+  subagent_observe.py   ← subagents.jsonl 記録 + 閾値超過警告（画面表示 systemMessage のみ。additionalContext は #729 で撤回、頭への通知は #730、ADR-038）
   instructions_loaded.py← sessions テーブル [ADR-015] + Growth greeting（LLMコストゼロ）
   stop_failure.py       ← API エラー記録
   permission_denied.py  ← PermissionDenied hook（CC v2.1.89）errors.jsonl に記録
